@@ -5,14 +5,16 @@
 //! describing the work performed.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
+use rayon::prelude::*;
 use tracing::{debug, info, warn};
 
 use crate::config::VeraConfig;
 use crate::discovery::{self, DiscoveryResult};
-use crate::embedding::{EmbeddingProvider, embed_chunks};
+use crate::embedding::{EmbeddingProvider, embed_chunks_concurrent};
 use crate::parsing;
 use crate::storage::bm25::{Bm25Document, Bm25Index};
 use crate::storage::metadata::MetadataStore;
@@ -130,8 +132,8 @@ pub async fn index_repository<P: EmbeddingProvider>(
         "file discovery complete"
     );
 
-    // ── 3. Parse and chunk each file ─────────────────────────────
-    let (all_chunks, parse_errors) = parse_discovered_files(&discovery, config);
+    // ── 3. Parse and chunk each file (parallelized with rayon) ──
+    let (all_chunks, parse_errors) = parse_discovered_files_parallel(&discovery, config);
 
     info!(
         chunks = all_chunks.len(),
@@ -152,12 +154,23 @@ pub async fn index_repository<P: EmbeddingProvider>(
         });
     }
 
-    // ── 4. Generate embeddings ───────────────────────────────────
-    let embeddings = embed_chunks(provider, &all_chunks, config.embedding.batch_size)
-        .await
-        .context("embedding generation failed")?;
+    // ── 4. Generate embeddings (concurrent batches) ──────────────
+    let mut embeddings = embed_chunks_concurrent(
+        provider,
+        &all_chunks,
+        config.embedding.batch_size,
+        config.embedding.max_concurrent_requests,
+    )
+    .await
+    .context("embedding generation failed")?;
 
-    info!(embeddings = embeddings.len(), "embeddings generated");
+    // Truncate vectors if max_stored_dim is configured.
+    let stored_dim = truncate_embeddings(&mut embeddings, config.embedding.max_stored_dim);
+
+    info!(
+        embeddings = embeddings.len(),
+        stored_dim, "embeddings generated"
+    );
 
     // ── 5. Store everything on disk ──────────────────────────────
     let idx_dir = index_dir(&repo_root);
@@ -181,65 +194,104 @@ pub async fn index_repository<P: EmbeddingProvider>(
 
 // ── Internal helpers ─────────────────────────────────────────────────
 
-/// Parse all discovered files and collect chunks.
+/// Parse all discovered files in parallel using rayon and collect chunks.
 ///
-/// Files that fail parsing are recorded as errors but do not abort
-/// the pipeline (continue + report).
-fn parse_discovered_files(
+/// Each file is read and parsed on a rayon thread pool worker. Results
+/// are collected and flattened. Files that fail parsing are recorded as
+/// errors but do not abort the pipeline.
+fn parse_discovered_files_parallel(
     discovery: &DiscoveryResult,
     config: &VeraConfig,
 ) -> (Vec<Chunk>, Vec<FileError>) {
-    let mut all_chunks = Vec::new();
-    let mut parse_errors = Vec::new();
+    let config = Arc::new(config.clone());
 
-    for file in &discovery.files {
-        let source = match std::fs::read_to_string(&file.absolute_path) {
-            Ok(s) => s,
-            Err(err) => {
+    // Process files in parallel: each returns either Ok(chunks) or Err(error).
+    let results: Vec<Result<Vec<Chunk>, FileError>> = discovery
+        .files
+        .par_iter()
+        .map(|file| {
+            let source = std::fs::read_to_string(&file.absolute_path).map_err(|err| {
                 warn!(
                     file = %file.relative_path,
                     error = %err,
                     "failed to read file for parsing"
                 );
-                parse_errors.push(FileError {
+                FileError {
                     file_path: file.relative_path.clone(),
                     error: err.to_string(),
-                });
-                continue;
-            }
-        };
+                }
+            })?;
 
-        let ext = file
-            .absolute_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
-        let language = Language::from_extension(ext);
+            let ext = file
+                .absolute_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            let language = Language::from_extension(ext);
 
-        match parsing::parse_and_chunk(&source, &file.relative_path, language, &config.indexing) {
-            Ok(chunks) => {
-                debug!(
-                    file = %file.relative_path,
-                    chunks = chunks.len(),
-                    "parsed file"
-                );
-                all_chunks.extend(chunks);
-            }
-            Err(err) => {
-                warn!(
-                    file = %file.relative_path,
-                    error = %err,
-                    "parse error"
-                );
-                parse_errors.push(FileError {
-                    file_path: file.relative_path.clone(),
-                    error: err.to_string(),
-                });
-            }
+            parsing::parse_and_chunk(&source, &file.relative_path, language, &config.indexing)
+                .inspect(|chunks| {
+                    debug!(
+                        file = %file.relative_path,
+                        chunks = chunks.len(),
+                        "parsed file"
+                    );
+                })
+                .map_err(|err| {
+                    warn!(
+                        file = %file.relative_path,
+                        error = %err,
+                        "parse error"
+                    );
+                    FileError {
+                        file_path: file.relative_path.clone(),
+                        error: err.to_string(),
+                    }
+                })
+        })
+        .collect();
+
+    // Flatten results into chunks and errors.
+    let mut all_chunks = Vec::new();
+    let mut parse_errors = Vec::new();
+    for result in results {
+        match result {
+            Ok(chunks) => all_chunks.extend(chunks),
+            Err(error) => parse_errors.push(error),
         }
     }
 
     (all_chunks, parse_errors)
+}
+
+/// Truncate embedding vectors to a maximum dimensionality.
+///
+/// This supports Matryoshka-style dimension reduction: Qwen3 embeddings
+/// retain good retrieval quality at lower dimensions, and truncation
+/// dramatically reduces index storage size.
+///
+/// Returns the actual stored dimensionality.
+fn truncate_embeddings(embeddings: &mut [(String, Vec<f32>)], max_dim: usize) -> usize {
+    if max_dim == 0 || embeddings.is_empty() {
+        return embeddings.first().map(|(_, v)| v.len()).unwrap_or(0);
+    }
+
+    let original_dim = embeddings.first().map(|(_, v)| v.len()).unwrap_or(0);
+    if original_dim <= max_dim {
+        return original_dim;
+    }
+
+    debug!(
+        original_dim,
+        truncated_dim = max_dim,
+        "truncating embedding vectors"
+    );
+
+    for (_, vec) in embeddings.iter_mut() {
+        vec.truncate(max_dim);
+    }
+
+    max_dim
 }
 
 /// Write chunks, embeddings, and BM25 index to disk.

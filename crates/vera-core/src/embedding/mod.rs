@@ -11,6 +11,7 @@ mod provider;
 
 pub use provider::{
     EmbeddingError, EmbeddingProvider, EmbeddingProviderConfig, OpenAiProvider, embed_chunks,
+    embed_chunks_concurrent,
 };
 
 /// Test helpers for creating mock embedding providers.

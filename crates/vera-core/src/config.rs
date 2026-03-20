@@ -71,18 +71,30 @@ impl Default for RetrievalConfig {
 pub struct EmbeddingConfig {
     /// Batch size for embedding API calls.
     pub batch_size: usize,
+    /// Maximum number of concurrent embedding API requests.
+    pub max_concurrent_requests: usize,
     /// Request timeout in seconds.
     pub timeout_secs: u64,
     /// Maximum retries on transient errors.
     pub max_retries: u32,
+    /// Maximum stored vector dimensionality.
+    ///
+    /// If the embedding model produces vectors larger than this, they
+    /// are truncated to this dimensionality before storage. Qwen3 models
+    /// support Matryoshka-style truncation, so lower dimensions still
+    /// yield good retrieval quality while dramatically reducing index size.
+    /// Set to 0 to store full-dimensionality vectors.
+    pub max_stored_dim: usize,
 }
 
 impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
-            batch_size: 32,
-            timeout_secs: 30,
+            batch_size: 64,
+            max_concurrent_requests: 8,
+            timeout_secs: 60,
             max_retries: 3,
+            max_stored_dim: 1024,
         }
     }
 }

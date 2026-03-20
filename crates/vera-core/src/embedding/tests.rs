@@ -1,7 +1,7 @@
 //! Tests for the embedding pipeline.
 
 use crate::embedding::provider::test_helpers::MockProvider;
-use crate::embedding::{EmbeddingError, EmbeddingProvider, embed_chunks};
+use crate::embedding::{EmbeddingError, EmbeddingProvider, embed_chunks, embed_chunks_concurrent};
 use crate::types::{Chunk, Language, SymbolType};
 
 fn sample_chunks(n: usize) -> Vec<Chunk> {
@@ -283,6 +283,77 @@ async fn embed_and_store_batch() {
     store.insert_batch(&items).unwrap();
 
     assert_eq!(store.count().unwrap(), 10);
+}
+
+// ── Concurrent embedding tests ───────────────────────────────────────
+
+#[tokio::test]
+async fn concurrent_embed_returns_all_embeddings() {
+    let provider = MockProvider::new(64);
+    let chunks = sample_chunks(20);
+
+    let result = embed_chunks_concurrent(&provider, &chunks, 5, 4)
+        .await
+        .unwrap();
+
+    assert_eq!(result.len(), 20);
+    // Verify ordering is preserved.
+    for (i, (id, vec)) in result.iter().enumerate() {
+        assert_eq!(id, &format!("chunk-{i}"));
+        assert_eq!(vec.len(), 64);
+    }
+}
+
+#[tokio::test]
+async fn concurrent_embed_matches_sequential() {
+    let provider = MockProvider::new(32);
+    let chunks = sample_chunks(15);
+
+    let sequential = embed_chunks(&provider, &chunks, 4).await.unwrap();
+    let concurrent = embed_chunks_concurrent(&provider, &chunks, 4, 3)
+        .await
+        .unwrap();
+
+    assert_eq!(sequential.len(), concurrent.len());
+    for (s, c) in sequential.iter().zip(concurrent.iter()) {
+        assert_eq!(s.0, c.0, "chunk IDs should match");
+        assert_eq!(s.1, c.1, "vectors should be identical");
+    }
+}
+
+#[tokio::test]
+async fn concurrent_embed_empty_input() {
+    let provider = MockProvider::new(64);
+    let result = embed_chunks_concurrent(&provider, &[], 32, 4)
+        .await
+        .unwrap();
+    assert!(result.is_empty());
+}
+
+#[tokio::test]
+async fn concurrent_embed_single_batch() {
+    let provider = MockProvider::new(16);
+    let chunks = sample_chunks(3);
+
+    let result = embed_chunks_concurrent(&provider, &chunks, 100, 4)
+        .await
+        .unwrap();
+    assert_eq!(result.len(), 3);
+}
+
+#[tokio::test]
+async fn concurrent_embed_propagates_error() {
+    let provider = MockProvider::failing(EmbeddingError::AuthError {
+        message: "invalid key".to_string(),
+    });
+    let chunks = sample_chunks(10);
+
+    let result = embed_chunks_concurrent(&provider, &chunks, 3, 4).await;
+    assert!(result.is_err());
+    assert!(matches!(
+        result.unwrap_err(),
+        EmbeddingError::AuthError { .. }
+    ));
 }
 
 // ── OpenAI provider config tests ────────────────────────────────────

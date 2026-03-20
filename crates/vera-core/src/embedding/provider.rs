@@ -138,6 +138,9 @@ impl OpenAiProvider {
     }
 
     /// Execute a single embedding API call with retry logic.
+    ///
+    /// Rate limit errors (429) get extra retries with longer backoffs
+    /// to respect API quotas while still completing the operation.
     async fn call_api(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
         let url = self.endpoint_url();
         let body = EmbeddingRequest {
@@ -145,13 +148,22 @@ impl OpenAiProvider {
             input: texts,
         };
 
+        // Rate limit errors get extra retries beyond the normal max.
+        let max_total_retries = self.config.max_retries + 4;
         let mut last_err = None;
-        for attempt in 0..=self.config.max_retries {
+        for attempt in 0..=max_total_retries {
             if attempt > 0 {
-                let delay = Duration::from_millis(500 * 2u64.pow(attempt - 1));
+                let is_rate_limit = matches!(last_err, Some(EmbeddingError::RateLimitError { .. }));
+                let delay = if is_rate_limit {
+                    // Rate limit: wait 6-10s (API suggests ~6s cooldown).
+                    Duration::from_secs(6 + u64::from(attempt.min(4)))
+                } else {
+                    Duration::from_millis(500 * 2u64.pow(attempt.min(5) - 1))
+                };
                 debug!(
                     attempt,
                     delay_ms = delay.as_millis(),
+                    rate_limited = is_rate_limit,
                     "retrying embedding API"
                 );
                 tokio::time::sleep(delay).await;
@@ -166,7 +178,7 @@ impl OpenAiProvider {
                     }
                     warn!(
                         attempt = attempt + 1,
-                        max = self.config.max_retries + 1,
+                        max = max_total_retries + 1,
                         error = %e,
                         "embedding API call failed"
                     );
@@ -225,6 +237,13 @@ impl OpenAiProvider {
 
         if !response.status().is_success() {
             let text = response.text().await.unwrap_or_default();
+            // Some providers return 400 with "Unable to process" for transient
+            // overload conditions. Treat these as rate limits so they get retried.
+            if status == 400 && text.contains("Unable to process") {
+                return Err(EmbeddingError::RateLimitError {
+                    message: sanitize_error_message(&text),
+                });
+            }
             return Err(EmbeddingError::ApiError {
                 status,
                 message: sanitize_error_message(&text),
@@ -309,6 +328,85 @@ pub async fn embed_chunks<P: EmbeddingProvider>(
             results.push((chunk.id.clone(), vector));
         }
     }
+
+    Ok(results)
+}
+
+/// Embed all chunks using the given provider with concurrent batch processing.
+///
+/// Splits chunks into batches and sends up to `max_concurrent` batches
+/// simultaneously. This significantly reduces wall-clock time for large
+/// repositories where the embedding API is the bottleneck.
+///
+/// Returns a vector of `(chunk_id, embedding)` pairs in the same order
+/// as the input chunks.
+pub async fn embed_chunks_concurrent<P: EmbeddingProvider>(
+    provider: &P,
+    chunks: &[Chunk],
+    batch_size: usize,
+    max_concurrent: usize,
+) -> Result<Vec<(String, Vec<f32>)>, EmbeddingError> {
+    if chunks.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let batch_size = batch_size.max(1);
+    let max_concurrent = max_concurrent.max(1);
+    let total = chunks.len();
+    let total_batches = total.div_ceil(batch_size);
+
+    debug!(
+        total_chunks = total,
+        batch_size, total_batches, max_concurrent, "starting concurrent embedding"
+    );
+
+    // Prepare all batch inputs upfront.
+    let batch_inputs: Vec<(Vec<String>, Vec<String>)> = chunks
+        .chunks(batch_size)
+        .map(|batch| {
+            let ids: Vec<String> = batch.iter().map(|c| c.id.clone()).collect();
+            let texts: Vec<String> = batch.iter().map(chunk_to_embedding_text).collect();
+            (ids, texts)
+        })
+        .collect();
+
+    type BatchResult = (usize, Vec<(String, Vec<f32>)>);
+    let mut all_results: Vec<BatchResult> = Vec::with_capacity(total_batches);
+
+    // Process in groups of max_concurrent to overlap API calls while
+    // keeping lifetime management simple (no task spawning needed).
+    for group_start in (0..batch_inputs.len()).step_by(max_concurrent) {
+        let group_end = (group_start + max_concurrent).min(batch_inputs.len());
+        let group = &batch_inputs[group_start..group_end];
+
+        let futures: Vec<_> = group
+            .iter()
+            .enumerate()
+            .map(|(i, (ids, texts))| {
+                let batch_idx = group_start + i;
+                async move {
+                    debug!(batch = batch_idx + 1, total_batches, "embedding batch");
+                    let vectors = provider.embed_batch(texts).await?;
+                    let pairs: Vec<(String, Vec<f32>)> = ids.iter().cloned().zip(vectors).collect();
+                    Ok::<_, EmbeddingError>((batch_idx, pairs))
+                }
+            })
+            .collect();
+
+        // Run all futures in this group concurrently.
+        let results = futures::future::join_all(futures).await;
+        for result in results {
+            all_results.push(result?);
+        }
+    }
+
+    // Sort by batch index to preserve original ordering.
+    all_results.sort_by_key(|(idx, _)| *idx);
+
+    let results: Vec<(String, Vec<f32>)> = all_results
+        .into_iter()
+        .flat_map(|(_, pairs)| pairs)
+        .collect();
 
     Ok(results)
 }
