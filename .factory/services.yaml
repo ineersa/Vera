@@ -1,0 +1,17 @@
+commands:
+  build: cargo build
+  build-release: cargo build --release
+  test: cargo test
+  test-verbose: cargo test -- --nocapture
+  clippy: cargo clippy -- -D warnings
+  fmt: cargo fmt --check
+  fmt-fix: cargo fmt
+  bench: cargo test --test bench -- --nocapture
+
+services:
+  mcp:
+    start: VERA_LOG=info cargo run -- mcp --port 3200
+    stop: lsof -ti :3200 | xargs kill 2>/dev/null || true
+    healthcheck: curl -sf http://localhost:3200/health 2>/dev/null || echo "MCP not running"
+    port: 3200
+    depends_on: []
