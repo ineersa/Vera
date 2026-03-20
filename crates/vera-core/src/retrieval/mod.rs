@@ -9,8 +9,12 @@
 
 pub mod bm25;
 pub mod hybrid;
+pub mod reranker;
 pub mod vector;
 
 pub use bm25::{search_bm25, search_bm25_with_stores};
-pub use hybrid::{HybridSearchError, fuse_rrf, search_hybrid};
+pub use hybrid::{HybridSearchError, fuse_rrf, search_hybrid, search_hybrid_reranked};
+pub use reranker::{
+    ApiReranker, RerankScore, Reranker, RerankerConfig, RerankerError, rerank_results,
+};
 pub use vector::{VectorSearchError, search_vector, search_vector_with_stores};

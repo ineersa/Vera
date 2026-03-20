@@ -12,10 +12,11 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::embedding::EmbeddingProvider;
 use crate::retrieval::bm25::search_bm25;
+use crate::retrieval::reranker::{Reranker, rerank_results};
 use crate::retrieval::vector::search_vector;
 use crate::types::SearchResult;
 
@@ -96,6 +97,76 @@ pub async fn search_hybrid(
             bm25_error: format!("{bm25_err:#}"),
             vector_error: format!("{vec_err:#}"),
         }),
+    }
+}
+
+/// Perform hybrid search with cross-encoder reranking.
+///
+/// Runs the full hybrid pipeline (BM25 + vector → RRF fusion), then
+/// sends the top candidates to a cross-encoder reranker for more accurate
+/// relevance scoring.
+///
+/// **Graceful degradation:**
+/// - If the reranker API is unavailable (timeout, 5xx, connection error),
+///   returns unreranked results with a warning logged to stderr.
+/// - If the embedding API is unavailable, falls back to BM25-only results
+///   (handled by the inner `search_hybrid` call).
+///
+/// # Arguments
+/// - `index_dir` — Path to the `.vera` index directory
+/// - `provider` — Embedding provider for vector search
+/// - `reranker` — Reranker for result refinement
+/// - `query` — The search query text
+/// - `limit` — Maximum number of results to return
+/// - `rrf_k` — RRF constant (typically 60.0)
+/// - `stored_dim` — Dimensionality of stored vectors
+/// - `rerank_candidates` — Number of candidates to send to the reranker
+#[allow(clippy::too_many_arguments)]
+pub async fn search_hybrid_reranked(
+    index_dir: &Path,
+    provider: &impl EmbeddingProvider,
+    reranker: &impl Reranker,
+    query: &str,
+    limit: usize,
+    rrf_k: f64,
+    stored_dim: usize,
+    rerank_candidates: usize,
+) -> Result<Vec<SearchResult>, HybridSearchError> {
+    // Run base hybrid search, fetching enough candidates for reranking.
+    let fetch_limit = rerank_candidates.max(limit);
+
+    let hybrid_results =
+        search_hybrid(index_dir, provider, query, fetch_limit, rrf_k, stored_dim).await?;
+
+    if hybrid_results.is_empty() {
+        return Ok(hybrid_results);
+    }
+
+    // Attempt reranking with graceful degradation.
+    match rerank_results(reranker, query, &hybrid_results, rerank_candidates).await {
+        Ok(mut reranked) => {
+            info!(
+                query = query,
+                candidates = hybrid_results.len(),
+                reranked = reranked.len(),
+                "reranking complete"
+            );
+            reranked.truncate(limit);
+            Ok(reranked)
+        }
+        Err(rerank_err) => {
+            // Graceful degradation: return unreranked results with warning.
+            warn!(
+                error = %rerank_err,
+                "reranker unavailable, returning unreranked results"
+            );
+            eprintln!(
+                "Warning: reranker unavailable ({rerank_err}), returning unreranked results."
+            );
+            let mut results = hybrid_results;
+            results.truncate(limit);
+            Ok(results)
+        }
     }
 }
 
@@ -491,5 +562,222 @@ mod tests {
         let r2 = make_result("a.rs", 1, 10, 0.9, Some("func"));
 
         assert_eq!(result_key(&r1), result_key(&r2));
+    }
+
+    // ── Integration tests for search_hybrid_reranked ─────────────────
+
+    /// Set up a temp index directory with BM25 + vector + metadata stores.
+    /// Returns (index_dir_path, stored_dim) for use in integration tests.
+    async fn setup_test_index(tmp: &std::path::Path) -> (std::path::PathBuf, usize) {
+        use crate::config::VeraConfig;
+        use crate::embedding::embed_chunks;
+        use crate::embedding::test_helpers::MockProvider;
+        use crate::parsing;
+        use crate::storage::bm25::{Bm25Document, Bm25Index};
+        use crate::storage::metadata::MetadataStore;
+        use crate::storage::vector::VectorStore;
+
+        let dim = 8;
+        let provider = MockProvider::new(dim);
+        let config = VeraConfig::default();
+
+        // Create sample source files.
+        let repo_dir = tmp.join("repo");
+        std::fs::create_dir_all(&repo_dir).unwrap();
+        std::fs::write(
+            repo_dir.join("auth.rs"),
+            "pub fn authenticate(user: &str, pass: &str) -> Result<Token, Error> {\n    \
+             let hash = hash_password(pass);\n    verify_credentials(user, &hash)\n}\n\n\
+             pub fn authorize(token: &Token, resource: &str) -> bool {\n    \
+             token.has_permission(resource)\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo_dir.join("cache.rs"),
+            "pub fn get_cached(key: &str) -> Option<Value> {\n    \
+             CACHE.lock().unwrap().get(key).cloned()\n}\n\n\
+             pub fn set_cached(key: &str, value: Value) {\n    \
+             CACHE.lock().unwrap().insert(key.to_string(), value);\n}\n",
+        )
+        .unwrap();
+
+        // Parse and chunk.
+        let mut all_chunks = Vec::new();
+        for file in ["auth.rs", "cache.rs"] {
+            let source = std::fs::read_to_string(repo_dir.join(file)).unwrap();
+            let lang = crate::types::Language::Rust;
+            let chunks = parsing::parse_and_chunk(&source, file, lang, &config.indexing).unwrap();
+            all_chunks.extend(chunks);
+        }
+
+        // Create index directory and stores.
+        let index_dir = repo_dir.join(".vera");
+        std::fs::create_dir_all(&index_dir).unwrap();
+
+        // Metadata store.
+        let metadata_path = index_dir.join("metadata.db");
+        let metadata_store = MetadataStore::open(&metadata_path).unwrap();
+        metadata_store.insert_chunks(&all_chunks).unwrap();
+
+        // Vector store.
+        let vector_path = index_dir.join("vectors.db");
+        let vector_store = VectorStore::open(&vector_path, dim).unwrap();
+        let embeddings = embed_chunks(&provider, &all_chunks, all_chunks.len())
+            .await
+            .unwrap();
+        let batch: Vec<(&str, &[f32])> = embeddings
+            .iter()
+            .map(|(id, vec)| (id.as_str(), vec.as_slice()))
+            .collect();
+        vector_store.insert_batch(&batch).unwrap();
+
+        // BM25 index.
+        let bm25_dir = index_dir.join("bm25");
+        let bm25 = Bm25Index::open(&bm25_dir).unwrap();
+        let lang_strings: Vec<String> = all_chunks.iter().map(|c| c.language.to_string()).collect();
+        let bm25_docs: Vec<Bm25Document<'_>> = all_chunks
+            .iter()
+            .zip(lang_strings.iter())
+            .map(|(c, lang)| Bm25Document {
+                chunk_id: &c.id,
+                file_path: &c.file_path,
+                content: &c.content,
+                symbol_name: c.symbol_name.as_deref(),
+                language: lang,
+            })
+            .collect();
+        bm25.insert_batch(&bm25_docs).unwrap();
+
+        (index_dir, dim)
+    }
+
+    #[tokio::test]
+    async fn search_hybrid_reranked_returns_reranked_results() {
+        use crate::embedding::test_helpers::MockProvider;
+        use crate::retrieval::reranker::test_helpers::MockReranker;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (index_dir, dim) = setup_test_index(tmp.path()).await;
+
+        let provider = MockProvider::new(dim);
+        let reranker = MockReranker::new();
+
+        let results = search_hybrid_reranked(
+            &index_dir,
+            &provider,
+            &reranker,
+            "authenticate",
+            5,
+            60.0,
+            dim,
+            10,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !results.is_empty(),
+            "should find results for 'authenticate'"
+        );
+
+        // Results should be sorted by reranker scores (descending).
+        for i in 1..results.len() {
+            assert!(
+                results[i - 1].score >= results[i].score,
+                "reranked scores must be descending: {} >= {}",
+                results[i - 1].score,
+                results[i].score,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn search_hybrid_reranked_degrades_on_reranker_failure() {
+        use crate::embedding::test_helpers::MockProvider;
+        use crate::retrieval::reranker::RerankerError;
+        use crate::retrieval::reranker::test_helpers::MockReranker;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (index_dir, dim) = setup_test_index(tmp.path()).await;
+
+        let provider = MockProvider::new(dim);
+        let reranker = MockReranker::failing(RerankerError::ConnectionError {
+            message: "reranker timeout".to_string(),
+        });
+
+        // Should NOT return an error — graceful degradation returns unreranked results.
+        let results = search_hybrid_reranked(
+            &index_dir,
+            &provider,
+            &reranker,
+            "authenticate",
+            5,
+            60.0,
+            dim,
+            10,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !results.is_empty(),
+            "should return unreranked results when reranker fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_hybrid_reranked_degrades_on_embedding_failure() {
+        use crate::embedding::EmbeddingError;
+        use crate::embedding::test_helpers::MockProvider;
+        use crate::retrieval::reranker::test_helpers::MockReranker;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (index_dir, dim) = setup_test_index(tmp.path()).await;
+
+        // Embedding provider that always fails.
+        let provider = MockProvider::failing(EmbeddingError::ConnectionError {
+            message: "embedding API down".to_string(),
+        });
+        let reranker = MockReranker::new();
+
+        // Should fall back to BM25-only results (not crash/hang).
+        let results = search_hybrid_reranked(
+            &index_dir,
+            &provider,
+            &reranker,
+            "authenticate",
+            5,
+            60.0,
+            dim,
+            10,
+        )
+        .await
+        .unwrap();
+
+        // BM25 fallback should still find keyword matches.
+        assert!(
+            !results.is_empty(),
+            "should return BM25-only results when embedding API fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_hybrid_reranked_respects_limit() {
+        use crate::embedding::test_helpers::MockProvider;
+        use crate::retrieval::reranker::test_helpers::MockReranker;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (index_dir, dim) = setup_test_index(tmp.path()).await;
+
+        let provider = MockProvider::new(dim);
+        let reranker = MockReranker::new();
+
+        let results = search_hybrid_reranked(
+            &index_dir, &provider, &reranker, "function", 2, 60.0, dim, 10,
+        )
+        .await
+        .unwrap();
+
+        assert!(results.len() <= 2, "should respect the limit of 2");
     }
 }

@@ -173,9 +173,10 @@ fn run_index(path: &str, json_output: bool) -> anyhow::Result<()> {
 
 /// Run the `vera search <query>` command.
 ///
-/// Performs hybrid search (BM25 + vector via RRF fusion) over the index
-/// in the current directory. Falls back to BM25-only if the embedding
-/// API is unavailable.
+/// Performs hybrid search (BM25 + vector via RRF fusion) with optional
+/// cross-encoder reranking. Falls back gracefully:
+/// - Embedding API unavailable → BM25-only search with warning
+/// - Reranker API unavailable → unreranked hybrid results with warning
 fn run_search(query: &str, limit: Option<usize>, json_output: bool) -> anyhow::Result<()> {
     let config = vera_core::config::VeraConfig::default();
     let result_limit = limit.unwrap_or(config.retrieval.default_limit);
@@ -193,7 +194,7 @@ fn run_search(query: &str, limit: Option<usize>, json_output: bool) -> anyhow::R
         process::exit(1);
     }
 
-    // Build the tokio runtime for async embedding calls.
+    // Build the tokio runtime for async embedding/reranker calls.
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| anyhow::anyhow!("failed to create async runtime: {e}"))?;
 
@@ -225,22 +226,71 @@ fn run_search(query: &str, limit: Option<usize>, json_output: bool) -> anyhow::R
         }
     };
 
-    // Run hybrid search.
+    // Create the reranker from environment (optional).
+    let reranker = if config.retrieval.reranking_enabled {
+        match vera_core::retrieval::RerankerConfig::from_env() {
+            Ok(reranker_config) => {
+                let reranker_config = reranker_config
+                    .with_timeout(std::time::Duration::from_secs(30))
+                    .with_max_retries(2);
+                match vera_core::retrieval::ApiReranker::new(reranker_config) {
+                    Ok(r) => Some(r),
+                    Err(err) => {
+                        eprintln!(
+                            "Warning: failed to initialize reranker ({err}), \
+                             search will proceed without reranking."
+                        );
+                        None
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::debug!(error = %err, "reranker not configured, skipping reranking");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Run hybrid search with optional reranking.
     let stored_dim = config.embedding.max_stored_dim;
     let rrf_k = config.retrieval.rrf_k;
+    let rerank_candidates = config.retrieval.rerank_candidates;
 
-    let results = match rt.block_on(vera_core::retrieval::search_hybrid(
-        &index_dir,
-        &provider,
-        query,
-        result_limit,
-        rrf_k,
-        stored_dim,
-    )) {
-        Ok(r) => r,
-        Err(err) => {
-            eprintln!("Error: search failed: {err:#}");
-            process::exit(1);
+    let results = if let Some(ref reranker) = reranker {
+        // Hybrid search + reranking.
+        match rt.block_on(vera_core::retrieval::search_hybrid_reranked(
+            &index_dir,
+            &provider,
+            reranker,
+            query,
+            result_limit,
+            rrf_k,
+            stored_dim,
+            rerank_candidates,
+        )) {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!("Error: search failed: {err:#}");
+                process::exit(1);
+            }
+        }
+    } else {
+        // Hybrid search without reranking.
+        match rt.block_on(vera_core::retrieval::search_hybrid(
+            &index_dir,
+            &provider,
+            query,
+            result_limit,
+            rrf_k,
+            stored_dim,
+        )) {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!("Error: search failed: {err:#}");
+                process::exit(1);
+            }
         }
     };
 
