@@ -284,14 +284,16 @@ pub fn logging_middleware(request: &Request) {
 
 /// Create an in-memory indexed corpus for quality tests.
 ///
-/// Returns (bm25_index, metadata_store, vector_store, chunks, provider)
-/// with all data indexed and ready to search.
+/// Returns (bm25_index, metadata_store, vector_store, chunks, provider,
+/// corpus_sources) with all data indexed and ready to search.
+/// `corpus_sources` maps file_path → source content for token efficiency tests.
 async fn setup_indexed_corpus() -> (
     Bm25Index,
     MetadataStore,
     VectorStore,
     Vec<Chunk>,
     MockProvider,
+    std::collections::HashMap<String, String>,
 ) {
     let dim = 8;
     let provider = MockProvider::new(dim);
@@ -299,7 +301,9 @@ async fn setup_indexed_corpus() -> (
     let corpus = build_test_corpus();
 
     let mut all_chunks = Vec::new();
+    let mut corpus_sources = std::collections::HashMap::new();
     for (file_path, source, language) in &corpus {
+        corpus_sources.insert(file_path.clone(), source.to_string());
         let chunks =
             parsing::parse_and_chunk(source, file_path, *language, &config.indexing).unwrap();
         all_chunks.extend(chunks);
@@ -340,6 +344,7 @@ async fn setup_indexed_corpus() -> (
         vector_store,
         all_chunks,
         provider,
+        corpus_sources,
     )
 }
 
@@ -358,7 +363,7 @@ fn bm25_search(
 
 #[tokio::test]
 async fn symbol_lookup_authenticate_function() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "authenticate", 10);
     assert!(!results.is_empty());
     assert_eq!(
@@ -370,7 +375,7 @@ async fn symbol_lookup_authenticate_function() {
 
 #[tokio::test]
 async fn symbol_lookup_authorize_function() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "authorize", 10);
     assert!(!results.is_empty());
     let top3_names: Vec<_> = results
@@ -387,7 +392,7 @@ async fn symbol_lookup_authorize_function() {
 
 #[tokio::test]
 async fn symbol_lookup_token_struct() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "Token", 10);
     assert!(!results.is_empty());
     let top3_names: Vec<_> = results
@@ -404,7 +409,7 @@ async fn symbol_lookup_token_struct() {
 
 #[tokio::test]
 async fn symbol_lookup_database_connection_class() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "DatabaseConnection", 10);
     assert!(!results.is_empty());
     assert_eq!(
@@ -416,7 +421,7 @@ async fn symbol_lookup_database_connection_class() {
 
 #[tokio::test]
 async fn symbol_lookup_user_repository() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "UserRepository", 10);
     assert!(!results.is_empty());
     assert_eq!(
@@ -428,7 +433,7 @@ async fn symbol_lookup_user_repository() {
 
 #[tokio::test]
 async fn symbol_lookup_router_class() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "Router", 10);
     assert!(!results.is_empty());
     let top3_names: Vec<_> = results
@@ -445,7 +450,7 @@ async fn symbol_lookup_router_class() {
 
 #[tokio::test]
 async fn symbol_lookup_cache_struct() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "Cache", 10);
     assert!(!results.is_empty());
     let top3_names: Vec<_> = results
@@ -462,7 +467,7 @@ async fn symbol_lookup_cache_struct() {
 
 #[tokio::test]
 async fn symbol_lookup_handle_login() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "handle_login", 10);
     assert!(!results.is_empty());
     assert_eq!(
@@ -474,7 +479,7 @@ async fn symbol_lookup_handle_login() {
 
 #[tokio::test]
 async fn symbol_lookup_rate_limiter() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "rate_limiter", 10);
     assert!(!results.is_empty());
     assert_eq!(
@@ -486,7 +491,7 @@ async fn symbol_lookup_rate_limiter() {
 
 #[tokio::test]
 async fn symbol_lookup_find_by_username() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "find_by_username", 10);
     assert!(!results.is_empty());
     // find_by_username is a method inside the UserRepository class chunk,
@@ -504,7 +509,7 @@ async fn symbol_lookup_find_by_username() {
 
 #[tokio::test]
 async fn symbol_lookup_handle_error() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "handle_error", 10);
     assert!(!results.is_empty());
     assert_eq!(
@@ -516,7 +521,7 @@ async fn symbol_lookup_handle_error() {
 
 #[tokio::test]
 async fn symbol_lookup_create_router() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "createRouter", 10);
     assert!(!results.is_empty());
     assert_eq!(
@@ -529,7 +534,7 @@ async fn symbol_lookup_create_router() {
 /// Aggregate: verify 80%+ top-1 accuracy across 12 symbol lookups.
 #[tokio::test]
 async fn symbol_lookup_top1_accuracy_80_percent() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
 
     let queries_with_expected = [
         ("authenticate", "authenticate"),
@@ -583,7 +588,7 @@ async fn symbol_lookup_top1_accuracy_80_percent() {
 
 #[tokio::test]
 async fn intent_search_authentication_logic() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(
         &bm25,
         &meta,
@@ -602,7 +607,7 @@ async fn intent_search_authentication_logic() {
 
 #[tokio::test]
 async fn intent_search_error_handling() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "error handling response", 5);
     assert!(!results.is_empty());
     let has_error = results
@@ -613,7 +618,7 @@ async fn intent_search_error_handling() {
 
 #[tokio::test]
 async fn intent_search_database_queries() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "database query SQL", 5);
     assert!(!results.is_empty());
     let has_db = results
@@ -624,7 +629,7 @@ async fn intent_search_database_queries() {
 
 #[tokio::test]
 async fn intent_search_http_routing() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "request routing handler", 5);
     assert!(!results.is_empty());
     let has_routing = results.iter().any(|r| {
@@ -637,7 +642,7 @@ async fn intent_search_http_routing() {
 
 #[tokio::test]
 async fn intent_search_caching() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "caching entries eviction", 5);
     assert!(!results.is_empty());
     let has_cache = results
@@ -648,7 +653,7 @@ async fn intent_search_caching() {
 
 #[tokio::test]
 async fn intent_search_user_management() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "user management create delete", 5);
     assert!(!results.is_empty());
     let has_user = results.iter().any(|r| {
@@ -663,7 +668,7 @@ async fn intent_search_user_management() {
 
 #[tokio::test]
 async fn cross_file_auth_concept() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     // "authenticate" concept spans auth.rs and handler.rs
     let results = bm25_search(&bm25, &meta, "authenticate", 10);
     let unique_files: std::collections::HashSet<_> =
@@ -677,7 +682,7 @@ async fn cross_file_auth_concept() {
 
 #[tokio::test]
 async fn cross_file_request_handling() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     // "request" concept spans handler.rs, router.ts, middleware.rs
     let results = bm25_search(&bm25, &meta, "request", 10);
     let unique_files: std::collections::HashSet<_> =
@@ -691,7 +696,7 @@ async fn cross_file_request_handling() {
 
 #[tokio::test]
 async fn cross_file_user_concept() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     // "user" concept spans auth.rs, database.py, handler.rs
     let results = bm25_search(&bm25, &meta, "user", 10);
     let unique_files: std::collections::HashSet<_> =
@@ -707,7 +712,7 @@ async fn cross_file_user_concept() {
 
 #[tokio::test]
 async fn result_structure_all_fields_present() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "authenticate", 10);
     assert!(!results.is_empty());
 
@@ -733,7 +738,7 @@ async fn result_structure_all_fields_present() {
 
 #[tokio::test]
 async fn result_structure_symbol_fields_for_named_symbols() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "authenticate", 10);
     assert!(!results.is_empty());
 
@@ -753,7 +758,7 @@ async fn result_structure_symbol_fields_for_named_symbols() {
 
 #[tokio::test]
 async fn result_scores_descending() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "request handler", 10);
 
     for i in 1..results.len() {
@@ -768,7 +773,7 @@ async fn result_scores_descending() {
 
 #[tokio::test]
 async fn result_json_serialization_complete() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "authenticate", 5);
     assert!(!results.is_empty());
 
@@ -777,14 +782,47 @@ async fn result_json_serialization_complete() {
     let arr = parsed.as_array().unwrap();
     assert!(!arr.is_empty());
 
+    // Context capsule schema: every result must have all 8 fields.
+    let expected_keys: std::collections::BTreeSet<&str> = [
+        "file_path",
+        "line_start",
+        "line_end",
+        "content",
+        "language",
+        "score",
+        "symbol_name",
+        "symbol_type",
+    ]
+    .into_iter()
+    .collect();
+
     for item in arr {
-        // All required fields present.
+        let obj = item.as_object().unwrap();
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(|k| k.as_str()).collect();
+        assert_eq!(
+            keys, expected_keys,
+            "every result must have exactly the context capsule fields"
+        );
+
+        // Core fields are always their expected types.
         assert!(item["file_path"].is_string());
         assert!(item["line_start"].is_number());
         assert!(item["line_end"].is_number());
         assert!(item["content"].is_string());
         assert!(item["language"].is_string());
         assert!(item["score"].is_number());
+
+        // symbol_name and symbol_type: either string or null, never missing.
+        assert!(
+            item["symbol_name"].is_string() || item["symbol_name"].is_null(),
+            "symbol_name must be string or null, got: {:?}",
+            item["symbol_name"]
+        );
+        assert!(
+            item["symbol_type"].is_string() || item["symbol_type"].is_null(),
+            "symbol_type must be string or null, got: {:?}",
+            item["symbol_type"]
+        );
     }
 
     // The top result (authenticate) should have symbol fields.
@@ -795,7 +833,7 @@ async fn result_json_serialization_complete() {
 
 #[tokio::test]
 async fn result_snippet_fidelity() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "authenticate", 5);
     assert!(!results.is_empty());
 
@@ -815,7 +853,7 @@ async fn result_snippet_fidelity() {
 
 #[tokio::test]
 async fn filter_by_language_rust_only() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "request", 20);
 
     let filters = SearchFilters {
@@ -836,7 +874,7 @@ async fn filter_by_language_rust_only() {
 
 #[tokio::test]
 async fn filter_by_language_python_only() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "user", 20);
 
     let filters = SearchFilters {
@@ -857,7 +895,7 @@ async fn filter_by_language_python_only() {
 
 #[tokio::test]
 async fn filter_by_path_glob() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "request", 20);
 
     let filters = SearchFilters {
@@ -878,7 +916,7 @@ async fn filter_by_path_glob() {
 
 #[tokio::test]
 async fn filter_by_path_glob_specific_directory() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "function class struct", 30);
 
     let filters = SearchFilters {
@@ -898,7 +936,7 @@ async fn filter_by_path_glob_specific_directory() {
 
 #[tokio::test]
 async fn filter_by_symbol_type_function() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "handle request", 20);
 
     let filters = SearchFilters {
@@ -919,7 +957,7 @@ async fn filter_by_symbol_type_function() {
 
 #[tokio::test]
 async fn filter_by_symbol_type_class() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "database connection user", 20);
 
     let filters = SearchFilters {
@@ -940,7 +978,7 @@ async fn filter_by_symbol_type_class() {
 
 #[tokio::test]
 async fn filter_limit_caps_results() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "function", 20);
 
     let filters = SearchFilters::default();
@@ -955,7 +993,7 @@ async fn filter_limit_caps_results() {
 
 #[tokio::test]
 async fn filter_combined_lang_and_type() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "authenticate handler request", 20);
 
     let filters = SearchFilters {
@@ -973,7 +1011,7 @@ async fn filter_combined_lang_and_type() {
 
 #[tokio::test]
 async fn filter_combined_path_and_lang() {
-    let (bm25, meta, _, _, _) = setup_indexed_corpus().await;
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
     let results = bm25_search(&bm25, &meta, "user", 20);
 
     let filters = SearchFilters {
@@ -993,7 +1031,7 @@ async fn filter_combined_path_and_lang() {
 
 #[tokio::test]
 async fn hybrid_rrf_with_filters() {
-    let (bm25, meta, vec_store, _, provider) = setup_indexed_corpus().await;
+    let (bm25, meta, vec_store, _, provider, _) = setup_indexed_corpus().await;
 
     // Get BM25 results.
     let bm25_results = search_bm25_with_stores(&bm25, &meta, "authenticate", 20).unwrap();
@@ -1025,4 +1063,176 @@ async fn hybrid_rrf_with_filters() {
             "scores should be descending after filtering"
         );
     }
+}
+
+// ── 7. Context capsule schema consistency ───────────────────────────
+
+#[tokio::test]
+async fn context_capsule_schema_consistency_across_queries() {
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
+
+    // Run multiple diverse queries to get a mix of results with/without symbols.
+    let queries = [
+        "authenticate",
+        "request handler",
+        "database query",
+        "caching",
+        "user",
+    ];
+
+    let expected_keys: std::collections::BTreeSet<&str> = [
+        "file_path",
+        "line_start",
+        "line_end",
+        "content",
+        "language",
+        "score",
+        "symbol_name",
+        "symbol_type",
+    ]
+    .into_iter()
+    .collect();
+
+    let mut total_results = 0;
+
+    for query in &queries {
+        let results = bm25_search(&bm25, &meta, query, 10);
+        let json = serde_json::to_string_pretty(&results).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let arr = parsed.as_array().unwrap();
+
+        for item in arr {
+            total_results += 1;
+            let obj = item.as_object().unwrap();
+            let keys: std::collections::BTreeSet<&str> = obj.keys().map(|k| k.as_str()).collect();
+            assert_eq!(
+                keys, expected_keys,
+                "query '{query}': all results must have the same schema"
+            );
+
+            // Type consistency: core fields.
+            assert!(item["file_path"].is_string());
+            assert!(item["line_start"].is_u64());
+            assert!(item["line_end"].is_u64());
+            assert!(item["content"].is_string());
+            assert!(item["language"].is_string());
+            assert!(item["score"].is_f64());
+
+            // Nullable fields: string or null.
+            assert!(
+                item["symbol_name"].is_string() || item["symbol_name"].is_null(),
+                "symbol_name type inconsistency"
+            );
+            assert!(
+                item["symbol_type"].is_string() || item["symbol_type"].is_null(),
+                "symbol_type type inconsistency"
+            );
+        }
+    }
+
+    assert!(
+        total_results >= 10,
+        "should have validated 10+ results, got {total_results}"
+    );
+}
+
+#[tokio::test]
+async fn context_capsule_content_not_truncated() {
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
+    let results = bm25_search(&bm25, &meta, "authenticate", 5);
+    assert!(!results.is_empty());
+
+    let top = &results[0];
+    // The authenticate function has a body with multiple lines.
+    // Content should contain the complete symbol body.
+    assert!(
+        top.content.contains("authenticate"),
+        "content should contain function name"
+    );
+    assert!(
+        top.content.contains("password"),
+        "content should contain parameter"
+    );
+    // Verify the content spans the declared line range.
+    let content_lines = top.content.lines().count();
+    let declared_lines = (top.line_end - top.line_start + 1) as usize;
+    assert_eq!(
+        content_lines, declared_lines,
+        "content line count ({content_lines}) should match declared range ({declared_lines})"
+    );
+}
+
+#[tokio::test]
+async fn context_capsule_token_efficiency() {
+    let (bm25, meta, _, _, _, corpus_sources) = setup_indexed_corpus().await;
+
+    // Token efficiency: the content fields of search results should be
+    // significantly smaller than the full source files they reference.
+    // We compare content-only character count vs full file character count.
+    // In a real scenario with large repos, this ratio is typically <30%.
+    // With our small test corpus we verify the principle: content < files.
+    let queries = [
+        "authenticate",
+        "request handler",
+        "database connection",
+        "caching entries",
+        "user management",
+    ];
+
+    let mut total_content_chars = 0usize;
+    let mut total_file_chars = 0usize;
+
+    for query in &queries {
+        let results = bm25_search(&bm25, &meta, query, 5);
+        if results.is_empty() {
+            continue;
+        }
+
+        // Sum the content field sizes (the actual code payload).
+        for result in &results {
+            total_content_chars += result.content.len();
+        }
+
+        // Collect unique files referenced by results and sum their sizes.
+        let unique_files: std::collections::HashSet<_> =
+            results.iter().map(|r| r.file_path.as_str()).collect();
+        for file_path in &unique_files {
+            if let Some(source) = corpus_sources.get(*file_path) {
+                total_file_chars += source.len();
+            }
+        }
+    }
+
+    assert!(total_content_chars > 0, "should have some results");
+    assert!(total_file_chars > 0, "should have matching files");
+
+    let ratio = total_content_chars as f64 / total_file_chars as f64;
+    // Content extracted from search results must be smaller than reading
+    // entire files. The full ≤30% target applies to real repos; for our
+    // small test corpus, content should be strictly less than full files.
+    assert!(
+        ratio < 1.0,
+        "search content should be more compact than full files, got ratio {:.2} \
+         (content={total_content_chars}, files={total_file_chars})",
+        ratio
+    );
+}
+
+#[tokio::test]
+async fn context_capsule_json_parseable() {
+    let (bm25, meta, _, _, _, _) = setup_indexed_corpus().await;
+    let results = bm25_search(&bm25, &meta, "authenticate", 10);
+    assert!(!results.is_empty());
+
+    // Verify JSON is parseable.
+    let json = serde_json::to_string_pretty(&results).unwrap();
+
+    // Parse as generic JSON value (simulates jq).
+    let _: serde_json::Value =
+        serde_json::from_str(&json).expect("JSON output should parse as a valid JSON value");
+
+    // Parse back into typed SearchResult vec.
+    let round_trip: Vec<SearchResult> =
+        serde_json::from_str(&json).expect("JSON output should round-trip back to SearchResult");
+    assert_eq!(round_trip.len(), results.len());
 }

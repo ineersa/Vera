@@ -270,7 +270,11 @@ impl std::fmt::Display for SymbolType {
     }
 }
 
-/// A search result returned by the retrieval pipeline.
+/// A search result returned by the retrieval pipeline ("context capsule").
+///
+/// Every field is always present in JSON serialization for schema consistency.
+/// `symbol_name` and `symbol_type` serialize as `null` when not applicable
+/// (e.g., for fallback/block chunks that don't correspond to a named symbol).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
     /// Repository-relative file path.
@@ -279,17 +283,15 @@ pub struct SearchResult {
     pub line_start: u32,
     /// 1-based end line (inclusive).
     pub line_end: u32,
-    /// The code content of this result.
+    /// The code content of this result (complete symbol body, not truncated).
     pub content: String,
     /// Programming language.
     pub language: Language,
     /// Relevance score (higher is better).
     pub score: f64,
-    /// Symbol name, if the result corresponds to a named symbol.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Symbol name (`null` if the result doesn't correspond to a named symbol).
     pub symbol_name: Option<String>,
-    /// Symbol type, if the result corresponds to a typed symbol.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Symbol type (`null` if the result doesn't correspond to a typed symbol).
     pub symbol_type: Option<SymbolType>,
 }
 
@@ -360,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn search_result_serialization_omits_none() {
+    fn search_result_serialization_includes_null_fields() {
         let result = SearchResult {
             file_path: "lib.rs".to_string(),
             line_start: 5,
@@ -372,8 +374,70 @@ mod tests {
             symbol_type: None,
         };
         let json = serde_json::to_string(&result).unwrap();
-        assert!(!json.contains("symbol_name"));
-        assert!(!json.contains("symbol_type"));
+        // Null fields must be present (not omitted) for schema consistency.
+        assert!(json.contains("symbol_name"));
+        assert!(json.contains("symbol_type"));
+        // Parse and verify they are JSON null.
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed["symbol_name"].is_null());
+        assert!(parsed["symbol_type"].is_null());
+    }
+
+    #[test]
+    fn search_result_serialization_includes_symbol_fields() {
+        let result = SearchResult {
+            file_path: "lib.rs".to_string(),
+            line_start: 5,
+            line_end: 20,
+            content: "pub fn example() {}".to_string(),
+            language: Language::Rust,
+            score: 0.95,
+            symbol_name: Some("example".to_string()),
+            symbol_type: Some(SymbolType::Function),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["symbol_name"], "example");
+        assert_eq!(parsed["symbol_type"], "function");
+    }
+
+    #[test]
+    fn search_result_schema_consistent_with_and_without_symbols() {
+        let with_symbols = SearchResult {
+            file_path: "a.rs".to_string(),
+            line_start: 1,
+            line_end: 10,
+            content: "fn foo() {}".to_string(),
+            language: Language::Rust,
+            score: 0.9,
+            symbol_name: Some("foo".to_string()),
+            symbol_type: Some(SymbolType::Function),
+        };
+        let without_symbols = SearchResult {
+            file_path: "b.rs".to_string(),
+            line_start: 1,
+            line_end: 5,
+            content: "// some code".to_string(),
+            language: Language::Rust,
+            score: 0.5,
+            symbol_name: None,
+            symbol_type: None,
+        };
+
+        let json_with: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&with_symbols).unwrap()).unwrap();
+        let json_without: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&without_symbols).unwrap()).unwrap();
+
+        // Both must have exactly the same set of keys.
+        let keys_with: std::collections::BTreeSet<_> =
+            json_with.as_object().unwrap().keys().collect();
+        let keys_without: std::collections::BTreeSet<_> =
+            json_without.as_object().unwrap().keys().collect();
+        assert_eq!(
+            keys_with, keys_without,
+            "schema must be consistent: same keys regardless of symbol presence"
+        );
     }
 
     // ── SearchFilters tests ─────────────────────────────────────
