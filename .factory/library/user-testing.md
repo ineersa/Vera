@@ -107,3 +107,49 @@ set -a && source /home/lamim/Development/Tools/Vera/secrets.env && set +a
 
 **Source sizes for reference (files only, excluding .git/.vera/node_modules):**
 - Run `find <repo> -not -path '*/.git/*' -not -path '*/.vera/*' -not -path '*/node_modules/*' -type f | xargs du -sb | awk '{sum+=$1} END{print sum}'` to get source size.
+
+## Flow Validator Guidance: Agent Integration
+
+### Common Setup
+
+**Vera binary:** `/home/lamim/Development/Tools/Vera/target/release/vera`
+
+**API credentials:** Source secrets.env before running commands that need embedding/reranking:
+```bash
+set -a && source /home/lamim/Development/Tools/Vera/secrets.env && set +a
+```
+
+**Pre-indexed repos (read-only safe):**
+- Flask (Python): `/home/lamim/Development/Tools/Vera/.bench/repos/flask` — INDEXED
+- Fastify (TypeScript): `/home/lamim/Development/Tools/Vera/.bench/repos/fastify` — INDEXED
+- Ripgrep (Rust): `/home/lamim/Development/Tools/Vera/.bench/repos/ripgrep` — INDEXED
+
+**SKILL.md location:** `/home/lamim/Development/Tools/Vera/SKILL.md`
+**Cargo.toml location:** `/home/lamim/Development/Tools/Vera/Cargo.toml`
+
+### Isolation Boundaries
+
+**CLI read-only groups** (CLI completeness, agent capsules): Use pre-indexed repos at `.bench/repos/`. Safe to run concurrently — search and stats are read-only.
+
+**Incremental indexing group**: Use isolated repo copy at `/tmp/vera-test-incr/flask`. This group has exclusive write access. Do NOT use `.bench/repos/` for modification tests.
+
+**Cross-area flows group**: Use isolated repo copy at `/tmp/vera-test-cross/flask`. This group has exclusive write access. Do NOT use `.bench/repos/` for modification tests.
+
+**MCP group**: Use isolated repo copy at `/tmp/vera-test-mcp/flask`. MCP server uses stdio transport (not TCP), so invoke via pipe. Only one MCP instance at a time.
+
+### MCP Testing Approach
+
+The MCP server uses stdio JSON-RPC transport. Test by piping JSON-RPC messages:
+```bash
+# Initialize and send requests via pipe
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1.0"}}}' | vera mcp
+```
+
+For multi-message testing, use a script that sends multiple JSON-RPC messages on stdin and reads responses from stdout. The server processes one request per line.
+
+### Known Issues for Agent Integration
+
+- MCP server uses stdio transport, NOT HTTP/TCP. No port needed.
+- Reranker API may have connectivity issues — Vera degrades gracefully.
+- Embedding API may occasionally timeout — accept BM25 fallback for search tests.
+- `vera update` requires the target directory to already have a `.vera/` index directory.
