@@ -1,0 +1,345 @@
+//! Tests for the embedding pipeline.
+
+use crate::embedding::provider::test_helpers::MockProvider;
+use crate::embedding::{EmbeddingError, EmbeddingProvider, embed_chunks};
+use crate::types::{Chunk, Language, SymbolType};
+
+fn sample_chunks(n: usize) -> Vec<Chunk> {
+    (0..n)
+        .map(|i| Chunk {
+            id: format!("chunk-{i}"),
+            file_path: format!("src/file{i}.rs"),
+            line_start: 1,
+            line_end: 10,
+            content: format!("fn func_{i}() {{\n    // body {i}\n}}"),
+            language: Language::Rust,
+            symbol_type: Some(SymbolType::Function),
+            symbol_name: Some(format!("func_{i}")),
+        })
+        .collect()
+}
+
+// ── Provider trait tests ────────────────────────────────────────────
+
+#[tokio::test]
+async fn mock_provider_returns_correct_count() {
+    let provider = MockProvider::new(128);
+    let texts: Vec<String> = vec!["hello".into(), "world".into()];
+    let result = provider.embed_batch(&texts).await.unwrap();
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].len(), 128);
+    assert_eq!(result[1].len(), 128);
+}
+
+#[tokio::test]
+async fn mock_provider_empty_input() {
+    let provider = MockProvider::new(128);
+    let result = provider.embed_batch(&[]).await.unwrap();
+    assert!(result.is_empty());
+}
+
+#[tokio::test]
+async fn mock_provider_produces_non_zero_vectors() {
+    let provider = MockProvider::new(64);
+    let texts = vec!["fn main() {}".to_string()];
+    let result = provider.embed_batch(&texts).await.unwrap();
+
+    let all_zero = result[0].iter().all(|&v| v == 0.0);
+    assert!(!all_zero, "mock vectors should be non-zero");
+}
+
+#[tokio::test]
+async fn mock_provider_auth_error() {
+    let provider = MockProvider::failing(EmbeddingError::AuthError {
+        message: "invalid API key".to_string(),
+    });
+    let texts = vec!["hello".to_string()];
+    let result = provider.embed_batch(&texts).await;
+
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, EmbeddingError::AuthError { .. }),
+        "expected AuthError, got: {err}"
+    );
+    // Ensure the error message doesn't contain an API key.
+    let msg = err.to_string();
+    assert!(
+        !msg.contains("sk-"),
+        "error should not contain API key prefix"
+    );
+    assert!(
+        !msg.contains("Bearer"),
+        "error should not contain auth header"
+    );
+}
+
+#[tokio::test]
+async fn mock_provider_connection_error() {
+    let provider = MockProvider::failing(EmbeddingError::ConnectionError {
+        message: "connection refused".to_string(),
+    });
+    let texts = vec!["hello".to_string()];
+    let result = provider.embed_batch(&texts).await;
+
+    assert!(result.is_err());
+    assert!(matches!(
+        result.unwrap_err(),
+        EmbeddingError::ConnectionError { .. }
+    ));
+}
+
+// ── Batch embedding tests ───────────────────────────────────────────
+
+#[tokio::test]
+async fn embed_chunks_returns_all_embeddings() {
+    let provider = MockProvider::new(64);
+    let chunks = sample_chunks(5);
+
+    let result = embed_chunks(&provider, &chunks, 32).await.unwrap();
+
+    assert_eq!(result.len(), 5, "should get one embedding per chunk");
+    for (id, vec) in &result {
+        assert!(id.starts_with("chunk-"), "chunk IDs should be preserved");
+        assert_eq!(vec.len(), 64, "vectors should have correct dimensionality");
+    }
+}
+
+#[tokio::test]
+async fn embed_chunks_respects_batch_size() {
+    // With 10 chunks and batch_size=3, we should get 4 batches (3+3+3+1).
+    // The mock doesn't track batch calls, but we can verify the output is correct.
+    let provider = MockProvider::new(32);
+    let chunks = sample_chunks(10);
+
+    let result = embed_chunks(&provider, &chunks, 3).await.unwrap();
+
+    assert_eq!(result.len(), 10);
+    // Verify ordering is preserved.
+    for (i, (id, _)) in result.iter().enumerate() {
+        assert_eq!(id, &format!("chunk-{i}"));
+    }
+}
+
+#[tokio::test]
+async fn embed_chunks_single_batch() {
+    let provider = MockProvider::new(16);
+    let chunks = sample_chunks(3);
+
+    let result = embed_chunks(&provider, &chunks, 100).await.unwrap();
+
+    assert_eq!(result.len(), 3);
+}
+
+#[tokio::test]
+async fn embed_chunks_empty_input() {
+    let provider = MockProvider::new(64);
+    let result = embed_chunks(&provider, &[], 32).await.unwrap();
+    assert!(result.is_empty());
+}
+
+#[tokio::test]
+async fn embed_chunks_batch_size_one() {
+    let provider = MockProvider::new(16);
+    let chunks = sample_chunks(3);
+
+    let result = embed_chunks(&provider, &chunks, 1).await.unwrap();
+
+    assert_eq!(result.len(), 3);
+}
+
+#[tokio::test]
+async fn embed_chunks_vectors_are_non_zero() {
+    let provider = MockProvider::new(64);
+    let chunks = sample_chunks(5);
+
+    let result = embed_chunks(&provider, &chunks, 32).await.unwrap();
+
+    for (id, vec) in &result {
+        let norm: f32 = vec.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!(
+            norm > 0.0,
+            "vector for {id} should be non-zero (norm={norm})"
+        );
+    }
+}
+
+#[tokio::test]
+async fn embed_chunks_propagates_auth_error() {
+    let provider = MockProvider::failing(EmbeddingError::AuthError {
+        message: "invalid key".to_string(),
+    });
+    let chunks = sample_chunks(3);
+
+    let result = embed_chunks(&provider, &chunks, 32).await;
+
+    assert!(result.is_err());
+    assert!(matches!(
+        result.unwrap_err(),
+        EmbeddingError::AuthError { .. }
+    ));
+}
+
+#[tokio::test]
+async fn embed_chunks_propagates_connection_error() {
+    let provider = MockProvider::failing(EmbeddingError::ConnectionError {
+        message: "unreachable".to_string(),
+    });
+    let chunks = sample_chunks(3);
+
+    let result = embed_chunks(&provider, &chunks, 32).await;
+
+    assert!(result.is_err());
+    assert!(matches!(
+        result.unwrap_err(),
+        EmbeddingError::ConnectionError { .. }
+    ));
+}
+
+// ── Embedding text formatting ───────────────────────────────────────
+
+#[tokio::test]
+async fn different_chunks_get_different_vectors() {
+    let provider = MockProvider::new(64);
+    let chunks = sample_chunks(3);
+
+    let result = embed_chunks(&provider, &chunks, 32).await.unwrap();
+
+    // Different content should produce different vectors.
+    assert_ne!(result[0].1, result[1].1);
+    assert_ne!(result[1].1, result[2].1);
+}
+
+// ── Error message sanitization ──────────────────────────────────────
+
+#[test]
+fn error_display_does_not_leak_keys() {
+    let err = EmbeddingError::AuthError {
+        message: "invalid API key".to_string(),
+    };
+    let display = err.to_string();
+    assert!(display.contains("authentication failed"));
+    assert!(!display.contains("sk-"));
+    assert!(!display.contains("Bearer"));
+}
+
+#[test]
+fn connection_error_display() {
+    let err = EmbeddingError::ConnectionError {
+        message: "connection refused".to_string(),
+    };
+    let display = err.to_string();
+    assert!(display.contains("connection failed"));
+}
+
+// ── Vector storage integration ──────────────────────────────────────
+
+#[tokio::test]
+async fn embed_and_store_in_vector_db() {
+    use crate::storage::vector::VectorStore;
+
+    let dim = 64;
+    let provider = MockProvider::new(dim);
+    let chunks = sample_chunks(5);
+
+    let embeddings = embed_chunks(&provider, &chunks, 32).await.unwrap();
+
+    // Store in vector DB.
+    let store = VectorStore::open_in_memory(dim).unwrap();
+    for (chunk_id, vec) in &embeddings {
+        store.insert(chunk_id, vec).unwrap();
+    }
+
+    // Verify count matches.
+    assert_eq!(store.count().unwrap(), 5);
+
+    // Verify NN search finds the correct chunk.
+    let query_vec = &embeddings[2].1; // Search for chunk-2.
+    let results = store.search(query_vec, 10).unwrap();
+    assert!(!results.is_empty());
+    assert_eq!(
+        results[0].chunk_id, "chunk-2",
+        "self-query should rank first"
+    );
+}
+
+#[tokio::test]
+async fn embed_and_store_batch() {
+    use crate::storage::vector::VectorStore;
+
+    let dim = 32;
+    let provider = MockProvider::new(dim);
+    let chunks = sample_chunks(10);
+
+    let embeddings = embed_chunks(&provider, &chunks, 4).await.unwrap();
+    assert_eq!(embeddings.len(), 10);
+
+    // Batch insert into vector store.
+    let store = VectorStore::open_in_memory(dim).unwrap();
+    let items: Vec<(&str, &[f32])> = embeddings
+        .iter()
+        .map(|(id, vec)| (id.as_str(), vec.as_slice()))
+        .collect();
+    store.insert_batch(&items).unwrap();
+
+    assert_eq!(store.count().unwrap(), 10);
+}
+
+// ── OpenAI provider config tests ────────────────────────────────────
+
+#[test]
+fn provider_config_from_values() {
+    use crate::embedding::EmbeddingProviderConfig;
+
+    let config = EmbeddingProviderConfig::new(
+        "https://api.example.com/v1".to_string(),
+        "model-123".to_string(),
+        "test-key".to_string(),
+    );
+
+    assert_eq!(config.base_url, "https://api.example.com/v1");
+    assert_eq!(config.model_id, "model-123");
+    // API key should not be publicly accessible (it's private).
+}
+
+#[test]
+fn provider_config_with_timeout() {
+    use crate::embedding::EmbeddingProviderConfig;
+    use std::time::Duration;
+
+    let config = EmbeddingProviderConfig::new(
+        "https://api.example.com/v1".to_string(),
+        "model-123".to_string(),
+        "test-key".to_string(),
+    )
+    .with_timeout(Duration::from_secs(60))
+    .with_max_retries(5);
+
+    assert_eq!(config.timeout, Duration::from_secs(60));
+    assert_eq!(config.max_retries, 5);
+}
+
+// ── OpenAI provider HTTP tests (with mock server) ───────────────────
+
+#[tokio::test]
+async fn openai_provider_unreachable_endpoint() {
+    use crate::embedding::{EmbeddingProviderConfig, OpenAiProvider};
+
+    let config = EmbeddingProviderConfig::new(
+        "http://127.0.0.1:19999".to_string(), // No server here.
+        "test-model".to_string(),
+        "test-key".to_string(),
+    )
+    .with_timeout(std::time::Duration::from_secs(2))
+    .with_max_retries(0);
+
+    let provider = OpenAiProvider::new(config).unwrap();
+    let texts = vec!["hello".to_string()];
+    let result = provider.embed_batch(&texts).await;
+
+    assert!(result.is_err());
+    assert!(
+        matches!(result.unwrap_err(), EmbeddingError::ConnectionError { .. }),
+        "unreachable endpoint should produce ConnectionError"
+    );
+}
