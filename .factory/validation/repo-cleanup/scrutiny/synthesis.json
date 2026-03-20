@@ -1,7 +1,7 @@
 {
   "milestone": "repo-cleanup",
-  "round": 1,
-  "status": "fail",
+  "round": 2,
+  "status": "pass",
   "validatorsRun": {
     "test": {
       "passed": true,
@@ -21,34 +21,26 @@
   },
   "reviewsSummary": {
     "total": 1,
-    "passed": 0,
-    "failed": 1,
-    "failedFeatures": [
-      "repo-cleanup-artifacts"
-    ]
+    "passed": 1,
+    "failed": 0,
+    "failedFeatures": []
   },
-  "blockingIssues": [
+  "blockingIssues": [],
+  "appliedUpdates": [
     {
-      "featureId": "repo-cleanup-artifacts",
-      "severity": "blocking",
-      "description": "Archived Firecrawl skill symlinks under .dev/references/skills/skills/firecrawl* still point at ../../.agents/... and are broken inside the .dev archive, leaving part of the preserved reference set unusable."
+      "target": "library",
+      "description": "Documented that `.dev/` is gitignored and repo-cleanup archive validation must inspect on-disk `.dev/` state and handoff evidence, not just `git diff`.",
+      "sourceFeature": "repo-cleanup-fix"
     }
   ],
-  "appliedUpdates": [],
   "suggestedGuidanceUpdates": [
     {
       "target": "skills",
-      "suggestion": "Clarify how cleanup/archive tasks should be handled when a milestone wants to preserve Factory artifacts while mission guidance forbids moving or deleting the live .factory/ directory. The relevant worker skill should explicitly instruct workers to keep the live mission infrastructure intact and archive copies separately when required.",
-      "evidence": "The repo-cleanup-artifacts review found the worker had to reconcile implementation-worker's Rust/TDD-oriented procedure with mission-worker-base guidance forbidding .factory/ moves, creating avoidable ambiguity during the cleanup task.",
+      "suggestion": "Update `implementation-worker` to explicitly handle cleanup/archive-only tasks instead of implying every assignment follows a Rust/TDD/test-first loop with cargo validators.",
+      "evidence": "The repo-cleanup-artifacts and repo-cleanup-fix reviews both observed that cleanup-only work had to fit a Rust-centric skill procedure, creating avoidable ambiguity about how to execute and review non-code archive tasks.",
       "isSystemic": true
-    },
-    {
-      "target": "skills",
-      "suggestion": "Add archive/copy guidance for directories containing relative symlinks: copied archives should either preserve valid link targets or rewrite/resolve the symlinks so the archived reference set remains usable in its new location.",
-      "evidence": "The repo-cleanup-artifacts review found eight broken firecrawl* symlinks in .dev/references/skills/skills/ because they were copied with relative targets that only worked in the original .factory/.agents layout.",
-      "isSystemic": false
     }
   ],
   "rejectedObservations": [],
-  "previousRound": null
+  "previousRound": ".factory/validation/repo-cleanup/scrutiny/synthesis-round1.json"
 }
