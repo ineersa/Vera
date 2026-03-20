@@ -1,15 +1,12 @@
-//! Persistent storage backends.
+//! Persistent storage backends for Vera's index.
 //!
-//! This module is responsible for:
-//! - SQLite database for chunk metadata
-//! - sqlite-vec extension for vector storage and similarity search
-//! - Tantivy index for BM25 full-text search
-//! - File-level content hashing for incremental indexing
+//! This module provides three storage components:
+//! - [`metadata::MetadataStore`] — SQLite-based chunk metadata storage
+//! - [`vector::VectorStore`] — sqlite-vec based vector embedding storage
+//! - [`bm25::Bm25Index`] — Tantivy-based BM25 full-text search index
+//!
+//! These are composed by the indexing pipeline and retrieval engine.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn module_loads() {
-        // Placeholder: will be replaced with real storage tests.
-    }
-}
+pub mod bm25;
+pub mod metadata;
+pub mod vector;
