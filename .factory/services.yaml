@@ -7,6 +7,11 @@ commands:
   fmt: cargo fmt --check
   fmt-fix: cargo fmt
   bench: cargo test --test bench -- --nocapture
+  eval-run: cargo run --bin vera-eval -- run
+  eval-run-json: cargo run --bin vera-eval -- run --json-only
+  eval-stability: cargo run --bin vera-eval -- stability
+  eval-verify-corpus: cargo run --bin vera-eval -- verify-corpus
+  eval-setup-corpus: bash eval/setup-corpus.sh
 
 services:
   mcp:
