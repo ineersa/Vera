@@ -1,0 +1,485 @@
+{
+  "timestamp": "2026-03-20T20:31:08.627196+00:00",
+  "ablations": [
+    {
+      "ablation": "hybrid_vs_semantic_only",
+      "description": "Hybrid (BM25+vector+RRF+reranking) vs pure vector similarity",
+      "overall": {
+        "semantic_only": {
+          "recall_at_1": 0.09523809523809523,
+          "recall_at_5": 0.4920634920634921,
+          "recall_at_10": 0.6626984126984127,
+          "mrr": 0.28144540644540644,
+          "ndcg": 0.7076909754944509
+        },
+        "hybrid": {
+          "recall_at_1": 0.4264705882352941,
+          "recall_at_5": 0.7254901960784315,
+          "recall_at_10": 0.7549019607843137,
+          "mrr": 0.5935828877005348,
+          "ndcg": 0.8015287711812831
+        }
+      },
+      "per_category": {
+        "symbol_lookup": {
+          "semantic_only": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.6666666666666666,
+            "recall_at_10": 0.8333333333333334,
+            "mrr": 0.24305555555555555,
+            "ndcg": 0.5046556478453079
+          },
+          "hybrid": {
+            "recall_at_1": 0.8,
+            "recall_at_5": 1.0,
+            "recall_at_10": 1.0,
+            "mrr": 0.85,
+            "ndcg": 0.8861353116146786
+          }
+        },
+        "intent": {
+          "semantic_only": {
+            "recall_at_1": 0.4,
+            "recall_at_5": 0.5,
+            "recall_at_10": 0.9,
+            "mrr": 0.5533333333333333,
+            "ndcg": 1.4680409178142892
+          },
+          "hybrid": {
+            "recall_at_1": 0.4,
+            "recall_at_5": 0.6,
+            "recall_at_10": 0.7,
+            "mrr": 0.45999999999999996,
+            "ndcg": 0.9148057678118013
+          }
+        },
+        "cross_file": {
+          "semantic_only": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.27777777777777773,
+            "recall_at_10": 0.38888888888888884,
+            "mrr": 0.2333333333333333,
+            "ndcg": 0.2803973043478149
+          },
+          "hybrid": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.16666666666666666,
+            "recall_at_10": 0.16666666666666666,
+            "mrr": 0.29545454545454547,
+            "ndcg": 0.20151514190050246
+          }
+        },
+        "config": {
+          "semantic_only": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.75,
+            "recall_at_10": 0.75,
+            "mrr": 0.19583333333333333,
+            "ndcg": 0.8919148113499471
+          },
+          "hybrid": {
+            "recall_at_1": 0.3333333333333333,
+            "recall_at_5": 1.0,
+            "recall_at_10": 1.0,
+            "mrr": 0.5833333333333334,
+            "ndcg": 1.2272744633865331
+          }
+        },
+        "disambiguation": {
+          "semantic_only": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.0,
+            "recall_at_10": 0.08333333333333333,
+            "mrr": 0.06734006734006734,
+            "ndcg": 0.02817361693231399
+          },
+          "hybrid": {
+            "recall_at_1": 0.125,
+            "recall_at_5": 0.5,
+            "recall_at_10": 0.5,
+            "mrr": 0.6,
+            "ndcg": 0.26821501949440474
+          }
+        }
+      }
+    },
+    {
+      "ablation": "hybrid_vs_lexical_only",
+      "description": "Hybrid (BM25+vector+RRF+reranking) vs BM25-only keyword search",
+      "overall": {
+        "bm25_only": {
+          "recall_at_1": 0.17647058823529413,
+          "recall_at_5": 0.3235294117647059,
+          "recall_at_10": 0.4117647058823529,
+          "mrr": 0.28195823784059076,
+          "ndcg": 0.2807440057716727
+        },
+        "hybrid": {
+          "recall_at_1": 0.4264705882352941,
+          "recall_at_5": 0.7254901960784315,
+          "recall_at_10": 0.7549019607843137,
+          "mrr": 0.5935828877005348,
+          "ndcg": 0.8015287711812831
+        }
+      },
+      "per_category": {
+        "symbol_lookup": {
+          "bm25_only": {
+            "recall_at_1": 0.6,
+            "recall_at_5": 1.0,
+            "recall_at_10": 1.0,
+            "mrr": 0.75,
+            "ndcg": 0.8123212623289702
+          },
+          "hybrid": {
+            "recall_at_1": 0.8,
+            "recall_at_5": 1.0,
+            "recall_at_10": 1.0,
+            "mrr": 0.85,
+            "ndcg": 0.8861353116146786
+          }
+        },
+        "intent": {
+          "bm25_only": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.0,
+            "recall_at_10": 0.2,
+            "mrr": 0.06675324675324676,
+            "ndcg": 0.05781296526357758
+          },
+          "hybrid": {
+            "recall_at_1": 0.4,
+            "recall_at_5": 0.6,
+            "recall_at_10": 0.7,
+            "mrr": 0.45999999999999996,
+            "ndcg": 0.9148057678118013
+          }
+        },
+        "cross_file": {
+          "bm25_only": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.0,
+            "recall_at_10": 0.0,
+            "mrr": 0.03333333333333333,
+            "ndcg": 0.0
+          },
+          "hybrid": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.16666666666666666,
+            "recall_at_10": 0.16666666666666666,
+            "mrr": 0.29545454545454547,
+            "ndcg": 0.20151514190050246
+          }
+        },
+        "config": {
+          "bm25_only": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.0,
+            "recall_at_10": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0
+          },
+          "hybrid": {
+            "recall_at_1": 0.3333333333333333,
+            "recall_at_5": 1.0,
+            "recall_at_10": 1.0,
+            "mrr": 0.5833333333333334,
+            "ndcg": 1.2272744633865331
+          }
+        },
+        "disambiguation": {
+          "bm25_only": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.25,
+            "recall_at_10": 0.5,
+            "mrr": 0.3214285714285714,
+            "ndcg": 0.2109884800778486
+          },
+          "hybrid": {
+            "recall_at_1": 0.125,
+            "recall_at_5": 0.5,
+            "recall_at_10": 0.5,
+            "mrr": 0.6,
+            "ndcg": 0.26821501949440474
+          }
+        }
+      }
+    },
+    {
+      "ablation": "reranker_on_off",
+      "description": "Cross-encoder reranking enabled vs disabled in hybrid pipeline",
+      "quality": {
+        "reranker_off": {
+          "recall_at_1": 0.17647058823529413,
+          "recall_at_5": 0.5294117647058824,
+          "recall_at_10": 0.6666666666666667,
+          "mrr": 0.33593457196398374,
+          "ndcg": 0.5183682416562793,
+          "precision_at_3": 0.1372549019607843
+        },
+        "reranker_on": {
+          "recall_at_1": 0.4264705882352941,
+          "recall_at_5": 0.7254901960784315,
+          "recall_at_10": 0.7549019607843137,
+          "mrr": 0.5935828877005348,
+          "ndcg": 0.8015287711812831,
+          "precision_at_3": 0.24509803921568624
+        }
+      },
+      "latency": {
+        "reranker_off": {
+          "p50_ms": 908.6014874992543,
+          "p95_ms": 1953.6163813023436
+        },
+        "reranker_on": {
+          "p50_ms": 3923.6344964992895,
+          "p95_ms": 7491.029165102369
+        }
+      },
+      "per_category": {
+        "symbol_lookup": {
+          "reranker_off": {
+            "recall_at_1": 0.4,
+            "recall_at_5": 1.0,
+            "recall_at_10": 1.0,
+            "mrr": 0.65,
+            "ndcg": 0.7385072130432616
+          },
+          "reranker_on": {
+            "recall_at_1": 0.8,
+            "recall_at_5": 1.0,
+            "recall_at_10": 1.0,
+            "mrr": 0.85,
+            "ndcg": 0.8861353116146786
+          }
+        },
+        "intent": {
+          "reranker_off": {
+            "recall_at_1": 0.2,
+            "recall_at_5": 0.6,
+            "recall_at_10": 0.7,
+            "mrr": 0.33166666666666667,
+            "ndcg": 0.7537842302528504
+          },
+          "reranker_on": {
+            "recall_at_1": 0.4,
+            "recall_at_5": 0.6,
+            "recall_at_10": 0.7,
+            "mrr": 0.45999999999999996,
+            "ndcg": 0.9148057678118013
+          }
+        },
+        "cross_file": {
+          "reranker_off": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.0,
+            "recall_at_10": 0.16666666666666666,
+            "mrr": 0.10795454545454546,
+            "ndcg": 0.10075757095025123
+          },
+          "reranker_on": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.16666666666666666,
+            "recall_at_10": 0.16666666666666666,
+            "mrr": 0.29545454545454547,
+            "ndcg": 0.20151514190050246
+          }
+        },
+        "config": {
+          "reranker_off": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.3333333333333333,
+            "recall_at_10": 0.6666666666666666,
+            "mrr": 0.13055555555555556,
+            "ndcg": 0.34404160688681723
+          },
+          "reranker_on": {
+            "recall_at_1": 0.3333333333333333,
+            "recall_at_5": 1.0,
+            "recall_at_10": 1.0,
+            "mrr": 0.5833333333333334,
+            "ndcg": 1.2272744633865331
+          }
+        },
+        "disambiguation": {
+          "reranker_off": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.0,
+            "recall_at_10": 0.25,
+            "mrr": 0.09748931623931624,
+            "ndcg": 0.058581464557617424
+          },
+          "reranker_on": {
+            "recall_at_1": 0.125,
+            "recall_at_5": 0.5,
+            "recall_at_10": 0.5,
+            "mrr": 0.6,
+            "ndcg": 0.26821501949440474
+          }
+        }
+      }
+    },
+    {
+      "ablation": "embedding_model_comparison",
+      "description": "3 embedding models compared on 21-task benchmark suite",
+      "models": {
+        "Qwen3-8B": {
+          "overall": {
+            "recall_at_1": 0.09523809523809523,
+            "recall_at_5": 0.4920634920634921,
+            "recall_at_10": 0.6626984126984127,
+            "mrr": 0.28144540644540644,
+            "ndcg": 0.7076909754944509
+          },
+          "latency_p50_ms": 1332.885980606079,
+          "latency_p95_ms": 1859.0166568756104,
+          "index_time_secs": 421.23996901512146,
+          "embedding_dim": 4096
+        },
+        "bge-en-icl": {
+          "overall": {
+            "recall_at_1": 0.047619047619047616,
+            "recall_at_5": 0.2777777777777778,
+            "recall_at_10": 0.3253968253968254,
+            "mrr": 0.14288048552754434,
+            "ndcg": 0.3308296386465718
+          },
+          "latency_p50_ms": 1273.2305526733398,
+          "latency_p95_ms": 2548.203468322754,
+          "index_time_secs": 707.5973801612854,
+          "embedding_dim": 4096
+        },
+        "Qwen3-0.6B": {
+          "overall": {
+            "recall_at_1": 0.09523809523809523,
+            "recall_at_5": 0.40476190476190477,
+            "recall_at_10": 0.40476190476190477,
+            "mrr": 0.2551413727884316,
+            "ndcg": 0.502987043588672
+          },
+          "latency_p50_ms": 833.7578773498535,
+          "latency_p95_ms": 2009.5934867858887,
+          "index_time_secs": 659.0711257457733,
+          "embedding_dim": 1024
+        }
+      },
+      "per_category": {
+        "symbol_lookup": {
+          "Qwen3-8B": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.6666666666666666,
+            "recall_at_10": 0.8333333333333334,
+            "mrr": 0.24305555555555555,
+            "ndcg": 0.5046556478453079
+          },
+          "bge-en-icl": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.16666666666666666,
+            "recall_at_10": 0.3333333333333333,
+            "mrr": 0.05416666666666667,
+            "ndcg": 0.16722461328070862
+          },
+          "Qwen3-0.6B": {
+            "recall_at_1": 0.16666666666666666,
+            "recall_at_5": 0.6666666666666666,
+            "recall_at_10": 0.6666666666666666,
+            "mrr": 0.3888888888888889,
+            "ndcg": 0.5586590548541307
+          }
+        },
+        "intent": {
+          "Qwen3-8B": {
+            "recall_at_1": 0.4,
+            "recall_at_5": 0.5,
+            "recall_at_10": 0.9,
+            "mrr": 0.5533333333333333,
+            "ndcg": 1.4680409178142892
+          },
+          "bge-en-icl": {
+            "recall_at_1": 0.2,
+            "recall_at_5": 0.7,
+            "recall_at_10": 0.7,
+            "mrr": 0.4066666666666666,
+            "ndcg": 1.0129532289615615
+          },
+          "Qwen3-0.6B": {
+            "recall_at_1": 0.2,
+            "recall_at_5": 0.4,
+            "recall_at_10": 0.4,
+            "mrr": 0.31176470588235294,
+            "ndcg": 0.9432086792429836
+          }
+        },
+        "cross_file": {
+          "Qwen3-8B": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.27777777777777773,
+            "recall_at_10": 0.38888888888888884,
+            "mrr": 0.2333333333333333,
+            "ndcg": 0.2803973043478149
+          },
+          "bge-en-icl": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.1111111111111111,
+            "recall_at_10": 0.1111111111111111,
+            "mrr": 0.08333333333333333,
+            "ndcg": 0.14954400967085155
+          },
+          "Qwen3-0.6B": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.16666666666666666,
+            "recall_at_10": 0.16666666666666666,
+            "mrr": 0.1851851851851852,
+            "ndcg": 0.1289509357448472
+          }
+        },
+        "config": {
+          "Qwen3-8B": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.75,
+            "recall_at_10": 0.75,
+            "mrr": 0.19583333333333333,
+            "ndcg": 0.8919148113499471
+          },
+          "bge-en-icl": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.25,
+            "recall_at_10": 0.25,
+            "mrr": 0.08333333333333333,
+            "ndcg": 0.10766913951834826
+          },
+          "Qwen3-0.6B": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.5,
+            "recall_at_10": 0.5,
+            "mrr": 0.22756410256410256,
+            "ndcg": 0.5269693456969671
+          }
+        },
+        "disambiguation": {
+          "Qwen3-8B": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.0,
+            "recall_at_10": 0.08333333333333333,
+            "mrr": 0.06734006734006734,
+            "ndcg": 0.02817361693231399
+          },
+          "bge-en-icl": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.0,
+            "recall_at_10": 0.0,
+            "mrr": 0.0196078431372549,
+            "ndcg": 0.0
+          },
+          "Qwen3-0.6B": {
+            "recall_at_1": 0.0,
+            "recall_at_5": 0.0,
+            "recall_at_10": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0
+          }
+        }
+      }
+    }
+  ]
+}
