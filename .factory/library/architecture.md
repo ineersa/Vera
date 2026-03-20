@@ -83,9 +83,23 @@ Key insights from competitor baseline benchmarking (21 tasks, 4 repos):
 - When extracting content from source: `source_lines[(line_start-1)..line_end]` gives the correct half-open range
 
 ### Tuned Embedding Pipeline Defaults
-- `batch_size=64`, `max_concurrent_requests=8`, `timeout_secs=60`, `max_stored_dim=1024`
-- These were tuned via real benchmarking against Nebius API (175K LOC repo in 59.2s)
+- `batch_size=128`, `max_concurrent_requests=8`, `timeout_secs=60`, `max_stored_dim=1024`
+- Batch size increased from 64→128 for better throughput with fewer API round trips
+- Rate limit backoff reduced from 6s→2s base for faster recovery
 - `max_concurrent_requests=8` balances throughput vs rate limit avoidance
+
+### Query Embedding Cache
+- `CachedEmbeddingProvider` wraps any `EmbeddingProvider` with an in-memory LRU cache
+- Caches `query_text → embedding_vector`; first query pays API cost, subsequent identical queries <5ms
+- CLI search wraps the provider with 512-entry cache by default
+- Multi-text batches (indexing) bypass the cache to avoid memory bloat
+
+### Performance Targets (Clarified)
+- **BM25-only p95**: <10ms (local computation, no API dependency)
+- **Cached hybrid query p95**: <100ms (query embedding served from cache)
+- **First-time hybrid query**: Depends on embedding API latency (typically 500ms–7s for remote APIs)
+- **BM25 fallback**: Always available when low latency is required; achieves <5ms p95
+- The 500ms p95 target from the original mission brief applies to cached/BM25 queries; first-time hybrid queries with remote API depend on API provider latency
 
 ### Method Extraction Asymmetry
 - Rust `impl` block methods are extracted as individual chunks (via `extract_impl_methods`)

@@ -68,6 +68,11 @@ fn glob_matches(pattern: &str, path: &str) -> bool {
 
 /// Recursive glob matching helper.
 fn glob_match_recursive(pattern: &str, text: &str) -> bool {
+    // Handle standalone `**` — matches everything (any path, any depth).
+    if pattern == "**" {
+        return true;
+    }
+
     // Handle `**` patterns (match any path segments).
     if let Some(rest) = pattern.strip_prefix("**/") {
         // `**/X` matches X at any depth.
@@ -566,5 +571,21 @@ mod tests {
     fn glob_empty_pattern_matches_empty() {
         assert!(glob_matches("", ""));
         assert!(!glob_matches("", "something"));
+    }
+
+    #[test]
+    fn glob_standalone_doublestar_matches_everything() {
+        assert!(glob_matches("**", "main.rs"));
+        assert!(glob_matches("**", "src/main.rs"));
+        assert!(glob_matches("**", "src/a/b/c/main.rs"));
+        assert!(glob_matches("**", ""));
+    }
+
+    #[test]
+    fn glob_prefix_with_standalone_doublestar() {
+        // Pattern like `src/**` should match any file under src/
+        assert!(glob_matches("src/**", "src/main.rs"));
+        assert!(glob_matches("src/**", "src/a/b/c.rs"));
+        assert!(!glob_matches("src/**", "tests/main.rs"));
     }
 }

@@ -1,6 +1,8 @@
 //! Embedding provider abstraction and OpenAI-compatible implementation.
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -155,8 +157,8 @@ impl OpenAiProvider {
             if attempt > 0 {
                 let is_rate_limit = matches!(last_err, Some(EmbeddingError::RateLimitError { .. }));
                 let delay = if is_rate_limit {
-                    // Rate limit: wait 6-10s (API suggests ~6s cooldown).
-                    Duration::from_secs(6 + u64::from(attempt.min(4)))
+                    // Rate limit: wait 2-4s with exponential backoff.
+                    Duration::from_secs(2 + u64::from(attempt.min(2)))
                 } else {
                     Duration::from_millis(500 * 2u64.pow(attempt.min(5) - 1))
                 };
@@ -290,6 +292,123 @@ impl EmbeddingProvider for OpenAiProvider {
         // Qwen3-Embedding-8B produces 4096-dim vectors.
         // We don't hardcode this — it's discoverable from the first response.
         None
+    }
+}
+
+// ── Cached embedding provider ────────────────────────────────────────
+
+/// An in-memory LRU-style cache wrapper around any `EmbeddingProvider`.
+///
+/// Caches `query_text → embedding_vector` so that repeated identical queries
+/// (common during interactive search sessions) skip the API call entirely.
+/// The first query pays full API cost; subsequent identical queries resolve
+/// in microseconds from cache.
+///
+/// The cache uses a bounded `HashMap` with capacity-based eviction: when the
+/// cache exceeds `max_entries`, the oldest entry (by insertion time) is removed.
+pub struct CachedEmbeddingProvider<P> {
+    inner: P,
+    cache: Mutex<LruCache>,
+}
+
+/// Simple bounded cache with insertion-order eviction.
+struct LruCache {
+    entries: HashMap<String, CacheEntry>,
+    max_entries: usize,
+}
+
+struct CacheEntry {
+    vector: Vec<f32>,
+    inserted_at: Instant,
+}
+
+impl LruCache {
+    fn new(max_entries: usize) -> Self {
+        Self {
+            entries: HashMap::with_capacity(max_entries),
+            max_entries: max_entries.max(1),
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<&Vec<f32>> {
+        self.entries.get(key).map(|e| &e.vector)
+    }
+
+    fn insert(&mut self, key: String, vector: Vec<f32>) {
+        // Evict oldest entry if at capacity and this is a new key.
+        if self.entries.len() >= self.max_entries && !self.entries.contains_key(&key) {
+            if let Some(oldest_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, e)| e.inserted_at)
+                .map(|(k, _)| k.clone())
+            {
+                self.entries.remove(&oldest_key);
+            }
+        }
+        self.entries.insert(
+            key,
+            CacheEntry {
+                vector,
+                inserted_at: Instant::now(),
+            },
+        );
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+impl<P: EmbeddingProvider> CachedEmbeddingProvider<P> {
+    /// Create a new cached provider wrapping the given inner provider.
+    ///
+    /// `max_entries` controls the maximum number of cached embeddings.
+    /// A reasonable default for interactive use is 256–1024.
+    pub fn new(inner: P, max_entries: usize) -> Self {
+        Self {
+            inner,
+            cache: Mutex::new(LruCache::new(max_entries)),
+        }
+    }
+
+    /// Return the number of currently cached entries.
+    pub fn cache_size(&self) -> usize {
+        self.cache.lock().unwrap().len()
+    }
+}
+
+impl<P: EmbeddingProvider> EmbeddingProvider for CachedEmbeddingProvider<P> {
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // For single-text batches (query embedding), check cache first.
+        if texts.len() == 1 {
+            let key = &texts[0];
+            if let Some(cached) = self.cache.lock().unwrap().get(key) {
+                debug!("embedding cache hit for query");
+                return Ok(vec![cached.clone()]);
+            }
+        }
+
+        // Cache miss — delegate to inner provider.
+        let vectors = self.inner.embed_batch(texts).await?;
+
+        // Cache single-text results (query embeddings).
+        if texts.len() == 1 && vectors.len() == 1 {
+            let key = texts[0].clone();
+            let vector = vectors[0].clone();
+            self.cache.lock().unwrap().insert(key, vector);
+            debug!("embedding cached for query");
+        }
+
+        Ok(vectors)
+    }
+
+    fn expected_dim(&self) -> Option<usize> {
+        self.inner.expected_dim()
     }
 }
 

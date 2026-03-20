@@ -414,3 +414,118 @@ async fn openai_provider_unreachable_endpoint() {
         "unreachable endpoint should produce ConnectionError"
     );
 }
+
+// ── CachedEmbeddingProvider tests ───────────────────────────────────
+
+#[tokio::test]
+async fn cached_provider_returns_same_result() {
+    use crate::embedding::CachedEmbeddingProvider;
+
+    let inner = MockProvider::new(64);
+    let cached = CachedEmbeddingProvider::new(inner, 128);
+
+    let texts = vec!["test query".to_string()];
+    let first = cached.embed_batch(&texts).await.unwrap();
+    let second = cached.embed_batch(&texts).await.unwrap();
+
+    assert_eq!(first, second, "cached results should match");
+    assert_eq!(cached.cache_size(), 1, "one entry should be cached");
+}
+
+#[tokio::test]
+async fn cached_provider_cache_hit_is_fast() {
+    use crate::embedding::CachedEmbeddingProvider;
+
+    let inner = MockProvider::new(64);
+    let cached = CachedEmbeddingProvider::new(inner, 128);
+
+    let texts = vec!["test query for latency".to_string()];
+
+    // Warm the cache.
+    let _ = cached.embed_batch(&texts).await.unwrap();
+
+    // Measure cache hit latency.
+    let start = std::time::Instant::now();
+    let _ = cached.embed_batch(&texts).await.unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed.as_millis() < 50,
+        "cached query should be <50ms, was {}ms",
+        elapsed.as_millis()
+    );
+}
+
+#[tokio::test]
+async fn cached_provider_different_queries_cached_separately() {
+    use crate::embedding::CachedEmbeddingProvider;
+
+    let inner = MockProvider::new(128);
+    let cached = CachedEmbeddingProvider::new(inner, 128);
+
+    let q1 = vec!["find authentication logic in the codebase".to_string()];
+    let q2 = vec!["database connection pooling implementation".to_string()];
+
+    let r1 = cached.embed_batch(&q1).await.unwrap();
+    let r2 = cached.embed_batch(&q2).await.unwrap();
+
+    assert_ne!(r1, r2, "different queries should produce different vectors");
+    assert_eq!(cached.cache_size(), 2);
+}
+
+#[tokio::test]
+async fn cached_provider_evicts_oldest_when_full() {
+    use crate::embedding::CachedEmbeddingProvider;
+
+    let inner = MockProvider::new(8);
+    let cached = CachedEmbeddingProvider::new(inner, 2);
+
+    // Fill cache with 2 entries.
+    cached.embed_batch(&[String::from("first")]).await.unwrap();
+    cached.embed_batch(&[String::from("second")]).await.unwrap();
+    assert_eq!(cached.cache_size(), 2);
+
+    // Insert third — should evict "first".
+    cached.embed_batch(&[String::from("third")]).await.unwrap();
+    assert_eq!(cached.cache_size(), 2, "cache should stay at max capacity");
+}
+
+#[tokio::test]
+async fn cached_provider_multi_text_batch_not_cached() {
+    use crate::embedding::CachedEmbeddingProvider;
+
+    let inner = MockProvider::new(16);
+    let cached = CachedEmbeddingProvider::new(inner, 128);
+
+    // Multi-text batches (used for indexing) are not cached.
+    let texts = vec!["text a".to_string(), "text b".to_string()];
+    let _ = cached.embed_batch(&texts).await.unwrap();
+    assert_eq!(
+        cached.cache_size(),
+        0,
+        "multi-text batches should not be cached"
+    );
+}
+
+#[tokio::test]
+async fn cached_provider_propagates_errors() {
+    use crate::embedding::CachedEmbeddingProvider;
+
+    let inner = MockProvider::failing(EmbeddingError::ConnectionError {
+        message: "API down".to_string(),
+    });
+    let cached = CachedEmbeddingProvider::new(inner, 128);
+
+    let result = cached.embed_batch(&["test".to_string()]).await;
+    assert!(result.is_err(), "errors should propagate through cache");
+    assert_eq!(cached.cache_size(), 0, "errors should not be cached");
+}
+
+#[tokio::test]
+async fn cached_provider_expected_dim_delegates() {
+    use crate::embedding::CachedEmbeddingProvider;
+
+    let inner = MockProvider::new(64);
+    let cached = CachedEmbeddingProvider::new(inner, 128);
+    assert_eq!(cached.expected_dim(), Some(64));
+}

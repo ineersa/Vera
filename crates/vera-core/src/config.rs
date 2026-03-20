@@ -90,7 +90,7 @@ pub struct EmbeddingConfig {
 impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
-            batch_size: 64,
+            batch_size: 128,
             max_concurrent_requests: 8,
             timeout_secs: 60,
             max_retries: 3,

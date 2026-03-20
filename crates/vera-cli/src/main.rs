@@ -243,6 +243,9 @@ fn run_search(
         }
     };
 
+    // Wrap with query embedding cache for fast repeated queries.
+    let provider = vera_core::embedding::CachedEmbeddingProvider::new(provider, 512);
+
     // Create the reranker from environment (optional).
     let reranker = if config.retrieval.reranking_enabled {
         match vera_core::retrieval::RerankerConfig::from_env() {
