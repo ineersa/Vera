@@ -69,3 +69,41 @@ Setup: `bash eval/setup-corpus.sh` or verify with `cargo run --manifest-path eva
 ## Flow Validator Guidance: File Verification
 
 For architecture decision assertions, validators verify that ADR files exist at `docs/adr/` with the required 7-section format (Question, Options, Evaluation Method, Evidence, Decision, Consequences, Follow-up) and contain concrete evidence data.
+
+## Flow Validator Guidance: Core Engine CLI
+
+**Testing tool:** `Execute` tool for running CLI commands and checking output/exit codes.
+
+**Vera binary:** `/home/lamim/Development/Tools/Vera/target/release/vera`
+
+**API credentials:** Source secrets.env before running commands that need embedding/reranking:
+```bash
+set -a && source /home/lamim/Development/Tools/Vera/secrets.env && set +a
+```
+
+**Index locations:** Vera stores index in `.vera/` directory inside the repo being indexed. To search, `cd` into the indexed repo first, then run `vera search`.
+
+**Pre-indexed repos:**
+- Flask (Python): `/home/lamim/Development/Tools/Vera/.bench/repos/flask` — INDEXED
+- Fastify (TypeScript): `/home/lamim/Development/Tools/Vera/.bench/repos/fastify` — INDEXED
+- Ripgrep (Rust): `/home/lamim/Development/Tools/Vera/.bench/repos/ripgrep` — INDEXED
+- Turborepo (Polyglot): `/home/lamim/Development/Tools/Vera/.bench/repos/turborepo` — NOT INDEXED
+
+**Known issues:**
+- Reranker API (SiliconFlow) may have connectivity issues. Vera should degrade gracefully (return unreranked results with warning). This is expected behavior for VAL-RET-012.
+- Embedding API (SiliconFlow Qwen3) may occasionally timeout. Retry or accept BM25 fallback.
+
+**Isolation rules for core-engine testing:**
+- Search operations are read-only and safe to run concurrently.
+- Index operations write to `.vera/` in the target repo — use separate repos or temp copies for index tests to avoid write contention.
+- For index error handling tests (invalid path, empty dir, binary files, permission errors), use temporary directories to avoid interfering with other validators.
+- Each validator writes evidence to its assigned evidence directory.
+
+**Key commands:**
+- Build: already built at `/home/lamim/Development/Tools/Vera/target/release/vera`
+- Index: `cd <repo-dir> && set -a && source /home/lamim/Development/Tools/Vera/secrets.env && set +a && /home/lamim/Development/Tools/Vera/target/release/vera index .`
+- Search: `cd <repo-dir> && set -a && source /home/lamim/Development/Tools/Vera/secrets.env && set +a && /home/lamim/Development/Tools/Vera/target/release/vera search "<query>" --json`
+- Stats: `cd <repo-dir> && /home/lamim/Development/Tools/Vera/target/release/vera stats --json`
+
+**Source sizes for reference (files only, excluding .git/.vera/node_modules):**
+- Run `find <repo> -not -path '*/.git/*' -not -path '*/.vera/*' -not -path '*/node_modules/*' -type f | xargs du -sb | awk '{sum+=$1} END{print sum}'` to get source size.
