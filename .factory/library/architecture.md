@@ -24,6 +24,24 @@ Architectural decisions, patterns, and conventions for Vera.
 - Tantivy BM25 is sub-millisecond (0.067ms p50) — uncontested for full-text search
 - See `docs/adr/002-storage-backend.md` for full evidence
 
+### ADR-003: Embedding Model → Qwen3-Embedding-8B
+- Qwen3-Embedding-8B chosen over bge-en-icl and Qwen3-Embedding-0.6B
+- Best Recall@10 (0.66), nDCG (0.71), and Recall@5 (0.49) on Vera's 21-task suite
+- Outperforms all M1 competitor baselines on recall and nDCG
+- 4096-dim vectors; OpenAI-compatible API via Nebius (EMBEDDING_MODEL_BASE_URL)
+- Qwen3-Embedding-0.6B (1024-dim) designated as lightweight fallback for local use
+- MRR (0.28) lags cocoindex-code (0.35), confirming reranking is essential
+- See `docs/adr/003-embedding-model.md` for full evidence
+
+### ADR-004: Chunking Strategy → Symbol-Aware (tree-sitter AST)
+- Symbol-aware chunking chosen over sliding-window and file-level
+- 2.3× higher MRR on symbol lookup (0.55 vs 0.24) — correct definitions rank ~2nd vs ~4th
+- Best overall MRR (0.38 vs 0.28) and Recall@5 (0.59 vs 0.49)
+- 14% more token-efficient than sliding-window (0.86 ratio)
+- Intent search R@5=0.90 vs 0.50 for sliding-window
+- Sliding-window as Tier 0 fallback for unsupported languages
+- See `docs/adr/004-chunking-strategy.md` for full evidence
+
 ## Baseline Findings from M1 Competitor Benchmarks
 
 Key insights from competitor baseline benchmarking (21 tasks, 4 repos):
