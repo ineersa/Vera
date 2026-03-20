@@ -40,5 +40,32 @@ No browser testing needed.
 ## Test Repositories
 
 Benchmark corpus stored in `.bench/repos/` (gitignored). Repos pinned to specific commit SHAs for reproducibility.
+Corpus repos: ripgrep (Rust), flask (Python), fastify (TypeScript), turborepo (Polyglot).
+Setup: `bash eval/setup-corpus.sh` or verify with `cargo run --manifest-path eval/Cargo.toml --bin vera-eval -- verify-corpus`.
 
-(To be populated during Milestone 1 eval harness setup)
+## Flow Validator Guidance: CLI
+
+**Testing tool:** `Execute` tool for running CLI commands and checking output/exit codes.
+
+**Isolation rules:**
+- All eval-foundation testing is read-only (running the eval harness, inspecting files).
+- No index/update operations that could cause write contention.
+- Multiple validators can safely read `.bench/repos/` and `eval/tasks/` concurrently.
+- The eval harness runs with mock adapters (no real tool invocations), so no external API calls needed.
+
+**Boundaries:**
+- Each validator should write its evidence files to its assigned evidence directory under `{missionDir}/evidence/eval-foundation/<group-id>/`.
+- Each validator should write its flow report to `.factory/validation/eval-foundation/user-testing/flows/<group-id>.json`.
+
+**Key commands:**
+- Build eval harness: `cargo build --manifest-path eval/Cargo.toml`
+- Run harness: `cargo run --manifest-path eval/Cargo.toml --bin vera-eval -- run`
+- Run with JSON only: `cargo run --manifest-path eval/Cargo.toml --bin vera-eval -- run --json-only`
+- Verify corpus: `cargo run --manifest-path eval/Cargo.toml --bin vera-eval -- verify-corpus`
+- Stability check: `cargo run --manifest-path eval/Cargo.toml --bin vera-eval -- stability`
+
+**ADR location:** `docs/adr/` — all ADRs follow a 7-section format.
+
+## Flow Validator Guidance: File Verification
+
+For architecture decision assertions, validators verify that ADR files exist at `docs/adr/` with the required 7-section format (Question, Options, Evaluation Method, Evidence, Decision, Consequences, Follow-up) and contain concrete evidence data.
