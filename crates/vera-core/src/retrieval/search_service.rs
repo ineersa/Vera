@@ -32,7 +32,7 @@ pub fn execute_search(
         match rt.block_on(crate::embedding::create_dynamic_provider(config, is_local)) {
             Ok(res) => res,
             Err(e) => {
-                if is_local && !cfg!(feature = "local") {
+                if is_local {
                     anyhow::bail!("{}", e);
                 }
                 warn!(

@@ -101,6 +101,8 @@ pub async fn update_repository<P: EmbeddingProvider>(
     let metadata_store =
         MetadataStore::open(&metadata_path).context("failed to open metadata store")?;
 
+    let mut stored_dim = config.embedding.max_stored_dim;
+
     // Check for provider mismatch.
     if let (Some(s_model), Some(s_dim)) = (
         metadata_store.get_index_meta("model_name").unwrap_or(None),
@@ -115,6 +117,25 @@ pub async fn update_repository<P: EmbeddingProvider>(
                 s_dim,
                 model_name
             );
+        }
+        if let Ok(dim) = s_dim.parse::<usize>() {
+            if let Some(provider_dim) = provider.expected_dim() {
+                if provider_dim != dim {
+                    bail!(
+                        "Dimension mismatch: index has {} dimensions but active provider expects {}. Please re-index with matching provider.",
+                        dim,
+                        provider_dim
+                    );
+                }
+            }
+            stored_dim = dim;
+        }
+    } else if let Some(s_dim) = metadata_store
+        .get_index_meta("embedding_dim")
+        .unwrap_or(None)
+    {
+        if let Ok(dim) = s_dim.parse::<usize>() {
+            stored_dim = dim;
         }
     }
 
@@ -184,8 +205,6 @@ pub async fn update_repository<P: EmbeddingProvider>(
     // ── 4. Process deletions ─────────────────────────────────────
     if !deleted.is_empty() {
         let vector_path = idx_dir.join("vectors.db");
-        // Detect stored dim from first existing vector or use config default.
-        let stored_dim = config.embedding.max_stored_dim;
         let vector_store = VectorStore::open(&vector_path, stored_dim)
             .context("failed to open vector store for deletion")?;
         let bm25_dir = idx_dir.join("bm25");
@@ -205,7 +224,6 @@ pub async fn update_repository<P: EmbeddingProvider>(
         // For modified files, first remove old data.
         if !modified.is_empty() {
             let vector_path = idx_dir.join("vectors.db");
-            let stored_dim = config.embedding.max_stored_dim;
             let vector_store = VectorStore::open(&vector_path, stored_dim)
                 .context("failed to open vector store for modification")?;
             let bm25_dir = idx_dir.join("bm25");
@@ -249,8 +267,7 @@ pub async fn update_repository<P: EmbeddingProvider>(
             .context("embedding generation failed")?;
 
             // Truncate if needed.
-            let stored_dim =
-                super::truncate_embeddings(&mut embeddings, config.embedding.max_stored_dim);
+            let final_stored_dim = super::truncate_embeddings(&mut embeddings, stored_dim);
 
             // Store metadata.
             metadata_store
@@ -259,7 +276,7 @@ pub async fn update_repository<P: EmbeddingProvider>(
 
             // Store vectors.
             let vector_path = idx_dir.join("vectors.db");
-            let vector_store = VectorStore::open(&vector_path, stored_dim)
+            let vector_store = VectorStore::open(&vector_path, final_stored_dim)
                 .context("failed to open vector store for insertion")?;
 
             let batch: Vec<(&str, &[f32])> = embeddings

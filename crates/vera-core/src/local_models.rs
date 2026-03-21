@@ -109,7 +109,7 @@ mod tests {
         assert!(res.is_err(), "Download should fail due to truncated stream");
 
         let target_dir = home.join(".vera").join("models").join("test-repo");
-        let part_file = target_dir.join("test-file.bin.part");
+        let part_file = target_dir.join("test-file.bin").with_extension("part");
         assert!(
             !part_file.exists(),
             "Partial file should be cleaned up on failure"
