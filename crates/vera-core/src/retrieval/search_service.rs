@@ -139,24 +139,32 @@ mod tests {
     fn test_dimension_mismatch_and_inference() {
         let dir = tempdir().unwrap();
         let index_dir = dir.path();
-        
+
         let metadata_path = index_dir.join("metadata.db");
         let store = MetadataStore::open(&metadata_path).unwrap();
 
         // 1. Test dimension mismatch (requires local model so provider_dim is Some(768))
-        store.set_index_meta("model_name", "jina-embeddings-v5-text-nano-retrieval").unwrap();
+        store
+            .set_index_meta("model_name", "jina-embeddings-v5-text-nano-retrieval")
+            .unwrap();
         store.set_index_meta("embedding_dim", "1024").unwrap(); // Mismatch: 1024 vs 768
 
         let config = VeraConfig::default();
         let filters = SearchFilters::default();
-        
+
         // This will attempt to create local provider and should fail at mismatch
         #[cfg(feature = "local")]
         {
             let res = execute_search(index_dir, "test", &config, &filters, 10, true);
             assert!(res.is_err());
             let err_msg = res.unwrap_err().to_string();
-            assert!(err_msg.contains("Dimension mismatch: index has 1024 dimensions but active provider expects 768"), "{}", err_msg);
+            assert!(
+                err_msg.contains(
+                    "Dimension mismatch: index has 1024 dimensions but active provider expects 768"
+                ),
+                "{}",
+                err_msg
+            );
         }
 
         // 2. Test metadata-dimension inference path (API provider returns None for expected_dim)
@@ -167,7 +175,9 @@ mod tests {
             std::env::set_var("EMBEDDING_MODEL_API_KEY", "dummy-key");
         }
 
-        store.set_index_meta("model_name", "dummy-api-model").unwrap();
+        store
+            .set_index_meta("model_name", "dummy-api-model")
+            .unwrap();
         store.set_index_meta("embedding_dim", "123").unwrap();
 
         // Calling execute_search with is_local = false

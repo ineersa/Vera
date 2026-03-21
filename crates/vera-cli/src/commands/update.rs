@@ -42,7 +42,9 @@ pub fn run(path: &str, json_output: bool, local_flag: bool) -> anyhow::Result<()
     if let Ok(metadata_store) = vera_core::storage::metadata::MetadataStore::open(&metadata_path) {
         if let (Some(s_model), Some(s_dim)) = (
             metadata_store.get_index_meta("model_name").unwrap_or(None),
-            metadata_store.get_index_meta("embedding_dim").unwrap_or(None),
+            metadata_store
+                .get_index_meta("embedding_dim")
+                .unwrap_or(None),
         ) {
             if s_model != model_name {
                 bail!(

@@ -103,7 +103,8 @@ mod tests {
 
         let base_url = format!("http://127.0.0.1:{}", port);
 
-        let res = ensure_model_file_impl("test-repo", "test-file.bin", &base_url, Some(&home)).await;
+        let res =
+            ensure_model_file_impl("test-repo", "test-file.bin", &base_url, Some(&home)).await;
 
         assert!(res.is_err(), "Download should fail due to truncated stream");
 
