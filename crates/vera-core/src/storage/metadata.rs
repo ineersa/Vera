@@ -319,6 +319,14 @@ fn parse_language(s: &str) -> Language {
         "yaml" => Language::Yaml,
         "json" => Language::Json,
         "markdown" => Language::Markdown,
+        "csharp" => Language::CSharp,
+        "php" => Language::Php,
+        "haskell" => Language::Haskell,
+        "elixir" => Language::Elixir,
+        "dart" => Language::Dart,
+        "sql" => Language::Sql,
+        "hcl" => Language::Hcl,
+        "protobuf" => Language::Protobuf,
         _ => Language::Unknown,
     }
 }
@@ -513,5 +521,26 @@ mod tests {
         let chunk = store.get_chunk("src/main.rs:0").unwrap().unwrap();
         assert!(chunk.content.contains("updated"));
         assert_eq!(store.chunk_count().unwrap(), 3);
+    }
+
+    #[test]
+    fn parse_language_roundtrip() {
+        let langs = vec![
+            Language::CSharp,
+            Language::Php,
+            Language::Haskell,
+            Language::Elixir,
+            Language::Dart,
+            Language::Sql,
+            Language::Hcl,
+            Language::Protobuf,
+            Language::Rust,
+            Language::Scala,
+            Language::Python,
+        ];
+        for lang in langs {
+            let s = lang.to_string();
+            assert_eq!(parse_language(&s), lang, "Failed roundtrip for {}", s);
+        }
     }
 }

@@ -5,7 +5,7 @@ Vera (Vector Enhanced Relevance Agent) is a code indexing and retrieval CLI tool
 ## Key Features
 
 - **Hybrid retrieval** — BM25 + vector search + RRF fusion + cross-encoder reranking
-- **21+ languages** — Tree-sitter parsing for Rust, Python, TypeScript, Go, Java, C/C++, and more
+- **21+ languages** — Tree-sitter parsing for Rust, Python, TypeScript, JavaScript, Go, Java, C, C++, Ruby, Bash, Kotlin, Swift, Zig, Lua, Scala, C#, PHP, Haskell, Elixir, Dart, SQL, HCL/Terraform, and Protobuf
 - **Symbol-aware chunking** — Functions, classes, structs become individual search units
 - **Structured output** — JSON context capsules with file paths, line ranges, and code content
 - **Fast** — Sub-5ms BM25 queries, incremental updates under 5 seconds

@@ -279,6 +279,24 @@ fn classify_dart(kind: &str) -> Option<SymbolType> {
 ///
 /// Looks for the first `name` or `identifier`-type child node.
 pub fn extract_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    // HCL block name (second child that is an identifier or string_lit)
+    if node.kind() == "block" {
+        let mut cursor = node.walk();
+        let mut found_type = false;
+        for child in node.children(&mut cursor) {
+            if !found_type && child.kind() == "identifier" {
+                found_type = true;
+                continue;
+            }
+            if found_type && (child.kind() == "string_lit" || child.kind() == "identifier") {
+                return child
+                    .utf8_text(source)
+                    .ok()
+                    .map(|s| s.trim_matches('"').to_string());
+            }
+        }
+    }
+
     // Try common name field patterns
     for field in &["name", "declarator"] {
         if let Some(child) = node.child_by_field_name(field) {
@@ -446,6 +464,24 @@ fn collect_symbols(
     }
 
     if let Some(mut sym_type) = classify_node(lang, kind) {
+        // Refine HCL blocks
+        if lang == Language::Hcl && kind == "block" {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "identifier" {
+                    if let Ok(text) = child.utf8_text(source) {
+                        sym_type = match text {
+                            "resource" | "data" => SymbolType::Struct,
+                            "variable" | "output" => SymbolType::TypeAlias,
+                            "module" => SymbolType::Module,
+                            _ => SymbolType::Struct,
+                        };
+                    }
+                    break;
+                }
+            }
+        }
+
         // Refine Kotlin and Swift class_declaration
         if (lang == Language::Kotlin || lang == Language::Swift) && kind == "class_declaration" {
             let mut cursor = node.walk();
@@ -1285,6 +1321,28 @@ local function bar() end
     }
 
     #[test]
+    fn scala_extracts_types_and_functions() {
+        let source = r#"
+def main(args: Array[String]): Unit = {}
+class User {}
+trait Logger {}
+"#;
+        let symbols = parse_and_extract(source, Language::Scala);
+        println!("Scala symbols: {:#?}", symbols);
+        assert!(symbols.iter().any(|s| s.symbol_type == SymbolType::Function && s.name.as_deref() == Some("main")));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.symbol_type == SymbolType::Class && s.name.as_deref() == Some("User"))
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.symbol_type == SymbolType::Trait && s.name.as_deref() == Some("Logger"))
+        );
+    }
+
+    #[test]
     fn csharp_extracts_types_and_methods() {
         let source = r#"
 namespace MyApp {
@@ -1408,7 +1466,29 @@ output "instance_ip" {}
 "#;
         let symbols = parse_and_extract(source, Language::Hcl);
         println!("HCL symbols: {:#?}", symbols);
-        assert!(!symbols.is_empty());
+        assert!(
+            symbols.iter().any(|s| s.symbol_type == SymbolType::Struct
+                && s.name.as_deref() == Some("aws_instance"))
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.symbol_type == SymbolType::Module && s.name.as_deref() == Some("vpc"))
+        );
+        assert!(
+            symbols.iter().any(
+                |s| s.symbol_type == SymbolType::Struct && s.name.as_deref() == Some("aws_ami")
+            )
+        );
+        assert!(symbols.iter().any(
+            |s| s.symbol_type == SymbolType::TypeAlias && s.name.as_deref() == Some("image_id")
+        ));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.symbol_type == SymbolType::TypeAlias
+                    && s.name.as_deref() == Some("instance_ip"))
+        );
     }
 
     #[test]
