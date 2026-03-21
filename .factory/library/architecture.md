@@ -161,7 +161,8 @@ Key insights from competitor baseline benchmarking (21 tasks, 4 repos):
 ### Shared Search Service
 - Search logic is extracted into `crates/vera-core/src/retrieval/search_service.rs`
 - Both CLI (`crates/vera-cli/src/commands/search.rs`) and MCP (`crates/vera-mcp/src/tools.rs`) call this shared service
-- The service handles BM25 fallback, embedding provider setup, reranker creation, and filter application
+- The service handles embedding provider setup, reranker creation, filter application, and BM25 fallback for non-local searches
+- Important exception: when local mode is explicitly requested (`--local` / `VERA_LOCAL=1`), provider initialization failures must be surfaced to the caller instead of silently falling back to BM25-only search
 - Note: `execute_search()` creates a new tokio runtime per call — acceptable for CLI, suboptimal for high-throughput MCP use
 
 ### Shared Update Path
