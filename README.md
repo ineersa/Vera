@@ -9,6 +9,7 @@ Vera (Vector Enhanced Relevance Agent) is a code indexing and retrieval CLI tool
 - **Symbol-aware chunking** — Functions, classes, structs become individual search units
 - **Structured output** — JSON context capsules with file paths, line ranges, and code content
 - **Fast** — Sub-5ms BM25 queries, incremental updates under 5 seconds
+- **Local inference** — Optional local ONNX models (Jina v5 embedding + v2 reranker) for offline/private use — no API keys required
 - **Single binary** — Rust-native, zero runtime dependencies
 
 ## Installation
@@ -27,14 +28,17 @@ git clone https://github.com/vera-search/vera.git
 cd vera
 cargo build --release
 
+# With local inference support (no API keys needed):
+cargo build --release --features local
+
 # The binary is at target/release/vera
 # Optionally, copy it to your PATH:
 cp target/release/vera ~/.local/bin/
 ```
 
-### Configure API Credentials
+### Configure
 
-Create a `secrets.env` file with your embedding and reranker API keys:
+**Option A: API mode (default)** — requires an OpenAI-compatible embedding endpoint:
 
 ```bash
 export EMBEDDING_MODEL_BASE_URL=https://your-embedding-api/v1
@@ -47,11 +51,22 @@ export RERANKER_MODEL_ID=Qwen/Qwen3-Reranker
 export RERANKER_MODEL_API_KEY=your-api-key
 ```
 
-Source the credentials before using Vera:
+**Option B: Local mode** — no API keys needed (requires `--features local` build):
 
 ```bash
-set -a; source secrets.env; set +a
+# Use --local flag or set VERA_LOCAL=1
+vera index --local .
+vera search --local "authentication logic"
+
+# Or set globally:
+export VERA_LOCAL=1
+vera index .
+vera search "authentication logic"
 ```
+
+Local mode uses quantized Jina models (~500MB total, downloaded automatically on first use to `~/.vera/models/`):
+- **Embedding**: jina-embeddings-v5-text-nano-retrieval (239M params, 768-dim)
+- **Reranking**: jina-reranker-v2-base-multilingual (278M params)
 
 ### Verify Installation
 
@@ -146,6 +161,11 @@ vera mcp
 ```
 
 Exposes tools over JSON-RPC stdio: `search_code`, `index_project`, `update_project`, `get_stats`.
+
+For local inference mode via MCP:
+```bash
+VERA_LOCAL=1 vera mcp
+```
 
 ## Benchmark Results
 
