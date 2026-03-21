@@ -285,3 +285,57 @@ set -a && source /home/lamim/Development/Tools/Vera/secrets.env && set +a
 - No long-running services are needed for this milestone.
 - Rebuild the release binary with `cargo build --release` before running extended-language CLI validation so `target/release/vera` matches the current source tree.
 - Keep evidence concise: command outputs, parsed JSON snippets, and any reasoning tying grouped assertions back to observed CLI behavior.
+
+## Flow Validator Guidance: Local Inference CLI
+
+**Testing tool:** `Execute` tool for release builds, CLI invocations, JSON validation, and metadata inspection.
+
+**Recommended concurrency for this surface:** **2 validators max** for local-inference user testing. Although general CLI validation can scale higher, this milestone adds release builds and ONNX model initialization/downloads that are materially heavier on CPU, memory, disk, and network.
+
+**Shared setup produced by the coordinator:**
+- Default-feature release binary: `/tmp/vera-usertest-local-inference/bin/vera-default`
+- Local-feature release binary: `/tmp/vera-usertest-local-inference/bin/vera-local`
+- Shared temp root: `/tmp/vera-usertest-local-inference/`
+
+**Isolation rules:**
+- Each validator gets an exclusive workspace under `/tmp/vera-usertest-local-inference/<group-id>/`.
+- Create sample repos only inside the assigned workspace.
+- For first-run local-model download assertions, set `HOME=/tmp/vera-usertest-local-inference/<group-id>/home` so `~/.vera/models/` is isolated per validator and download behavior is repeatable.
+- Do not reuse another validator's temp repo, HOME directory, or `.vera/` index.
+- API-mode assertions may source `/home/lamim/Development/Tools/Vera/secrets.env`; local-mode assertions should intentionally avoid API credentials unless the assertion explicitly needs a provider mismatch comparison.
+
+**Useful command patterns:**
+- Build default binary: `CARGO_TARGET_DIR=/tmp/vera-usertest-local-inference/target-default cargo build --release`
+- Build local binary: `CARGO_TARGET_DIR=/tmp/vera-usertest-local-inference/target-local cargo build --release --features local`
+- API-mode index/search: `set -a && source /home/lamim/Development/Tools/Vera/secrets.env && set +a && /tmp/vera-usertest-local-inference/bin/vera-default ...`
+- Local-mode index/search: `HOME=/tmp/vera-usertest-local-inference/<group-id>/home /tmp/vera-usertest-local-inference/bin/vera-local ...`
+- Metadata inspection: `python3 - <<'PY' ... sqlite3 connect to .vera/metadata.db ... PY`
+
+**Local-inference assertion tips:**
+- `VAL-LOCAL-001` / `VAL-LOCAL-009`: verify the default build with `cargo tree --features ''` / `nm` or `strings` checks against the default binary copy.
+- `VAL-LOCAL-005`: keep an isolated HOME with no cached models before the first local invocation; capture stderr showing `Downloading https://huggingface.co/...` and subsequent progress lines, then rerun to confirm no download output.
+- `VAL-LOCAL-006` / `VAL-LOCAL-007`: local commands should succeed without sourcing API credentials.
+- `VAL-LOCAL-008`: create both API-indexed and local-indexed sample repos, then search/update with the opposite provider and capture the mismatch error text.
+- `VAL-LOCAL-010`, `VAL-CROSS-101`, `VAL-CROSS-102`: use a small isolated repo containing at least one newly added language file (for example Ruby and C#) so language classification and symbol metadata can be asserted from `--json` results.
+- `VAL-CROSS-103`: run the full validator commands (`cargo test`, `cargo test --features local`, `cargo clippy -- -D warnings`, `cargo clippy --features local -- -D warnings`, `cargo fmt --check`) from the repo root and record exit codes plus notable output.
+
+**Observed local-inference frictions (2026-03-20 validation):**
+- A cold-cache `cargo test --features local` run can fail once in `retrieval::search_service::tests::test_dimension_mismatch_and_inference` with `Failed to download ONNX data: No such file or directory (os error 2)` before passing on an immediate rerun after the model cache is populated. Capture both runs if this recurs.
+- Faithful local-mode indexing of the copied standard benchmark repos used for the 17-task Recall@5 check may be killed by the OS with exit `137`, even after constraining threads (`taskset`, `OMP_NUM_THREADS=1`, `ORT_NUM_THREADS=1`, `RAYON_NUM_THREADS=1`). Treat this as a validation blocker/failure signal rather than silently downgrading the workload.
+
+## Flow Validator Guidance: Local Inference MCP
+
+**Testing tool:** `Execute` tool for stdio JSON-RPC interaction with the MCP server.
+
+**Recommended concurrency for this surface:** **1 validator max**. Only one local-inference MCP validator should run at a time.
+
+**Isolation rules:**
+- Use an exclusive workspace under `/tmp/vera-usertest-local-inference/<group-id>/`.
+- Use `HOME=/tmp/vera-usertest-local-inference/<group-id>/home` to isolate model downloads and caches.
+- Use `VERA_LOCAL=1` when validating local-mode MCP behavior.
+- MCP uses stdio only; do not bind ports.
+
+**Suggested verification pattern:**
+- Prepare or reuse an isolated indexed repo inside the validator workspace.
+- Send newline-delimited JSON-RPC messages to `/tmp/vera-usertest-local-inference/bin/vera-local mcp` for `initialize`, `tools/list`, and the assigned tool call (for example `search_code`).
+- Confirm success responses preserve the same JSON schema as CLI output and surface local-mode results without API credentials.
