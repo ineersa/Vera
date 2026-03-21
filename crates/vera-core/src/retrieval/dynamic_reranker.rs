@@ -36,7 +36,7 @@ pub async fn create_dynamic_reranker(
         {
             let p = LocalReranker::new()
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to initialize local reranker: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("Failed to initialize local reranker: {e}\nHint: check network connection or manually place model at ~/.vera/models/"))?;
             Ok(Some(DynamicReranker::Local(p)))
         }
         #[cfg(not(feature = "local"))]

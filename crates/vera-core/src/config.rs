@@ -90,9 +90,10 @@ pub struct EmbeddingConfig {
 
 impl Default for EmbeddingConfig {
     fn default() -> Self {
+        let is_local = is_local_mode();
         Self {
-            batch_size: 128,
-            max_concurrent_requests: 8,
+            batch_size: if is_local { 16 } else { 128 },
+            max_concurrent_requests: if is_local { 1 } else { 8 },
             timeout_secs: 60,
             max_retries: 3,
             max_stored_dim: 1024,

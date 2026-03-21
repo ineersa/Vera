@@ -40,7 +40,7 @@ async fn ensure_model_file_impl(
     let res = client.get(&url).send().await?.error_for_status()?;
     let total_size = res.content_length();
 
-    let temp_path = target_path.with_extension("part");
+    let temp_path = target_path.with_extension(format!("part.{}", std::process::id()));
     let mut file = File::create(&temp_path).await?;
     let mut stream = res.bytes_stream();
     let mut downloaded = 0;
@@ -65,14 +65,25 @@ async fn ensure_model_file_impl(
         file.sync_all().await?;
         eprintln!("\nDownload complete: {}", file_path);
 
-        fs::rename(&temp_path, &target_path).await?;
+        if let Err(e) = fs::rename(&temp_path, &target_path).await {
+            if target_path.exists() {
+                // Another process won the race
+                let _ = fs::remove_file(&temp_path).await;
+            } else {
+                return Err(e.into());
+            }
+        }
         Ok(())
     }
     .await;
 
     if let Err(e) = download_result {
         let _ = fs::remove_file(&temp_path).await;
-        return Err(e);
+        return Err(e).context(format!(
+            "Expected path: {}. Hint: check network connection or manually place model at {}",
+            target_path.display(),
+            target_path.display()
+        ));
     }
 
     Ok(target_path)
@@ -109,7 +120,9 @@ mod tests {
         assert!(res.is_err(), "Download should fail due to truncated stream");
 
         let target_dir = home.join(".vera").join("models").join("test-repo");
-        let part_file = target_dir.join("test-file.bin").with_extension("part");
+        let part_file = target_dir
+            .join("test-file.bin")
+            .with_extension(format!("part.{}", std::process::id()));
         assert!(
             !part_file.exists(),
             "Partial file should be cleaned up on failure"

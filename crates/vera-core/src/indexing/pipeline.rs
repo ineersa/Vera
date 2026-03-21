@@ -158,14 +158,19 @@ pub async fn index_repository<P: EmbeddingProvider>(
     }
 
     // ── 4. Generate embeddings (concurrent batches) ──────────────
-    let mut embeddings = embed_chunks_concurrent(
-        provider,
-        &all_chunks,
-        config.embedding.batch_size,
-        config.embedding.max_concurrent_requests,
-    )
-    .await
-    .context("embedding generation failed")?;
+    let (batch_size, max_concurrent_requests) = if crate::config::is_local_mode() {
+        (16, 1)
+    } else {
+        (
+            config.embedding.batch_size,
+            config.embedding.max_concurrent_requests,
+        )
+    };
+
+    let mut embeddings =
+        embed_chunks_concurrent(provider, &all_chunks, batch_size, max_concurrent_requests)
+            .await
+            .context("embedding generation failed")?;
 
     // Truncate vectors if max_stored_dim is configured.
     let stored_dim = super::truncate_embeddings(&mut embeddings, config.embedding.max_stored_dim);

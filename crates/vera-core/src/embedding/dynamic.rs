@@ -38,7 +38,7 @@ pub async fn create_dynamic_provider(
         #[cfg(feature = "local")]
         {
             let p = LocalEmbeddingProvider::new().await.map_err(|e| {
-                anyhow::anyhow!("Failed to initialize local embedding provider: {e}")
+                anyhow::anyhow!("Failed to initialize local embedding provider: {e}\nHint: check network connection or manually place model at ~/.vera/models/")
             })?;
             Ok((
                 DynamicProvider::Local(p),
