@@ -40,6 +40,8 @@ Testing surface, required tools, and resource cost classification.
 - A compatible temporary runtime was provisioned at `/tmp/vera-onnxruntime-1.24.4/lib/libonnxruntime.so` for simplify-install user-testing reruns.
 - The prebuilt validation binary at `/home/lamim/Development/Tools/Vera/target/release/vera` works with that runtime for isolated local-mode fixtures.
 - `vera stats` currently has no `--index-dir` flag; run it from the indexed fixture directory (`cd <fixture> && vera stats --json`).
+- Language-expansion rerun (round 2): mixed-case `--lang` filters now work for sampled new languages including Scheme, Nginx, Svelte, Astro, Prisma, and INI when search results carry the expected language labels.
+- Language-expansion rerun (round 2): a representative `.m` fixture still surfaces as `objectivec` instead of `matlab` in the real CLI, so MATLAB validation remains ambiguous/failing on this user surface.
 - Benchmark corpus repos must be in `.bench/repos/` (run `eval/setup-corpus.sh`)
 - MCP testing: pipe JSON-RPC messages via stdin, read JSON-RPC responses from stdout
 
