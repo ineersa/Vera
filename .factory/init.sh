@@ -48,6 +48,19 @@ if [ ! -f "$DOCKERFILE_DIR/parser.c" ]; then
     echo "[init] tree-sitter-dockerfile grammar downloaded"
 fi
 
+ASTRO_DIR="$REPO_ROOT/crates/tree-sitter-astro/src"
+if [ ! -f "$ASTRO_DIR/parser.c" ]; then
+    echo "[init] Downloading tree-sitter-astro grammar..."
+    mkdir -p "$ASTRO_DIR/tree_sitter"
+    curl -sL "https://raw.githubusercontent.com/virchau13/tree-sitter-astro/master/src/parser.c" -o "$ASTRO_DIR/parser.c"
+    curl -sL "https://raw.githubusercontent.com/virchau13/tree-sitter-astro/master/src/scanner.c" -o "$ASTRO_DIR/scanner.c"
+    curl -sL "https://raw.githubusercontent.com/virchau13/tree-sitter-astro/master/src/tag.h" -o "$ASTRO_DIR/tag.h"
+    curl -sL "https://raw.githubusercontent.com/virchau13/tree-sitter-astro/master/src/tree_sitter/parser.h" -o "$ASTRO_DIR/tree_sitter/parser.h"
+    curl -sL "https://raw.githubusercontent.com/virchau13/tree-sitter-astro/master/src/tree_sitter/alloc.h" -o "$ASTRO_DIR/tree_sitter/alloc.h"
+    curl -sL "https://raw.githubusercontent.com/virchau13/tree-sitter-astro/master/src/tree_sitter/array.h" -o "$ASTRO_DIR/tree_sitter/array.h"
+    echo "[init] tree-sitter-astro grammar downloaded"
+fi
+
 # Build the project
 if [ -f "$REPO_ROOT/Cargo.toml" ]; then
     echo "[init] Building project..."

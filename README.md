@@ -1,11 +1,11 @@
 # Vera — Code Search for AI Agents
 
-Vera (Vector Enhanced Relevance Agent) is a code indexing and retrieval CLI tool built for AI coding agents. It combines BM25 keyword search with vector similarity search via Reciprocal Rank Fusion (RRF) and cross-encoder reranking, delivering ranked, structured code results across 21+ languages.
+Vera (Vector Enhanced Relevance Agent) is a code indexing and retrieval CLI tool built for AI coding agents. It combines BM25 keyword search with vector similarity search via Reciprocal Rank Fusion (RRF) and cross-encoder reranking, delivering ranked, structured code results across 60+ languages.
 
 ## Key Features
 
 - **Hybrid retrieval** — BM25 + vector search + RRF fusion + cross-encoder reranking
-- **21+ languages** — Tree-sitter parsing for Rust, Python, TypeScript, JavaScript, Go, Java, C, C++, Ruby, Bash, Kotlin, Swift, Zig, Lua, Scala, C#, PHP, Haskell, Elixir, Dart, SQL, HCL/Terraform, and Protobuf
+- **60+ languages** — Tree-sitter parsing for Rust, Python, TypeScript, JavaScript, Go, Java, C, C++, Ruby, Bash, Kotlin, Swift, Zig, Lua, Scala, C#, PHP, Haskell, Elixir, Dart, SQL, HCL/Terraform, Protobuf, HTML, CSS, SCSS, Vue, GraphQL, CMake, Dockerfile, XML, Objective-C, Perl, Julia, Nix, OCaml, Groovy, Clojure, Common Lisp, Erlang, F#, Fortran, PowerShell, R, MATLAB, D, Fish, Zsh, Luau, Scheme, Racket, Elm, GLSL, HLSL, Svelte, Astro, Makefile, INI, Nginx, Prisma, plus TOML, YAML, JSON, and Markdown
 - **Symbol-aware chunking** — Functions, classes, structs become individual search units
 - **Structured output** — JSON context capsules with file paths, line ranges, and code content
 - **Fast** — Sub-5ms BM25 queries, incremental updates under 5 seconds

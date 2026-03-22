@@ -81,6 +81,12 @@ pub fn classify_node(lang: Language, kind: &str) -> Option<SymbolType> {
         Language::Elm => classify_elm(kind),
         Language::Glsl => classify_glsl(kind),
         Language::Hlsl => classify_hlsl(kind),
+        Language::Svelte => classify_svelte(kind),
+        Language::Astro => classify_astro(kind),
+        Language::Makefile => classify_makefile(kind),
+        Language::Ini => classify_ini(kind),
+        Language::Nginx => classify_nginx(kind),
+        Language::Prisma => classify_prisma(kind),
         _ => None,
     }
 }
@@ -417,6 +423,60 @@ fn classify_hlsl(kind: &str) -> Option<SymbolType> {
         "class_specifier" => Some(SymbolType::Class),
         "struct_specifier" => Some(SymbolType::Struct),
         "declaration" => Some(SymbolType::Variable),
+        _ => None,
+    }
+}
+
+fn classify_svelte(kind: &str) -> Option<SymbolType> {
+    match kind {
+        "script_element" => Some(SymbolType::Block),
+        "style_element" => Some(SymbolType::Block),
+        "element" => Some(SymbolType::Block),
+        "if_statement" | "each_statement" | "await_statement" => Some(SymbolType::Block),
+        _ => None,
+    }
+}
+
+fn classify_astro(kind: &str) -> Option<SymbolType> {
+    match kind {
+        "frontmatter" => Some(SymbolType::Block),
+        "element" | "script_element" | "style_element" | "component" => Some(SymbolType::Block),
+        _ => None,
+    }
+}
+
+fn classify_makefile(kind: &str) -> Option<SymbolType> {
+    match kind {
+        "rule" => Some(SymbolType::Function),
+        "variable_assignment" => Some(SymbolType::Variable),
+        "define_directive" => Some(SymbolType::Function),
+        "include_directive" => Some(SymbolType::Variable),
+        _ => None,
+    }
+}
+
+fn classify_ini(kind: &str) -> Option<SymbolType> {
+    match kind {
+        "section" => Some(SymbolType::Block),
+        "setting" => Some(SymbolType::Variable),
+        _ => None,
+    }
+}
+
+fn classify_nginx(kind: &str) -> Option<SymbolType> {
+    match kind {
+        "block" => Some(SymbolType::Block),
+        "directive" => Some(SymbolType::Variable),
+        _ => None,
+    }
+}
+
+fn classify_prisma(kind: &str) -> Option<SymbolType> {
+    match kind {
+        "model_declaration" => Some(SymbolType::Struct),
+        "enum_declaration" => Some(SymbolType::Enum),
+        "generator_declaration" | "datasource_declaration" => Some(SymbolType::Block),
+        "type_declaration" => Some(SymbolType::TypeAlias),
         _ => None,
     }
 }
@@ -2755,6 +2815,152 @@ float4 main(float4 pos : SV_Position) : SV_Target {
                 .iter()
                 .any(|s| s.symbol_type == SymbolType::Function),
             "HLSL should extract functions"
+        );
+    }
+
+    // ── Tier 2B symbol extraction tests ─────────────────
+
+    #[test]
+    fn svelte_extracts_blocks() {
+        let source = r#"
+<script>
+  let count = 0;
+  function increment() { count += 1; }
+</script>
+
+<button on:click={increment}>
+  Count: {count}
+</button>
+
+<style>
+  button { color: red; }
+</style>
+"#;
+        let symbols = parse_and_extract(source, Language::Svelte);
+        println!("Svelte symbols: {:#?}", symbols);
+        assert!(!symbols.is_empty(), "Svelte should extract symbols");
+        assert!(
+            symbols.iter().any(|s| s.symbol_type == SymbolType::Block),
+            "Svelte should extract blocks"
+        );
+    }
+
+    #[test]
+    fn astro_extracts_frontmatter_and_elements() {
+        let source = r#"---
+const title = "Hello";
+const items = [1, 2, 3];
+---
+<html>
+<head><title>{title}</title></head>
+<body>
+  <h1>{title}</h1>
+</body>
+</html>
+"#;
+        let symbols = parse_and_extract(source, Language::Astro);
+        println!("Astro symbols: {:#?}", symbols);
+        assert!(!symbols.is_empty(), "Astro should extract symbols");
+    }
+
+    #[test]
+    fn makefile_extracts_rules_and_variables() {
+        let source = r#"
+CC = gcc
+CFLAGS = -Wall
+
+all: build
+
+build:
+	$(CC) $(CFLAGS) -o main main.c
+
+clean:
+	rm -f main
+"#;
+        let symbols = parse_and_extract(source, Language::Makefile);
+        println!("Makefile symbols: {:#?}", symbols);
+        assert!(!symbols.is_empty(), "Makefile should extract symbols");
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.symbol_type == SymbolType::Function),
+            "Makefile should extract rules as functions"
+        );
+    }
+
+    #[test]
+    fn ini_extracts_sections() {
+        let source = r#"
+[database]
+host = localhost
+port = 5432
+
+[server]
+bind = 0.0.0.0
+"#;
+        let symbols = parse_and_extract(source, Language::Ini);
+        println!("INI symbols: {:#?}", symbols);
+        assert!(!symbols.is_empty(), "INI should extract symbols");
+        assert!(
+            symbols.iter().any(|s| s.symbol_type == SymbolType::Block),
+            "INI should extract sections as blocks"
+        );
+    }
+
+    #[test]
+    fn nginx_extracts_blocks() {
+        let source = r#"
+server {
+    listen 80;
+    server_name example.com;
+
+    location / {
+        proxy_pass http://backend;
+    }
+}
+"#;
+        let symbols = parse_and_extract(source, Language::Nginx);
+        println!("Nginx symbols: {:#?}", symbols);
+        assert!(!symbols.is_empty(), "Nginx should extract symbols");
+    }
+
+    #[test]
+    fn prisma_extracts_models_and_enums() {
+        let source = r#"
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id    Int     @id @default(autoincrement())
+  email String  @unique
+  name  String?
+  posts Post[]
+}
+
+model Post {
+  id       Int    @id @default(autoincrement())
+  title    String
+  author   User   @relation(fields: [authorId], references: [id])
+  authorId Int
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+"#;
+        let symbols = parse_and_extract(source, Language::Prisma);
+        println!("Prisma symbols: {:#?}", symbols);
+        assert!(!symbols.is_empty(), "Prisma should extract symbols");
+        assert!(
+            symbols.iter().any(|s| s.symbol_type == SymbolType::Struct),
+            "Prisma should extract models as structs"
         );
     }
 }

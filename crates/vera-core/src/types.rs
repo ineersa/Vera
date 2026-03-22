@@ -208,6 +208,13 @@ pub enum Language {
     Elm,
     Glsl,
     Hlsl,
+    /// Tier 2B structural/config/frontend languages.
+    Svelte,
+    Astro,
+    Makefile,
+    Ini,
+    Nginx,
+    Prisma,
     /// Data / config formats (Tier 0 — no tree-sitter grammar).
     Toml,
     Yaml,
@@ -218,11 +225,12 @@ pub enum Language {
 }
 
 impl Language {
-    /// Detect language from a full filename (for extensionless files like Dockerfile, CMakeLists.txt).
+    /// Detect language from a full filename (for extensionless files like Dockerfile, CMakeLists.txt, Makefile).
     pub fn from_filename(name: &str) -> Option<Self> {
         match name {
             "Dockerfile" | "dockerfile" => Some(Self::Dockerfile),
             "CMakeLists.txt" => Some(Self::CMake),
+            "Makefile" | "makefile" | "GNUmakefile" => Some(Self::Makefile),
             _ => None,
         }
     }
@@ -283,6 +291,11 @@ impl Language {
             "elm" => Self::Elm,
             "glsl" | "vert" | "frag" | "geom" | "comp" | "tesc" | "tese" => Self::Glsl,
             "hlsl" | "hlsli" | "fx" => Self::Hlsl,
+            "svelte" => Self::Svelte,
+            "astro" => Self::Astro,
+            "ini" | "cfg" | "conf" => Self::Ini,
+            "nginx" => Self::Nginx,
+            "prisma" => Self::Prisma,
             "toml" => Self::Toml,
             "yaml" | "yml" => Self::Yaml,
             "json" => Self::Json,
@@ -349,6 +362,12 @@ impl std::fmt::Display for Language {
             Self::Elm => "elm",
             Self::Glsl => "glsl",
             Self::Hlsl => "hlsl",
+            Self::Svelte => "svelte",
+            Self::Astro => "astro",
+            Self::Makefile => "makefile",
+            Self::Ini => "ini",
+            Self::Nginx => "nginx",
+            Self::Prisma => "prisma",
             Self::Toml => "toml",
             Self::Yaml => "yaml",
             Self::Json => "json",
@@ -693,6 +712,61 @@ mod tests {
         assert_eq!(Language::Elm.to_string(), "elm");
         assert_eq!(Language::Glsl.to_string(), "glsl");
         assert_eq!(Language::Hlsl.to_string(), "hlsl");
+    }
+
+    // ── Tier 2B extension mapping tests ─────────────────
+
+    #[test]
+    fn language_from_extension_svelte() {
+        assert_eq!(Language::from_extension("svelte"), Language::Svelte);
+    }
+
+    #[test]
+    fn language_from_extension_astro() {
+        assert_eq!(Language::from_extension("astro"), Language::Astro);
+    }
+
+    #[test]
+    fn language_from_extension_ini() {
+        assert_eq!(Language::from_extension("ini"), Language::Ini);
+        assert_eq!(Language::from_extension("cfg"), Language::Ini);
+        assert_eq!(Language::from_extension("conf"), Language::Ini);
+    }
+
+    #[test]
+    fn language_from_extension_nginx() {
+        assert_eq!(Language::from_extension("nginx"), Language::Nginx);
+    }
+
+    #[test]
+    fn language_from_extension_prisma() {
+        assert_eq!(Language::from_extension("prisma"), Language::Prisma);
+    }
+
+    #[test]
+    fn language_from_filename_makefile() {
+        assert_eq!(
+            Language::from_filename("Makefile"),
+            Some(Language::Makefile)
+        );
+        assert_eq!(
+            Language::from_filename("makefile"),
+            Some(Language::Makefile)
+        );
+        assert_eq!(
+            Language::from_filename("GNUmakefile"),
+            Some(Language::Makefile)
+        );
+    }
+
+    #[test]
+    fn language_display_tier2b() {
+        assert_eq!(Language::Svelte.to_string(), "svelte");
+        assert_eq!(Language::Astro.to_string(), "astro");
+        assert_eq!(Language::Makefile.to_string(), "makefile");
+        assert_eq!(Language::Ini.to_string(), "ini");
+        assert_eq!(Language::Nginx.to_string(), "nginx");
+        assert_eq!(Language::Prisma.to_string(), "prisma");
     }
 
     #[test]

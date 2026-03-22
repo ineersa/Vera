@@ -8,6 +8,7 @@ spikes/*/node_modules/
 # Vendored tree-sitter grammars (downloaded by .factory/init.sh)
 crates/tree-sitter-vue/
 crates/tree-sitter-dockerfile/
+crates/tree-sitter-astro/
 
 # Development files
 .factory/

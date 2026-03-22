@@ -15,6 +15,7 @@ unsafe extern "C" {
     fn tree_sitter_proto() -> *const ();
     fn tree_sitter_vue() -> *const ();
     fn tree_sitter_dockerfile() -> *const ();
+    fn tree_sitter_astro() -> *const ();
 }
 
 /// Returns the tree-sitter grammar for a given language, if supported.
@@ -82,6 +83,15 @@ pub fn tree_sitter_grammar(lang: Language) -> Option<TsLanguage> {
         Language::Elm => tree_sitter_elm::LANGUAGE.into(),
         Language::Glsl => tree_sitter_glsl::LANGUAGE_GLSL.into(),
         Language::Hlsl => tree_sitter_hlsl::LANGUAGE_HLSL.into(),
+        // Tier 2B structural/config/frontend languages
+        Language::Svelte => tree_sitter_svelte_next::LANGUAGE.into(),
+        Language::Astro => unsafe {
+            std::mem::transmute::<*const (), TsLanguage>(tree_sitter_astro())
+        },
+        Language::Makefile => tree_sitter_make::LANGUAGE.into(),
+        Language::Ini => tree_sitter_ini::LANGUAGE.into(),
+        Language::Nginx => tree_sitter_nginx::LANGUAGE.into(),
+        Language::Prisma => tree_sitter_prisma_io::LANGUAGE.into(),
         // Languages without tree-sitter grammar support → Tier 0 fallback
         Language::Toml
         | Language::Yaml
@@ -632,6 +642,114 @@ mod tests {
         let tree = parser
             .parse(
                 "float4 main(float4 pos : SV_Position) : SV_Target {\n  return float4(1, 0, 0, 1);\n}\n",
+                None,
+            )
+            .unwrap();
+        assert!(!tree.root_node().has_error());
+    }
+
+    // ── Tier 2B grammar loading tests ─────────────────
+
+    #[test]
+    fn tier_2b_languages_have_grammars() {
+        let tier_2b = [
+            Language::Svelte,
+            Language::Astro,
+            Language::Makefile,
+            Language::Ini,
+            Language::Nginx,
+            Language::Prisma,
+        ];
+        for lang in tier_2b {
+            assert!(
+                has_grammar(lang),
+                "{lang} should have a tree-sitter grammar"
+            );
+        }
+    }
+
+    #[test]
+    fn svelte_grammar_creates_valid_parser() {
+        let grammar = tree_sitter_grammar(Language::Svelte).unwrap();
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&grammar)
+            .expect("Svelte grammar should load");
+        let tree = parser
+            .parse(
+                "<script>\n  let count = 0;\n</script>\n<button>{count}</button>\n",
+                None,
+            )
+            .unwrap();
+        assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn astro_grammar_creates_valid_parser() {
+        let grammar = tree_sitter_grammar(Language::Astro).unwrap();
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&grammar)
+            .expect("Astro grammar should load");
+        let tree = parser
+            .parse(
+                "---\nconst title = \"Hello\";\n---\n<h1>{title}</h1>\n",
+                None,
+            )
+            .unwrap();
+        assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn makefile_grammar_creates_valid_parser() {
+        let grammar = tree_sitter_grammar(Language::Makefile).unwrap();
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&grammar)
+            .expect("Makefile grammar should load");
+        let tree = parser
+            .parse("all: build\n\nbuild:\n\tgcc -o main main.c\n", None)
+            .unwrap();
+        assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn ini_grammar_creates_valid_parser() {
+        let grammar = tree_sitter_grammar(Language::Ini).unwrap();
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&grammar)
+            .expect("INI grammar should load");
+        let tree = parser.parse("[section]\nkey = value\n", None).unwrap();
+        assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn nginx_grammar_creates_valid_parser() {
+        let grammar = tree_sitter_grammar(Language::Nginx).unwrap();
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&grammar)
+            .expect("Nginx grammar should load");
+        let tree = parser
+            .parse(
+                "server {\n  listen 80;\n  server_name example.com;\n}\n",
+                None,
+            )
+            .unwrap();
+        assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn prisma_grammar_creates_valid_parser() {
+        let grammar = tree_sitter_grammar(Language::Prisma).unwrap();
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&grammar)
+            .expect("Prisma grammar should load");
+        let tree = parser
+            .parse(
+                "model User {\n  id    Int     @id @default(autoincrement())\n  name  String\n}\n",
                 None,
             )
             .unwrap();

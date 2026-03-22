@@ -49,6 +49,28 @@ fn main() {
             .compile("tree-sitter-dockerfile-scanner");
     }
 
+    let astro_dir = std::path::Path::new("../tree-sitter-astro/src");
+    if !astro_dir.join("parser.c").exists() {
+        println!(
+            "cargo:warning=tree-sitter-astro grammar not found. Run .factory/init.sh to download."
+        );
+    }
+    if astro_dir.exists() {
+        println!("cargo:rerun-if-changed=../tree-sitter-astro/src/parser.c");
+        println!("cargo:rerun-if-changed=../tree-sitter-astro/src/scanner.c");
+        cc::Build::new()
+            .include(astro_dir)
+            .file(astro_dir.join("parser.c"))
+            .warnings(false)
+            .compile("tree-sitter-astro-parser");
+
+        cc::Build::new()
+            .include(astro_dir)
+            .file(astro_dir.join("scanner.c"))
+            .warnings(false)
+            .compile("tree-sitter-astro-scanner");
+    }
+
     let vue_dir = std::path::Path::new("../tree-sitter-vue/src");
     if !vue_dir.join("parser.c").exists() {
         println!(
