@@ -6,7 +6,8 @@ target/
 spikes/*/Cargo.lock
 spikes/*/node_modules/
 
-# Vendored tree-sitter grammars (downloaded by .factory/init.sh)
+# Vendored tree-sitter grammars (downloaded by scripts/bootstrap-vendored-grammars.sh)
+crates/tree-sitter-scss/
 crates/tree-sitter-vue/
 crates/tree-sitter-dockerfile/
 crates/tree-sitter-astro/

@@ -71,6 +71,28 @@ fn main() {
             .compile("tree-sitter-astro-scanner");
     }
 
+    let scss_dir = std::path::Path::new("../tree-sitter-scss/src");
+    if !scss_dir.join("parser.c").exists() {
+        println!(
+            "cargo:warning=tree-sitter-scss grammar not found. Run scripts/bootstrap-vendored-grammars.sh to download."
+        );
+    }
+    if scss_dir.exists() {
+        println!("cargo:rerun-if-changed=../tree-sitter-scss/src/parser.c");
+        println!("cargo:rerun-if-changed=../tree-sitter-scss/src/scanner.c");
+        cc::Build::new()
+            .include(scss_dir)
+            .file(scss_dir.join("parser.c"))
+            .warnings(false)
+            .compile("tree-sitter-scss-parser");
+
+        cc::Build::new()
+            .include(scss_dir)
+            .file(scss_dir.join("scanner.c"))
+            .warnings(false)
+            .compile("tree-sitter-scss-scanner");
+    }
+
     let vue_dir = std::path::Path::new("../tree-sitter-vue/src");
     if !vue_dir.join("parser.c").exists() {
         println!(

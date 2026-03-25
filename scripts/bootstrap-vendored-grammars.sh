@@ -36,6 +36,16 @@ download_if_missing \
     "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-vue/main/src/tree_sitter/array.h"
 
 download_if_missing \
+    "crates/tree-sitter-scss/src/parser.c" \
+    "https://raw.githubusercontent.com/serenadeai/tree-sitter-scss/master/src/parser.c"
+download_if_missing \
+    "crates/tree-sitter-scss/src/scanner.c" \
+    "https://raw.githubusercontent.com/serenadeai/tree-sitter-scss/master/src/scanner.c"
+download_if_missing \
+    "crates/tree-sitter-scss/src/tree_sitter/parser.h" \
+    "https://raw.githubusercontent.com/serenadeai/tree-sitter-scss/master/src/tree_sitter/parser.h"
+
+download_if_missing \
     "crates/tree-sitter-dockerfile/src/parser.c" \
     "https://raw.githubusercontent.com/camdencheek/tree-sitter-dockerfile/main/src/parser.c"
 download_if_missing \

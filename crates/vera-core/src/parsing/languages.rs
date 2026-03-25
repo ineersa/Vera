@@ -13,6 +13,7 @@ unsafe extern "C" {
     fn tree_sitter_sql() -> *const ();
     fn tree_sitter_hcl() -> *const ();
     fn tree_sitter_proto() -> *const ();
+    fn tree_sitter_scss() -> *const ();
     fn tree_sitter_vue() -> *const ();
     fn tree_sitter_dockerfile() -> *const ();
     fn tree_sitter_astro() -> *const ();
@@ -50,7 +51,7 @@ pub fn tree_sitter_grammar(lang: Language) -> Option<TsLanguage> {
         },
         Language::Html => tree_sitter_html::LANGUAGE.into(),
         Language::Css => tree_sitter_css::LANGUAGE.into(),
-        Language::Scss => tree_sitter_scss::language(),
+        Language::Scss => unsafe { std::mem::transmute::<*const (), TsLanguage>(tree_sitter_scss()) },
         Language::Vue => unsafe { std::mem::transmute::<*const (), TsLanguage>(tree_sitter_vue()) },
         Language::GraphQl => tree_sitter_graphql::LANGUAGE.into(),
         Language::CMake => tree_sitter_cmake::LANGUAGE.into(),

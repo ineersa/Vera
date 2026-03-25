@@ -53,7 +53,7 @@ tree-sitter-dart = "0.1.0"
 tree-sitter-hcl = { git = "https://github.com/tree-sitter-grammars/tree-sitter-hcl", version = "1.2.0" }
 tree-sitter-html = "0.23.2"
 tree-sitter-css = "0.25.0"
-tree-sitter-scss = "1.0.0"
+# SCSS: vendored C source in crates/tree-sitter-scss/ (crates.io 1.0.0 passes GCC flags that break MSVC)
 # Vue: vendored C source in crates/tree-sitter-vue/ (crates.io 0.0.3 needs tree-sitter ~0.20, git needs tree-sitter-language)
 tree-sitter-graphql = "0.1.0"
 tree-sitter-cmake = "0.7.1"
