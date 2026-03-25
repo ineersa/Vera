@@ -1,0 +1,73 @@
+# Contributing
+
+## Build from Source
+
+Rust 1.85 or newer required.
+
+```bash
+git clone https://github.com/lemon07r/Vera.git
+cd Vera
+cargo build
+```
+
+## Run Tests
+
+```bash
+cargo test --workspace       # all tests
+cargo test -p vera-core      # core crate only
+```
+
+## Lint & Format
+
+```bash
+cargo clippy --workspace -- -D warnings
+cargo fmt --all -- --check
+```
+
+## Project Layout
+
+| Crate | What it does |
+|-------|-------------|
+| `vera-core` | Parsing, indexing, storage, embedding, retrieval pipeline |
+| `vera-cli` | CLI interface (clap) |
+| `vera-mcp` | MCP server (JSON-RPC over stdio) |
+| `eval` | Benchmark harness and evaluation tasks |
+
+The core engine lives in `vera-core`. Most changes happen here:
+
+- `parsing/` — tree-sitter grammars, AST chunking, symbol extraction
+- `embedding/` — embedding providers (API + local ONNX)
+- `retrieval/` — BM25, vector search, RRF fusion, reranking
+- `storage/` — SQLite metadata, Tantivy BM25 index, sqlite-vec vectors
+- `indexing/` — index build and incremental update pipeline
+
+For how the pipeline fits together, see [docs/how-it-works.md](docs/how-it-works.md).
+
+## Adding a Language
+
+1. Add a variant to the `Language` enum in `crates/vera-core/src/types.rs` (alphabetical order)
+2. Add extension mapping in `Language::from_extension()` in the same file
+3. Add the tree-sitter grammar dependency to `crates/vera-core/Cargo.toml`
+4. Wire the grammar in `parsing/languages.rs` → `tree_sitter_grammar()`
+5. Add symbol extraction rules in `parsing/extractor.rs` → `classify_node()`
+6. Write tests: extension mapping, grammar loading, at least 2 symbol extraction assertions
+
+The full language list is at [docs/supported-languages.md](docs/supported-languages.md).
+
+## Conventions
+
+- **Error handling:** `anyhow::Result` in CLI code, `thiserror` for typed errors in `vera-core`
+- **Async:** `tokio` runtime for I/O-bound work
+- **Tests:** `#[cfg(test)]` modules at the bottom of source files, `tempfile` for filesystem tests
+- **Commits:** `type(scope): description` — e.g. `feat(lang): add HTML support`, `fix(retrieval): handle empty query`
+
+## Running Benchmarks
+
+```bash
+bash eval/setup-corpus.sh                          # clone benchmark repos
+cargo build --release
+cargo run --release --bin vera-eval -- run          # full suite
+cargo run --release --bin vera-eval -- run --json-only  # JSON output only
+```
+
+Benchmark details: [docs/benchmarks.md](docs/benchmarks.md).

@@ -239,4 +239,12 @@ More detail: [docs/benchmarks.md](docs/benchmarks.md) · [benchmarks/indexing-pe
 
 ## Supported Languages
 
-Vera supports 60+ languages and file formats, including Python, TypeScript, JavaScript, Java, Go, Rust, C, C++, C#, Ruby, Swift, Kotlin, PHP, Scala, Dart, Haskell, Elixir, Lua, SQL, HTML, CSS, Vue, Terraform, and common config formats like TOML, YAML, JSON, and Markdown.
+Vera supports 63 languages and file formats with tree-sitter symbol extraction, plus text chunking for data formats. Full list with extensions and extraction support: [docs/supported-languages.md](docs/supported-languages.md).
+
+## How It Works
+
+Vera's retrieval pipeline runs BM25 keyword search and vector similarity search in parallel, merges results with Reciprocal Rank Fusion, then reranks the top candidates with a cross-encoder. For the full breakdown — parsing, fusion, reranking, storage, and the benchmarks behind each choice — see [docs/how-it-works.md](docs/how-it-works.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build instructions, project layout, how to add a language, and coding conventions.
