@@ -10,11 +10,17 @@ Vera is a code search tool built in Rust that combines BM25 keyword matching, ve
 # Install
 npx -y @vera-ai/cli install    # or: bunx @vera-ai/cli install / uvx vera-ai install
 
-# Download models and index your repo
-vera setup
-vera index .
+# Option A: use any OpenAI-compatible endpoint
+export EMBEDDING_MODEL_BASE_URL=https://your-api/v1
+export EMBEDDING_MODEL_ID=your-model
+export EMBEDDING_MODEL_API_KEY=your-key
+vera setup --api
 
-# Search
+# Option B: download Vera's curated local models (no API needed)
+vera setup
+
+# Index and search
+vera index .
 vera search "authentication logic"
 vera search "error handling" --lang rust
 vera search "handler" --type function --limit 5 --json
@@ -22,20 +28,25 @@ vera search "handler" --type function --limit 5 --json
 
 ## Why Vera?
 
-**The reranking stage is what matters.** Most code search tools stop at embeddings. They encode your query and your code into vectors, compare them, and return the closest matches. This works for exact symbol lookups but falls apart on intent queries like `"where does request validation happen"` because embedding similarity treats the query and document independently. Vera adds a cross-encoder reranker as a third stage: it reads the query and each candidate chunk together as a pair and scores them jointly. On our benchmark suite, this is the difference between 0.28 MRR@10 (vector-only) and 0.60 MRR@10 (full pipeline). That 2x jump in ranking quality comes almost entirely from the reranker.
+**The reranking stage is what matters.** Most code search tools stop at embeddings. They encode your query and your code into vectors, compare them, and return the closest matches. This works for exact symbol lookups but falls apart on intent queries like `"where does request validation happen"` because embedding similarity treats the query and document independently. Vera adds a cross-encoder reranker as a third stage: it reads the query and each candidate chunk together as a pair and scores them jointly. On Vera's benchmark suite, this is the difference between 0.28 MRR@10 (vector-only) and 0.60 MRR@10 (full pipeline). That 2x jump in ranking quality comes almost entirely from the reranker.
 
 **Concrete benchmark numbers.** Vera's benchmark covers 17 tasks across three real codebases (ripgrep, flask, fastify) spanning symbol lookup, intent search, cross-file discovery, config lookup, and disambiguation. Against ripgrep (grep, not a search tool) and cocoindex-code (embedding-only), Vera's hybrid pipeline scores 0.80 nDCG@10 and 0.75 Recall@10. These aren't synthetic benchmarks on curated datasets; they test the kinds of queries developers and agents actually make. Full methodology and reproduction steps are public: [docs/benchmarks.md](docs/benchmarks.md).
 
-**Tree-sitter parsing, not line matching.** Vera doesn't grep through files. It builds a structural index using tree-sitter grammars for 60+ languages, extracting functions, classes, methods, structs, and other symbols as discrete chunks. Search results come back with the symbol name, symbol type, exact line range, and the full source content. This means an agent can request `--type function --json` and get back precisely the function definitions it needs, not a list of matching lines with no context boundaries.
+**Your model, local or remote.** Vera's pipeline is model-agnostic. Point it at any OpenAI-compatible embedding or reranker endpoint, whether that's a remote API or a local server like llama.cpp. Everything else (indexing, storage, search logic) stays on your machine regardless. If you don't want to manage models at all, `vera setup` downloads two curated ONNX models that run locally via ONNX Runtime, giving you the full three-stage pipeline without any network calls. Most local-first search tools only ship an embedding model and skip reranking entirely, which caps their precision on anything beyond exact name matches. Details on the bundled models are in the [Model Backend](#model-backend) section below.
 
-**Your models or ours.** Vera's pipeline is model-agnostic: point it at any OpenAI-compatible embedding/reranker endpoint (remote API, local llama.cpp server, etc). If you don't want to manage models, `vera setup` downloads two curated ONNX models that run locally via ONNX Runtime:
+**Structured JSON output.** Every search result includes the file path, exact line range, full source content, symbol name, symbol type, language, and relevance score. Agents and scripts can consume this directly without parsing or guessing at context boundaries. A CLI skill file is included so agents know when and how to invoke Vera: [skills/vera/SKILL.md](skills/vera/SKILL.md).
 
-- [jina-embeddings-v3](https://huggingface.co/jinaai/jina-embeddings-v3) (quantized nano variant): trained specifically for retrieval on code and technical text, with asymmetric query/document encoding. Unlike general-purpose sentence transformers, it produces embeddings optimized for the short-query-to-long-document pattern that code search requires.
-- [jina-reranker-v2-base-multilingual](https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual): a cross-encoder that scores query-document pairs directly instead of comparing pre-computed vectors. This is the model responsible for the 2x MRR improvement over embedding-only search.
+## How It Works
 
-Having both models locally means the full three-stage pipeline (BM25, vector search, rerank) runs without any network calls. Most local-first search tools only ship an embedding model and skip reranking entirely, which caps their precision on anything beyond exact name matches.
+Vera builds a structural index using tree-sitter grammars for 60+ languages, extracting functions, classes, methods, structs, and other symbols as discrete chunks rather than splitting files by line count. Search results come back with the symbol name, symbol type, exact line range, and the full source content. This means you can request `--type function --json` and get back precisely the function definitions matching your query, not a list of matching lines with no context boundaries.
 
-**Built for agents.** JSON output, a CLI that agents can call directly, and an installable skill file so agents know when and how to invoke Vera. See [skills/vera/SKILL.md](skills/vera/SKILL.md).
+The retrieval pipeline runs three stages:
+
+1. **BM25 keyword search** over the full chunk index for fast lexical matching.
+2. **Vector similarity search** using embeddings to catch semantic matches that keywords miss.
+3. **Cross-encoder reranking** that reads each query-candidate pair jointly and rescores them, producing the final ranked output.
+
+Results from stages 1 and 2 are fused via Reciprocal Rank Fusion (RRF) before the reranker sees them.
 
 ## Installation
 
@@ -118,10 +129,10 @@ Vera itself is always local: the index lives in `.vera/`, config in `~/.vera/`. 
 
 `vera setup` downloads quantized ONNX models into `~/.vera/models/` and runs inference locally via ONNX Runtime:
 
-- **Embeddings:** [`jinaai/jina-embeddings-v3`](https://huggingface.co/jinaai/jina-embeddings-v3) (nano retrieval variant, quantized). A late-interaction embedding model trained specifically for retrieval tasks on code and technical content. Unlike general-purpose sentence transformers, it produces embeddings optimized for asymmetric search where the query is short and the document is a code block.
-- **Reranker:** [`jinaai/jina-reranker-v2-base-multilingual`](https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual). A cross-encoder that scores query-document pairs directly rather than comparing pre-computed embeddings. This is the component that makes the biggest difference on ambiguous queries: it sees the full context of both the query and the candidate chunk, catching semantic matches that vector similarity alone would rank lower.
+- **Embeddings:** [`jinaai/jina-embeddings-v5-text-nano-retrieval`](https://huggingface.co/jinaai/jina-embeddings-v5-text-nano-retrieval) (quantized). A retrieval-focused embedding model from the Jina v5 family, designed for asymmetric search where the query is short and the document is a code block. The nano variant keeps memory usage low while retaining strong retrieval accuracy on technical content.
+- **Reranker:** [`jinaai/jina-reranker-v2-base-multilingual`](https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual) (quantized). A cross-encoder that scores query-document pairs directly rather than comparing pre-computed embeddings. This is the component that makes the biggest difference on ambiguous queries: it sees the full context of both the query and the candidate chunk, catching semantic matches that vector similarity alone would rank lower.
 
-Having both models locally means the full three-stage pipeline (BM25, vector search, rerank) runs without any external calls. Most local-first search tools ship only an embedding model and skip reranking entirely, which leaves precision on the table for anything beyond exact symbol lookups.
+Having both models locally means the full three-stage pipeline (BM25, vector search, rerank) runs without any external calls.
 
 ### Any OpenAI-Compatible Endpoint
 
