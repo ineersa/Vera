@@ -1,29 +1,27 @@
 # Vera
 
-Vera is a local-first code indexing and search tool for source trees. It combines lexical search, vector search, and reranking to return ranked code results with file paths, line ranges, symbol metadata, and JSON output that is easy to consume from scripts, editors, and coding agents.
-
-In local mode, Vera can run without any hosted Vera service: it keeps the project index in a local `.vera/` directory, caches model assets under `~/.vera/models/`, and lets agents call the CLI directly through installable skills. API mode is still available when you want to plug in your own embedding or reranking providers, but it is optional.
+Vera is a local-first code indexing and search tool for source trees. It combines lexical search, vector search, and reranking to return ranked code results with file paths, line ranges, symbol metadata, and JSON output that is easy to consume from scripts, editors, and coding agents. This is the spiritual successor to my old tool, Pampax, which I forked from someone else's vibeslop project to fix up. I learned a lot, and realized I could make something way better if I build it from the ground up, so here we are. Every design decision and feature is very intentional, I wanted this to be the very best tool for what it does, so I did the research and testing. I don't think anything else comes close. 
 
 ## Highlights
 
-- Local-first execution: no hosted Vera control plane required
-- Fully local workflow in local mode after model download and ONNX Runtime setup
-- Your project index stays on disk in the repository's local `.vera/` directory
+- Fully local; connect to any OpenAI-Compatible API (local or cloud) to use any Embedding/Reranker model you want, or automatically download Jina models to run locally via ONNX. 
 - Hybrid retrieval: BM25, vector similarity, Reciprocal Rank Fusion, and optional reranking
 - Tree-sitter parsing across 60+ languages
 - Symbol-aware chunks for functions, methods, classes, structs, and other code units
 - Structured JSON output for automation and tool integration
 - CLI-first agent workflow with installable Vera skill support instead of MCP-only integration
 - Optional MCP server for editor and assistant workflows
-- API-backed and local inference modes
 
-## Why Vera
+## Why Vera?
 
-- Better than grep when the query is about intent, not exact text. Vera combines lexical and semantic retrieval, so queries like `"authentication logic"` or `"where request validation happens"` work without knowing the exact symbol name first.
-- Better fit for private or local-only codebases. In local mode, Vera does not require a hosted Vera backend, and the repository index stays on your machine.
-- Built for coding agents, not only for humans at the terminal. The primary install path is `vera agent install`, which gives agents a dedicated skill bundle for the CLI instead of requiring MCP as the default integration.
-- Strong top-of-list ranking quality on the public benchmark snapshot. Vera hybrid reaches `0.6009` MRR@10 and `0.7549` Recall@10 across mixed workloads, outperforming the listed non-Vera baselines in this repository's benchmark set.
-- Incremental by default. After the initial index, `vera update .` only reprocesses changed files instead of rebuilding everything.
+I'll keep it short and simple. No silly unfounded AI drivel like "Save 80% token usage!" (although tools like this do help cut down LLM token usage). 
+
+- Better than grep when the query is about intent, not exact text. Vera combines lexical and semantic retrieval, so queries like `"authentication logic"` or `"where request validation happens"` work without knowing the exact symbol name first. This tool is meant to supplement tools like grep, not replace them. The SKILL.md instructs the agent when and how use each tool most effectively.
+- No cloud required, everything is local, with the freedom to use any model via API, or to automatically download Jina models and run them locally via ONNX.
+- Built for coding agents, and devs both. Use just the CLI yourself, integrate it however you want, or install it for your AI agent with our SKILL.md file. There's even an option to use Vera as an MCP server. 
+- Strong ranking quality on the public benchmark snapshot. Vera hybrid reaches `0.6009` MRR@10 and `0.7549` Recall@10 across mixed workloads, outperforming the listed non-Vera baselines in this repository's benchmark set. Probably the highest quality and accuracy from any tool like this. 
+- Very fast and efficient. Incremental by default. After the initial index, `vera update .` only reprocesses changed files instead of rebuilding everything.
+- Reranker support. Most tools like this don't support reranker for some reason. This was the primary reason I made the Pampax fork pre-ceding Vera. Reranking makes a big difference, even a smaller, weaker one. Especially for codebase indexing (see https://github.com/lemon07r/vecdb-bench).   
 
 ## Installation
 
@@ -92,7 +90,7 @@ vera setup --api
 
 ### Local mode
 
-Local mode is the recommended default when you want Vera to stay self-contained on your machine. Vera stores persistent config under `~/.vera/`, downloads local model assets to `~/.vera/models/`, keeps each repository index in that repo's own `.vera/` directory, and uses ONNX Runtime for on-device inference.
+Local mode is the recommended default when you want Vera to stay self-contained on your machine. Vera already stores persistent config under `~/.vera/`, but --local mode downloads local model assets to `~/.vera/models/`, keeps each repository index in that repo's own `.vera/` directory, and uses ONNX Runtime for on-device inference.
 
 What you get in local mode:
 
