@@ -110,6 +110,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify release versions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import tomllib
+          from pathlib import Path
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          expected = tag[1:] if tag.startswith("v") else tag
+
+          cargo = tomllib.loads(Path("Cargo.toml").read_text())["workspace"]["package"]["version"]
+          npm = json.loads(Path("packages/npm-cli/package.json").read_text())["version"]
+          pyproject = tomllib.loads(Path("packages/python-cli/pyproject.toml").read_text())["project"]["version"]
+
+          versions = {
+              "cargo": cargo,
+              "npm": npm,
+              "python": pyproject,
+          }
+
+          for name, value in versions.items():
+              if value != expected:
+                  raise SystemExit(f"{name} version {value} does not match tag {expected}")
+          PY
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -126,6 +153,11 @@ jobs:
           cat *.sha256 > checksums-sha256.txt
           ls -la
 
+      - name: Generate release manifest
+        shell: bash
+        run: |
+          python3 scripts/generate_release_manifest.py release "${GITHUB_REF_NAME}" "${{ github.repository }}"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -133,3 +165,36 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+
+      - name: Set up Node.js
+        if: ${{ secrets.NPM_TOKEN != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+          scope: '@vera-ai'
+
+      - name: Publish npm wrapper
+        if: ${{ secrets.NPM_TOKEN != '' }}
+        shell: bash
+        working-directory: packages/npm-cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+      - name: Set up Python
+        if: ${{ secrets.PYPI_API_TOKEN != '' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Publish Python wrapper
+        if: ${{ secrets.PYPI_API_TOKEN != '' }}
+        shell: bash
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build packages/python-cli
+          python -m twine upload --non-interactive packages/python-cli/dist/*

@@ -7,7 +7,7 @@ description: Use Vera for semantic code search, symbol lookup, cross-file discov
 
 Use Vera as the agent-first code search tool when the task is about understanding a codebase, not just matching raw text.
 
-Make sure the `vera` CLI is available on `PATH`. The preferred install flow is `vera agent install`, then `vera setup --local`.
+Make sure the `vera` CLI is available on `PATH`. The preferred install flow is `npx -y @vera-ai/cli install`, then `vera setup`.
 
 ## When To Use Vera
 
@@ -62,7 +62,7 @@ Use the highest-ranked results first unless the query clearly needs broad covera
 
 - `no index found`: run `vera index <repo-path>`
 - results look stale after code changes: run `vera update <repo-path>`
-- local mode fails to initialize: see `references/troubleshooting.md`
+- built-in local model setup fails: see `references/troubleshooting.md`
 - API mode is missing credentials: see `references/install.md`
 - user asks for MCP specifically: see `references/mcp.md`
 

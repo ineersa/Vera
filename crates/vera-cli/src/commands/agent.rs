@@ -228,7 +228,7 @@ fn resolve_locations_with_roots(
             locations.push(SkillLocation {
                 client,
                 scope: *scope,
-                path: skill_path_for(client, *scope, &cwd, &home)?,
+                path: skill_path_for(client, *scope, cwd, home)?,
             });
         }
     }

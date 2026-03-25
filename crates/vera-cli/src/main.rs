@@ -24,10 +24,10 @@ use clap::{Parser, Subcommand};
     long_about = "Vera is a code indexing and retrieval tool for source trees. It combines \
                   BM25 full-text search with vector similarity search using Reciprocal Rank \
                   Fusion (RRF) and optional cross-encoder reranking to return ranked code \
-                  results for direct CLI use, installable agent skills, and optional MCP.\n\n\
+                  results for direct CLI use and installable agent skills. Vera always keeps \
+                  the index local in `.vera/`; `vera setup` only chooses the model backend.\n\n\
                   Quick start:\n  \
-                  vera agent install    # Install the Vera skill for supported agents\n  \
-                  vera setup --local    # Prefer local inference and bootstrap defaults\n  \
+                  vera setup            # Download built-in local models\n  \
                   vera index .          # Index current directory\n  \
                   vera search \"auth\"    # Search for authentication code\n  \
                   vera doctor           # Check local setup and index health",
@@ -98,22 +98,24 @@ enum Commands {
         scope: commands::agent::AgentScope,
     },
 
-    /// Persist a preferred Vera mode and bootstrap first-run state.
+    /// Persist a preferred model backend and bootstrap first-run state.
     ///
-    /// By default this configures Vera for local mode, downloads the default
-    /// local model assets, and optionally indexes a repository immediately.
+    /// By default this downloads the built-in local model assets and optionally
+    /// indexes a repository immediately.
     #[command(
-        long_about = "Persist a preferred Vera mode and bootstrap first-run state.\n\n\
-                      By default `vera setup` configures Vera for local mode. Use \
-                      `--api` to persist API credentials from the current shell \
-                      environment instead.\n\n\
+        long_about = "Persist a preferred model backend and bootstrap first-run state.\n\n\
+                      By default `vera setup` downloads Vera's built-in local models. Use \
+                      `--api` to persist OpenAI-compatible endpoint credentials from the \
+                      current shell environment instead.\n\n\
+                      Vera always keeps the index local in `.vera/`. The choice here only \
+                      changes where embeddings and reranking are computed.\n\n\
                       Examples:\n  \
-                      vera setup --local               # Prefer local inference\n  \
-                      vera setup --local --index .     # Configure local mode and index cwd\n  \
+                      vera setup                       # Download built-in local models\n  \
+                      vera setup --index .             # Configure defaults and index cwd\n  \
                       vera setup --api                 # Persist API credentials from env"
     )]
     Setup {
-        /// Configure Vera for local inference mode.
+        /// Configure Vera for built-in local inference.
         #[arg(long, conflicts_with = "api")]
         local: bool,
         /// Configure Vera for API-backed mode using current env vars.
@@ -157,8 +159,8 @@ enum Commands {
                       tree-sitter for 60+ languages, creates searchable chunks at symbol \
                       boundaries, generates embeddings using the current Vera mode, and \
                       stores everything in a local `.vera/` index directory.\n\n\
-                      Use `vera setup --local` for the default local path, or configure \
-                      API mode with `vera setup --api`.\n\n\
+                      Use `vera setup` for Vera's built-in local models, or `vera setup \
+                      --api` for an OpenAI-compatible endpoint.\n\n\
                       Examples:\n  \
                       vera index .                  # Index current directory\n  \
                       vera index /path/to/repo      # Index a specific repo\n  \

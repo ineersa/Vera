@@ -14,6 +14,16 @@ Use MCP only when:
 
 ## Start The Server
 
+Wrapper-based commands:
+
+```sh
+npx -y @vera-ai/cli mcp
+bunx @vera-ai/cli mcp
+uvx vera-ai mcp
+```
+
+If Vera is already installed on `PATH`:
+
 ```sh
 vera mcp
 ```

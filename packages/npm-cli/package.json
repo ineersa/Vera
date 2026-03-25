@@ -1,0 +1,28 @@
+{
+  "name": "@vera-ai/cli",
+  "version": "0.1.0",
+  "description": "Bootstrap installer and wrapper for the Vera CLI",
+  "license": "MIT",
+  "homepage": "https://github.com/lemon07r/Vera#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lemon07r/Vera.git",
+    "directory": "packages/npm-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/lemon07r/Vera/issues"
+  },
+  "bin": "./bin/vera.js",
+  "files": [
+    "bin/vera.js"
+  ],
+  "keywords": [
+    "vera",
+    "cli",
+    "code-search",
+    "agents"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

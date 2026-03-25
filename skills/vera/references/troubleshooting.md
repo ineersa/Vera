@@ -43,7 +43,7 @@ Common causes:
 Helpful commands:
 
 ```sh
-vera setup --local
+vera setup
 vera doctor
 ```
 

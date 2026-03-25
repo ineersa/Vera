@@ -2,63 +2,49 @@
 
 Vera is designed to be used through the CLI, with the Vera skill installed into the user's coding agent.
 
-## Contents
-
-- Preferred Flow
-- Local Mode
-- API Mode
-- Agent Install Locations
-- Diagnostics
-
 ## Preferred Flow
 
-1. Install the Vera skill:
+Install Vera and the skill in one step:
 
 ```sh
-vera agent install
+npx -y @vera-ai/cli install
+bunx @vera-ai/cli install
+uvx vera-ai install
 ```
 
-2. Configure Vera:
+Then bootstrap Vera, index the current repository, and search:
 
 ```sh
-vera setup --local
-```
-
-3. Index the current repository:
-
-```sh
+vera setup
 vera index .
-```
-
-4. Search:
-
-```sh
 vera search "authentication logic"
 ```
 
-## Local Mode
+The wrapper install downloads the correct Vera binary, installs a persistent `vera` command, and runs `vera agent install`.
 
-Local mode is the default setup path.
+## Built-In Local Models
+
+`vera setup` is the default path. It downloads the local ONNX models into `~/.vera/models/`.
 
 ```sh
-vera setup --local
+vera setup
 ```
 
 Notes:
 
-- Vera downloads local model files into `~/.vera/models/`
-- ONNX Runtime still needs to be available for local inference
-- `vera doctor` will tell you if runtime setup is incomplete
+- Vera keeps the repo index local in `.vera/`
+- `vera setup` only chooses the built-in local model backend
+- `vera doctor` will tell you if ONNX Runtime or model setup is incomplete
 
 You can configure and index in one step:
 
 ```sh
-vera setup --local --index .
+vera setup --index .
 ```
 
-## API Mode
+## OpenAI-Compatible Endpoints
 
-Use API mode only when the environment already has working embedding credentials or the user explicitly wants that setup.
+Use `vera setup --api` when you already have embedding credentials or want to point Vera at a local OpenAI-compatible server.
 
 Set these first:
 
@@ -82,23 +68,39 @@ Then persist them:
 vera setup --api
 ```
 
-## Agent Install Locations
+If those endpoints are local, the full setup stays local. If they are remote, only the model calls leave your machine.
 
-`vera agent install` writes the canonical `vera` skill into known skill directories for:
+## Manual Skill Management
 
-- Claude Code
-- Codex
-- GitHub Copilot CLI
-- Cursor
-- Kiro
+If `vera` is already on `PATH`, you can install or refresh the skill manually:
+
+```sh
+vera agent install
+vera agent status --scope all
+```
 
 Useful variants:
 
 ```sh
 vera agent install --client codex
 vera agent install --scope project
-vera agent status --scope all
 vera agent remove --client claude
+```
+
+## Optional MCP Path
+
+Use MCP only when the client explicitly requires it:
+
+```sh
+npx -y @vera-ai/cli mcp
+bunx @vera-ai/cli mcp
+uvx vera-ai mcp
+```
+
+If Vera is already installed locally:
+
+```sh
+vera mcp
 ```
 
 ## Diagnostics

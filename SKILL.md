@@ -6,7 +6,7 @@ If you are reading this repository directly instead of installing the skill bund
 
 - Use Vera for semantic code search, symbol lookup, cross-file discovery, and ranked code context.
 - Use `rg` for exact literal search, regex search, and bulk text work.
-- Prefer the CLI path first: `vera agent install`, then `vera setup --local`, then `vera index .`.
+- Prefer the CLI path first: `npx -y @vera-ai/cli install`, then `vera setup`, then `vera index .`.
 - Treat `vera mcp` as optional, not the default integration path.
 
 Canonical references:
