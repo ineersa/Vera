@@ -6,6 +6,21 @@ Vera is a code search tool built in Rust that combines BM25 keyword matching, ve
 
 Every decision made is intentional, with ample research, testing, analysis, benchmarking and evaluation for each one. I made this to succeed my fork, Pampax, which was an attempt to fix up someone else's vibeslop project because I couldnt find any other tools like it, that actually supported model/provider-agnostic reranking. I learned a lot from that project and realized I could make something way better if I built it from scratch. I've tested and tried a lot of agents and tools, and knew exactly what I wanted from this one. I made it to be the very best at what it does.  
 
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Why Vera is Better](#why-vera-is-better)
+- [Features](#features)
+- [Installation](#installation)
+- [Model Backend](#model-backend)
+- [Usage](#usage)
+- [Benchmark Snapshot](#benchmark-snapshot)
+- [Supported Languages](#supported-languages)
+- [How It Works](#how-it-works)
+- [Contributing](#contributing)
+
+**Docs:** [Query Guide](docs/query-guide.md) · [Troubleshooting](docs/troubleshooting.md) · [How It Works](docs/how-it-works.md) · [Supported Languages](docs/supported-languages.md)
+
 ## Quick Start
 
 ```bash
