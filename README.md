@@ -34,11 +34,11 @@ Most code indexing tools retrieve candidates and stop there. Vera adds a cross-e
 
 ### Zero-dependency, single binary
 
-Vera ships as one static binary with all 60+ language grammars compiled in via tree-sitter. No Python runtime, no language servers, no per-language toolchains to install or manage. Drop the binary on any machine, run `vera setup`, and the full search pipeline is ready. Compare that to tools like Serena that require Python, uv, and separate LSP server installations for each language you want to work with.
+Vera ships as one static binary with all 60+ language grammars compiled in via tree-sitter. No Python runtime, no language servers, no per-language toolchains to install or manage. Drop the binary on any machine, run `vera setup`, and the full search pipeline is ready. Tools like Serena require a Python runtime and uv just to start, plus separate LSP dependencies for some languages. Vera has zero external dependencies.
 
-### Benchmarked against real workloads
+### High accuracy, proven on real codebases
 
-17 tasks across three real codebases (ripgrep, flask, fastify). Vera's hybrid pipeline scores 0.80 nDCG@10 and 0.75 Recall@10 against grep-based and embedding-only baselines. Full methodology: [docs/benchmarks.md](docs/benchmarks.md).
+17 tasks across three real codebases (ripgrep, flask, fastify). Vera's hybrid pipeline scores 0.80 nDCG@10 and 0.75 Recall@10 against grep-based and embedding-only baselines. See [Benchmark Snapshot](#benchmark-snapshot) for the full breakdown.
 
 ## Features
 
