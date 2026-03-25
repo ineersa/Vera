@@ -1,18 +1,34 @@
 # Vera
 
-Vera is a fully local code indexing and retrieval tool for source trees. It keeps each repository index in that repository's own `.vera/` directory, returns ranked code results with file paths, line ranges, symbol metadata, and JSON output, and is designed to work well both from the terminal and from coding agents.
+Vera is a code indexing and retrieval tool for source trees, built for coding agents and direct CLI use. It keeps each repository index in that repository's own `.vera/` directory and returns ranked, structured code results with file paths, line ranges, symbol metadata, and JSON output.
 
-Vera combines BM25 keyword search, vector search, Reciprocal Rank Fusion (RRF), and optional reranking. You can use Vera's built-in local ONNX models, or point it at any OpenAI-compatible endpoint (local or remote). The indexing, storage, and search pipeline stay local on your machine; the only thing that changes is where embeddings and reranking are computed.
+Vera combines BM25 keyword search, vector search, Reciprocal Rank Fusion (RRF), and optional reranking. It can run with built-in local ONNX models or any OpenAI-compatible embedding and reranker endpoints. Vera itself does not depend on a hosted Vera service, and every repo keeps its own local index.
 
 ## Why Vera?
 
-- Local by design. Vera stores each repo index in `.vera/`, keeps user config under `~/.vera/`, and does not depend on any hosted Vera service.
-- Higher-quality built-in local defaults. Vera's built-in local path uses a retrieval-tuned embedding model plus a dedicated reranker, not just a single local embedding model, so local search keeps the same hybrid ranking shape Vera is built around.
-- Better than grep for intent-heavy search. Queries like `"authentication logic"` or `"where request validation happens"` work without needing the exact symbol name first. Vera is meant to complement tools like `rg`, not replace them, and comes with SKILL files so your agents know how and when to best use Vera alongside other tools.
-- Built for coding agents and direct CLI use. Vera has structured JSON output, an installable skill, and a CLI workflow that agents can call directly.
-- Strong ranking quality on the [public benchmark snapshot](#benchmark-snapshot). Vera hybrid reaches `0.6009` MRR@10 and `0.7549` Recall@10 across the public benchmark set; see [docs/benchmarks.md](docs/benchmarks.md) for details and caveats.
-- Tree-sitter parsing across 60+ languages, with symbol-aware chunks for functions, methods, classes, structs, and other code units.
-- Flexible model backends. Use Vera's built-in local models, or connect to any OpenAI-compatible embedding and reranker endpoints, including self-hosted ones.
+### Fully Local By Design
+
+Vera stores each repo index in `.vera/`, keeps user config under `~/.vera/`, and does not depend on any hosted Vera service. The only configurable part is the model backend: you can use Vera's built-in local models, point it at your own local OpenAI-compatible endpoint, or use a remote endpoint if you want to.
+
+### Stronger Search For Real Code Questions
+
+`rg` is still the right tool for exact strings and regex. Vera is for intent-heavy queries like `"authentication logic"` or `"where request validation happens"`, where you want ranked, cross-file, symbol-aware results instead of raw text matches.
+
+### High-Quality Built-In Local Models
+
+Vera's built-in local stack is not a throwaway fallback. It uses a modern retrieval-specific embedding model plus a dedicated reranker, so local search keeps the same hybrid ranking shape Vera is built around instead of dropping down to a single lightweight embedding model.
+
+### Structured, Code-Aware Results
+
+Vera parses 60+ languages with tree-sitter and returns structured results with file paths, line ranges, content, scores, and symbol metadata. That makes it useful both for humans in the terminal and for agents that need machine-readable code context.
+
+### Built For Agents
+
+Vera has structured JSON output, a CLI workflow agents can call directly, and an installable skill so agents know when to use Vera versus exact-match tools.
+
+### Benchmark-Backed Ranking
+
+On the [public benchmark snapshot](#benchmark-snapshot), Vera hybrid reaches `0.6009` MRR@10 and `0.7549` Recall@10 across mixed symbol lookup, intent search, cross-file discovery, config lookup, and disambiguation tasks. See [docs/benchmarks.md](docs/benchmarks.md) for details and caveats.
 
 ## Installation
 
@@ -110,8 +126,9 @@ Vera's built-in local stack currently uses:
 Why these models:
 
 - They match Vera's actual retrieval pipeline. Vera is not just "embed everything and cosine-search it" - it combines BM25, vector retrieval, RRF fusion, and reranking, so the local default uses both a retrieval-focused embedding model and a dedicated reranker.
+- They are modern, high-quality local defaults chosen for quality per size rather than just minimum footprint.
 - They are quantized ONNX assets, which makes them practical to cache under `~/.vera/models/` and run locally without a hosted Vera service.
-- The reranker materially improves ambiguous and intent-heavy queries after the first retrieval pass. That is usually a stronger local setup than tools that only ship a single lightweight embedding model for their local mode.
+- The reranker materially improves ambiguous and intent-heavy queries after the first retrieval pass. That gives Vera a stronger built-in local stack than tools that only ship a single lightweight embedding model for their local mode.
 
 ```bash
 vera setup
