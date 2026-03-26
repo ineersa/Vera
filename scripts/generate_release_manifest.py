@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -10,15 +11,6 @@ from pathlib import Path
 
 
 ARCHIVE_RE = re.compile(r"^vera-(?P<target>.+)\.(?P<extension>tar\.gz|zip)$")
-
-
-def load_checksum(path: Path) -> str:
-    sha_path = path.with_name(f"{path.name}.sha256")
-    contents = sha_path.read_text(encoding="utf-8").strip()
-    checksum = contents.split()[0]
-    if not checksum:
-        raise ValueError(f"missing checksum in {sha_path}")
-    return checksum
 
 
 def build_manifest(release_dir: Path, tag: str, repo: str) -> dict[str, object]:
@@ -30,7 +22,7 @@ def build_manifest(release_dir: Path, tag: str, repo: str) -> dict[str, object]:
             continue
 
         target = match.group("target")
-        checksum = load_checksum(archive_path)
+        checksum = hashlib.sha256(archive_path.read_bytes()).hexdigest()
         assets[target] = {
             "archive": archive_path.name,
             "download_url": f"https://github.com/{repo}/releases/download/{tag}/{archive_path.name}",
