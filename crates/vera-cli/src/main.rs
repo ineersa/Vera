@@ -98,6 +98,19 @@ enum Commands {
         scope: commands::agent::AgentScope,
     },
 
+    /// Remove Vera: binary, models, config, agent skills, and PATH shim.
+    ///
+    /// Per-project indexes (.vera/) are not removed.
+    #[command(
+        long_about = "Remove Vera: binary cache, models, ONNX Runtime libs, config, \n\
+                      credentials, agent skill files, and the PATH shim.\n\n\
+                      Per-project indexes (.vera/ inside each project) are not touched.\n\n\
+                      Examples:\n  \
+                      vera uninstall\n  \
+                      vera uninstall --json"
+    )]
+    Uninstall,
+
     /// Persist a preferred model backend and bootstrap first-run state.
     ///
     /// By default this downloads the built-in local model assets and optionally
@@ -413,6 +426,10 @@ fn main() {
                 None
             };
             commands::setup::run(backend, api, index, cli.json, yes)
+        }
+        Commands::Uninstall => {
+            tracing::info!("uninstall command");
+            commands::uninstall::run(cli.json)
         }
         Commands::Doctor => {
             tracing::info!("doctor command");

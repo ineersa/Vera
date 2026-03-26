@@ -219,6 +219,14 @@ vera agent install             # install skill files for AI agents
 vera agent status --scope all  # check skill installation status
 ```
 
+Uninstall Vera and all its data:
+
+```bash
+vera uninstall
+```
+
+This removes `~/.vera/` (binary cache, models, ONNX Runtime libs, config), agent skill files, and the PATH shim. Per-project indexes (`.vera/` inside each project) are left in place — delete them manually if needed.
+
 If something isn't working, see [troubleshooting](docs/troubleshooting.md).
 
 The skill file at [skills/vera/SKILL.md](skills/vera/SKILL.md) teaches AI agents how to use Vera effectively. If you're an AI agent reading this repo directly, start with [AGENT-USAGE.md](AGENT-USAGE.md).

@@ -11,4 +11,5 @@ pub mod mcp;
 pub mod search;
 pub mod setup;
 pub mod stats;
+pub mod uninstall;
 pub mod update;
