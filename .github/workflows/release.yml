@@ -60,12 +60,14 @@ jobs:
         if: matrix.use_cross
         run: cargo install cross --locked
 
-      - name: Set MSVC CRT flags
+      - name: Set MSVC build flags
         if: runner.os == 'Windows'
         shell: bash
         run: |
           echo "CFLAGS=/MD" >> "$GITHUB_ENV"
           echo "CXXFLAGS=/MD" >> "$GITHUB_ENV"
+          echo "CC=cl" >> "$GITHUB_ENV"
+          echo "CXX=cl" >> "$GITHUB_ENV"
 
       - name: Build (native)
         if: ${{ !matrix.use_cross }}
@@ -183,7 +185,7 @@ jobs:
           done
 
           # Other notable commits (chore, refactor, docs — skip pure docs-only releases)
-          other=$(git log --oneline "$RANGE" --format="%s" 2>/dev/null | grep -vE "^(feat|fix|perf)" | grep -E "^(refactor|chore|build|ci)" | sed 's/^\([a-z]*\)(\([^)]*\)): /- **\2:** /;s/^\([a-z]*\): /- /' )
+          other=$(git log --oneline "$RANGE" --format="%s" 2>/dev/null | grep -vE "^(feat|fix|perf)" | grep -E "^(refactor|chore|build|ci)" | sed 's/^\([a-z]*\)(\([^)]*\)): /- **\2:** /;s/^\([a-z]*\): /- /' || true)
           if [ -n "$other" ]; then
             BODY="${BODY}### Other Changes\n${other}\n\n"
           fi

@@ -323,7 +323,6 @@ fn main() {
         .with_writer(std::io::stderr)
         .init();
 
-    vera_core::init_tls();
     let cli = Cli::parse();
     if let Err(err) = state::apply_saved_env() {
         eprintln!("Error: {err:#}");
