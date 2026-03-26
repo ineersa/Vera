@@ -1,0 +1,72 @@
+# Architecture
+
+## Workspace Crates
+
+| Crate | Purpose | Entry point |
+|-------|---------|-------------|
+| `vera-core` | Parsing, indexing, storage, embedding, retrieval | `lib.rs` |
+| `vera-cli` | CLI (clap derive macros) | `main.rs` |
+| `vera-mcp` | MCP server (JSON-RPC over stdio) | `server.rs` |
+| `eval` | Benchmark harness and metrics | `src/main.rs` |
+| `tree-sitter-{sql,proto,vue,dockerfile,astro}` | Vendored C grammars (built via `cc`) | `build.rs` |
+
+## vera-core modules
+
+### `parsing/` — Language parsing & symbol extraction
+
+Files: `mod.rs` (public API), `languages.rs` (grammar dispatch), `extractor.rs` (AST node → SymbolType), `chunker.rs` (symbol-aware chunking).
+
+Data flow: file → grammar lookup → tree-sitter parse → node classification → chunk production.
+
+### `embedding/` — Embedding generation
+
+`EmbeddingProvider` trait with two implementations:
+- `ApiEmbeddingProvider` — HTTP calls to OpenAI-compatible endpoints
+- `LocalEmbeddingProvider` — ONNX Runtime inference with Jina v5 nano
+
+`DynamicProvider` dispatches between them at runtime based on `--local` flag.
+
+### `retrieval/` — Search pipeline
+
+1. Query enters `search_service.rs`
+2. BM25 (`bm25.rs`) and vector search (`vector.rs`) run in parallel
+3. Results fused via RRF (`hybrid.rs`, k=60)
+4. Top 30 candidates reranked by cross-encoder (`reranker.rs` or `local_reranker.rs`)
+5. Final `Vec<SearchResult>` returned
+
+### `storage/` — Persistent storage
+
+- `metadata.rs` — SQLite: chunk metadata, file paths, content hashes
+- `bm25.rs` — Tantivy: full-text BM25 index
+- `vector.rs` — sqlite-vec: embedding vectors
+
+All stored in `.vera/` at the project root.
+
+### `indexing/` — Index build & update
+
+- `pipeline.rs` — Full build: discover → parse → chunk → embed → store
+- `update.rs` — Incremental: hash-based change detection, re-process only modified files
+
+### Other modules
+
+- `types.rs` — `Language` enum (60+ variants), `SearchResult`, `CodeChunk`, `SymbolType`
+- `config.rs` — `RetrievalConfig`, `IndexConfig` defaults
+- `local_models.rs` — Downloads ONNX models and ORT runtime to `~/.vera/`
+- `discovery/` — File discovery with gitignore support, binary/size filtering
+
+## vera-cli
+
+`main.rs` parses args via clap, `commands/` has one file per subcommand: `index`, `search`, `update`, `stats`, `config`, `setup`, `doctor`, `mcp`.
+
+## vera-mcp
+
+`server.rs` routes JSON-RPC requests. `tools.rs` implements four MCP tools: `search_code`, `index_project`, `update_project`, `get_stats`.
+
+## Adding a new language
+
+1. Add `Language` variant in `types.rs` (alphabetical order)
+2. Add extension mapping in `Language::from_extension()`
+3. Add grammar dependency to `vera-core/Cargo.toml`
+4. Wire grammar in `parsing/languages.rs` → `tree_sitter_grammar()`
+5. Add node classifier in `parsing/extractor.rs` → `classify_node()`
+6. Write tests: extension mapping, grammar loading, symbol extraction
