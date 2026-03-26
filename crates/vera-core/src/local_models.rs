@@ -107,32 +107,55 @@ fn ort_lib_filename() -> String {
     }
 }
 
-/// Platform-specific ORT archive info: (archive_name, lib_path_inside_archive, local_lib_name).
-fn ort_platform_info() -> Result<(&'static str, String, String, &'static str)> {
-    // Returns (archive_ext, archive_name, lib_path_in_archive, local_lib_name)
+use crate::config::OnnxExecutionProvider;
+
+/// Platform-specific ORT archive info: (archive_ext, archive_name, lib_path_inside_archive, local_lib_name).
+fn ort_platform_info(ep: OnnxExecutionProvider) -> Result<(&'static str, String, String, &'static str)> {
+    let gpu_suffix = match ep {
+        OnnxExecutionProvider::Cpu => "",
+        OnnxExecutionProvider::Cuda => "-gpu",
+        OnnxExecutionProvider::Rocm => "-rocm",  // only linux x86_64
+        OnnxExecutionProvider::DirectMl => "-directml",  // only windows x86_64
+    };
+
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        let base = format!("onnxruntime-linux-x64-{ORT_VERSION}");
+        if matches!(ep, OnnxExecutionProvider::DirectMl) {
+            anyhow::bail!("DirectML is only supported on Windows");
+        }
+        let base = format!("onnxruntime-linux-x64{gpu_suffix}-{ORT_VERSION}");
         Ok(("tgz", base.clone(), format!("{base}/lib/libonnxruntime.so.{ORT_VERSION}"), "libonnxruntime.so"))
     }
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
     {
+        if !matches!(ep, OnnxExecutionProvider::Cpu) {
+            anyhow::bail!("Only CPU execution provider is supported on Linux aarch64");
+        }
         let base = format!("onnxruntime-linux-aarch64-{ORT_VERSION}");
         Ok(("tgz", base.clone(), format!("{base}/lib/libonnxruntime.so.{ORT_VERSION}"), "libonnxruntime.so"))
     }
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
+        if !matches!(ep, OnnxExecutionProvider::Cpu) {
+            anyhow::bail!("Only CPU execution provider is supported on macOS ARM. CoreML support may be added in the future.");
+        }
         let base = format!("onnxruntime-osx-arm64-{ORT_VERSION}");
         Ok(("tgz", base.clone(), format!("{base}/lib/libonnxruntime.{ORT_VERSION}.dylib"), "libonnxruntime.dylib"))
     }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     {
+        if !matches!(ep, OnnxExecutionProvider::Cpu) {
+            anyhow::bail!("Only CPU execution provider is supported on macOS x86_64");
+        }
         let base = format!("onnxruntime-osx-x86_64-{ORT_VERSION}");
         Ok(("tgz", base.clone(), format!("{base}/lib/libonnxruntime.{ORT_VERSION}.dylib"), "libonnxruntime.dylib"))
     }
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
-        let base = format!("onnxruntime-win-x64-{ORT_VERSION}");
+        if matches!(ep, OnnxExecutionProvider::Rocm) {
+            anyhow::bail!("ROCm is only supported on Linux");
+        }
+        let base = format!("onnxruntime-win-x64{gpu_suffix}-{ORT_VERSION}");
         Ok(("zip", base.clone(), format!("{base}/lib/onnxruntime.dll"), "onnxruntime.dll"))
     }
     #[cfg(not(any(
@@ -143,6 +166,7 @@ fn ort_platform_info() -> Result<(&'static str, String, String, &'static str)> {
         all(target_os = "windows", target_arch = "x86_64"),
     )))]
     {
+        let _ = (ep, gpu_suffix);
         anyhow::bail!(
             "Unsupported platform for automatic ONNX Runtime download. \
              Install ONNX Runtime manually and set ORT_DYLIB_PATH."
@@ -154,15 +178,21 @@ fn ort_platform_info() -> Result<(&'static str, String, String, &'static str)> {
 ///
 /// Returns the path to the library. Downloads it automatically if needed.
 /// Respects `ORT_DYLIB_PATH` — if set, skips auto-download.
-pub async fn ensure_ort_library() -> Result<PathBuf> {
+/// GPU execution providers download a different (larger) ORT build.
+pub async fn ensure_ort_library_for_ep(ep: OnnxExecutionProvider) -> Result<PathBuf> {
     if let Ok(path) = std::env::var("ORT_DYLIB_PATH") {
         if !path.is_empty() {
             return Ok(PathBuf::from(path));
         }
     }
 
-    let lib_dir = vera_home_dir()?.join("lib");
-    let (ext, archive_name, lib_path_in_archive, local_lib_name) = ort_platform_info()?;
+    // Store GPU variants in separate subdirectories to avoid conflicts.
+    let lib_dir = if ep == OnnxExecutionProvider::Cpu {
+        vera_home_dir()?.join("lib")
+    } else {
+        vera_home_dir()?.join("lib").join(ep.to_string())
+    };
+    let (ext, archive_name, lib_path_in_archive, local_lib_name) = ort_platform_info(ep)?;
     let target_path = lib_dir.join(local_lib_name);
 
     if target_path.exists() {
@@ -373,16 +403,26 @@ pub async fn ensure_model_file(repo_id: &str, file_path: &str) -> Result<PathBuf
     ensure_model_file_impl(repo_id, file_path, HUB_URL, None).await
 }
 
+/// CPU-only convenience wrapper (backwards compat).
+pub async fn ensure_ort_library() -> Result<PathBuf> {
+    ensure_ort_library_for_ep(OnnxExecutionProvider::Cpu).await
+}
+
 /// Download the default local embedding and reranker assets, plus the ORT library.
-pub async fn prefetch_default_local_models() -> Result<Vec<PathBuf>> {
+pub async fn prefetch_default_local_models_for_ep(ep: OnnxExecutionProvider) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
-    paths.push(ensure_ort_library().await?);
+    paths.push(ensure_ort_library_for_ep(ep).await?);
     paths.push(ensure_model_file(EMBEDDING_REPO, EMBEDDING_ONNX_FILE).await?);
     paths.push(ensure_model_file(EMBEDDING_REPO, EMBEDDING_ONNX_DATA_FILE).await?);
     paths.push(ensure_model_file(EMBEDDING_REPO, EMBEDDING_TOKENIZER_FILE).await?);
     paths.push(ensure_model_file(RERANKER_REPO, RERANKER_ONNX_FILE).await?);
     paths.push(ensure_model_file(RERANKER_REPO, RERANKER_TOKENIZER_FILE).await?);
     Ok(paths)
+}
+
+/// CPU-only convenience wrapper (backwards compat).
+pub async fn prefetch_default_local_models() -> Result<Vec<PathBuf>> {
+    prefetch_default_local_models_for_ep(OnnxExecutionProvider::Cpu).await
 }
 
 /// Inspect the default local assets without downloading anything.

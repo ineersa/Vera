@@ -1,3 +1,4 @@
+use crate::config::OnnxExecutionProvider;
 use crate::embedding::provider::{EmbeddingError, EmbeddingProvider};
 use crate::local_models::ensure_model_file;
 use anyhow::Result;
@@ -19,8 +20,8 @@ pub struct LocalEmbeddingProvider {
 }
 
 impl LocalEmbeddingProvider {
-    pub async fn new() -> Result<Self, EmbeddingError> {
-        let ort_path = crate::local_models::ensure_ort_library()
+    pub async fn new_with_ep(ep: OnnxExecutionProvider) -> Result<Self, EmbeddingError> {
+        let ort_path = crate::local_models::ensure_ort_library_for_ep(ep)
             .await
             .map_err(|e| EmbeddingError::ApiError {
                 status: 500,
@@ -79,10 +80,11 @@ impl LocalEmbeddingProvider {
             let threads = std::thread::available_parallelism()
                 .map(|n| n.get().min(4))
                 .unwrap_or(1);
-            ort::session::builder::SessionBuilder::new()?
+            let builder = ort::session::builder::SessionBuilder::new()?
                 .with_optimization_level(GraphOptimizationLevel::Level3)?
-                .with_intra_threads(threads)?
-                .commit_from_file(onnx_path)
+                .with_intra_threads(threads)?;
+            let builder = register_execution_provider(builder, ep)?;
+            builder.commit_from_file(onnx_path)
         })
         .await
         .map_err(|e| EmbeddingError::ApiError {
@@ -231,6 +233,25 @@ impl EmbeddingProvider for LocalEmbeddingProvider {
     }
 }
 
+/// Register the appropriate ONNX execution provider on a session builder.
+fn register_execution_provider(
+    builder: ort::session::builder::SessionBuilder,
+    ep: OnnxExecutionProvider,
+) -> ort::Result<ort::session::builder::SessionBuilder> {
+    match ep {
+        OnnxExecutionProvider::Cpu => Ok(builder),
+        OnnxExecutionProvider::Cuda => {
+            builder.with_execution_providers([ort::execution_providers::CUDAExecutionProvider::default().build()])
+        }
+        OnnxExecutionProvider::Rocm => {
+            builder.with_execution_providers([ort::execution_providers::ROCmExecutionProvider::default().build()])
+        }
+        OnnxExecutionProvider::DirectMl => {
+            builder.with_execution_providers([ort::execution_providers::DirectMLExecutionProvider::default().build()])
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,7 +264,7 @@ mod tests {
             return;
         }
         // Since test downloads ~150MB, this could take a moment.
-        let provider = LocalEmbeddingProvider::new().await.unwrap();
+        let provider = LocalEmbeddingProvider::new_with_ep(OnnxExecutionProvider::Cpu).await.unwrap();
         let texts = vec!["Hello world".to_string(), "Another test".to_string()];
         let embeddings = provider.embed_batch(&texts).await.unwrap();
         assert_eq!(embeddings.len(), 2);

@@ -8,7 +8,7 @@ use std::path::Path;
 use anyhow::Result;
 use tracing::warn;
 
-use crate::config::VeraConfig;
+use crate::config::{InferenceBackend, VeraConfig};
 use crate::retrieval::hybrid::compute_vector_candidates;
 use crate::retrieval::query_classifier::{classify_query, params_for_query_type};
 use crate::retrieval::{apply_filters, search_bm25, search_hybrid, search_hybrid_reranked};
@@ -24,17 +24,17 @@ pub fn execute_search(
     config: &VeraConfig,
     filters: &SearchFilters,
     result_limit: usize,
-    is_local: bool,
+    backend: InferenceBackend,
 ) -> Result<Vec<SearchResult>> {
     let fetch_limit = compute_fetch_limit(filters, result_limit);
     let rt = tokio::runtime::Runtime::new()?;
 
     // Try to create embedding provider for hybrid search.
     let (provider, model_name) =
-        match rt.block_on(crate::embedding::create_dynamic_provider(config, is_local)) {
+        match rt.block_on(crate::embedding::create_dynamic_provider(config, backend)) {
             Ok(res) => res,
             Err(e) => {
-                if is_local {
+                if backend.is_local() {
                     anyhow::bail!("{}", e);
                 }
                 warn!(
@@ -85,7 +85,7 @@ pub fn execute_search(
 
     // Create optional reranker.
     let reranker = rt
-        .block_on(crate::retrieval::create_dynamic_reranker(config, is_local))
+        .block_on(crate::retrieval::create_dynamic_reranker(config, backend))
         .unwrap_or_else(|e| {
             warn!("Failed to create reranker ({})", e);
             None
@@ -164,7 +164,7 @@ mod tests {
 
         // This will attempt to create local provider and should fail at mismatch
         {
-            let res = execute_search(index_dir, "test", &config, &filters, 10, true);
+            let res = execute_search(index_dir, "test", &config, &filters, 10, crate::config::InferenceBackend::OnnxJina(crate::config::OnnxExecutionProvider::Cpu));
             assert!(res.is_err());
             let err_msg = res.unwrap_err().to_string();
             // With load-dynamic ort, if ONNX Runtime is not present the error will be
@@ -196,7 +196,7 @@ mod tests {
         // It will pass the metadata check (model_name matches), skip mismatch check (expected_dim is None),
         // infer stored_dim = 123, and proceed to search.
         // Since the index is empty, it will return Ok([]) without making network calls.
-        let res = execute_search(index_dir, "test", &config, &filters, 10, false);
+        let res = execute_search(index_dir, "test", &config, &filters, 10, crate::config::InferenceBackend::Api);
         assert!(res.is_ok(), "Expected Ok but got {:?}", res);
     }
 }

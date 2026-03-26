@@ -1,3 +1,4 @@
+use crate::config::OnnxExecutionProvider;
 use crate::local_models::ensure_model_file;
 use crate::retrieval::reranker::{RerankScore, Reranker, RerankerError};
 use anyhow::Result;
@@ -17,8 +18,8 @@ pub struct LocalReranker {
 }
 
 impl LocalReranker {
-    pub async fn new() -> Result<Self, RerankerError> {
-        let ort_path = crate::local_models::ensure_ort_library()
+    pub async fn new_with_ep(ep: OnnxExecutionProvider) -> Result<Self, RerankerError> {
+        let ort_path = crate::local_models::ensure_ort_library_for_ep(ep)
             .await
             .map_err(|e| RerankerError::ApiError {
                 status: 500,
@@ -63,10 +64,11 @@ impl LocalReranker {
             let threads = std::thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(1);
-            ort::session::builder::SessionBuilder::new()?
+            let builder = ort::session::builder::SessionBuilder::new()?
                 .with_optimization_level(GraphOptimizationLevel::Level3)?
-                .with_intra_threads(threads)?
-                .commit_from_file(onnx_path)
+                .with_intra_threads(threads)?;
+            let builder = register_execution_provider(builder, ep)?;
+            builder.commit_from_file(onnx_path)
         })
         .await
         .map_err(|e| RerankerError::ApiError {
@@ -202,6 +204,25 @@ impl Reranker for LocalReranker {
     }
 }
 
+/// Register the appropriate ONNX execution provider on a session builder.
+fn register_execution_provider(
+    builder: ort::session::builder::SessionBuilder,
+    ep: OnnxExecutionProvider,
+) -> ort::Result<ort::session::builder::SessionBuilder> {
+    match ep {
+        OnnxExecutionProvider::Cpu => Ok(builder),
+        OnnxExecutionProvider::Cuda => {
+            builder.with_execution_providers([ort::execution_providers::CUDAExecutionProvider::default().build()])
+        }
+        OnnxExecutionProvider::Rocm => {
+            builder.with_execution_providers([ort::execution_providers::ROCmExecutionProvider::default().build()])
+        }
+        OnnxExecutionProvider::DirectMl => {
+            builder.with_execution_providers([ort::execution_providers::DirectMLExecutionProvider::default().build()])
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,7 +234,7 @@ mod tests {
             eprintln!("Skipping: ONNX Runtime not available");
             return;
         }
-        let reranker = LocalReranker::new().await.unwrap();
+        let reranker = LocalReranker::new_with_ep(OnnxExecutionProvider::Cpu).await.unwrap();
         let query = "How to parse JSON".to_string();
         let docs = vec![
             "This is a random document about cars.".to_string(),

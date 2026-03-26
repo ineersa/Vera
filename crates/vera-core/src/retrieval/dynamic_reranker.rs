@@ -1,4 +1,4 @@
-use crate::config::VeraConfig;
+use crate::config::{InferenceBackend, VeraConfig};
 use crate::retrieval::local_reranker::LocalReranker;
 use crate::retrieval::reranker::{
     ApiReranker, RerankScore, Reranker, RerankerConfig, RerankerError,
@@ -26,27 +26,30 @@ impl Reranker for DynamicReranker {
 
 pub async fn create_dynamic_reranker(
     config: &VeraConfig,
-    is_local: bool,
+    backend: InferenceBackend,
 ) -> anyhow::Result<Option<DynamicReranker>> {
-    if is_local {
-        let p = LocalReranker::new()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to initialize local reranker: {e}\nHint: check network connection or manually place model at ~/.vera/models/"))?;
-        Ok(Some(DynamicReranker::Local(p)))
-    } else {
-        if !config.retrieval.reranking_enabled {
-            return Ok(None);
+    match backend {
+        InferenceBackend::OnnxJina(ep) => {
+            let p = LocalReranker::new_with_ep(ep)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to initialize local reranker: {e}\nHint: check network connection or manually place model at ~/.vera/models/"))?;
+            Ok(Some(DynamicReranker::Local(p)))
         }
-        match RerankerConfig::from_env() {
-            Ok(cfg) => {
-                let cfg = cfg
-                    .with_timeout(Duration::from_secs(30))
-                    .with_max_retries(2);
-                let p = ApiReranker::new(cfg)
-                    .map_err(|err| anyhow::anyhow!("failed to init reranker: {err}"))?;
-                Ok(Some(DynamicReranker::Api(p)))
+        InferenceBackend::Api => {
+            if !config.retrieval.reranking_enabled {
+                return Ok(None);
             }
-            Err(_) => Ok(None),
+            match RerankerConfig::from_env() {
+                Ok(cfg) => {
+                    let cfg = cfg
+                        .with_timeout(Duration::from_secs(30))
+                        .with_max_retries(2);
+                    let p = ApiReranker::new(cfg)
+                        .map_err(|err| anyhow::anyhow!("failed to init reranker: {err}"))?;
+                    Ok(Some(DynamicReranker::Api(p)))
+                }
+                Err(_) => Ok(None),
+            }
         }
     }
 }

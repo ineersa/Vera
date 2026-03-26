@@ -149,7 +149,7 @@ fn handle_search_code(args: &Value) -> ToolCallResult {
         );
     }
 
-    let is_local = vera_core::config::is_local_mode();
+    let backend = vera_core::config::resolve_backend(None);
 
     // Use the shared search service from vera-core.
     let results = match vera_core::retrieval::search_service::execute_search(
@@ -158,7 +158,7 @@ fn handle_search_code(args: &Value) -> ToolCallResult {
         &config,
         &filters,
         result_limit,
-        is_local,
+        backend,
     ) {
         Ok(r) => r,
         Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),
@@ -185,7 +185,7 @@ fn handle_index_project(args: &Value) -> ToolCallResult {
         return ToolCallResult::error(format!("Path is not a directory: {path}"));
     }
 
-    let is_local = vera_core::config::is_local_mode();
+    let backend = vera_core::config::resolve_backend(None);
 
     let config = vera_core::config::VeraConfig::default();
 
@@ -195,7 +195,7 @@ fn handle_index_project(args: &Value) -> ToolCallResult {
     };
 
     let (provider, model_name) = match rt.block_on(vera_core::embedding::create_dynamic_provider(
-        &config, is_local,
+        &config, backend,
     )) {
         Ok(res) => res,
         Err(e) => {
@@ -232,7 +232,7 @@ fn handle_update_project(args: &Value) -> ToolCallResult {
         return ToolCallResult::error(format!("Path is not a directory: {path}"));
     }
 
-    let is_local = vera_core::config::is_local_mode();
+    let backend = vera_core::config::resolve_backend(None);
 
     let config = vera_core::config::VeraConfig::default();
 
@@ -242,7 +242,7 @@ fn handle_update_project(args: &Value) -> ToolCallResult {
     };
 
     let (provider, model_name) = match rt.block_on(vera_core::embedding::create_dynamic_provider(
-        &config, is_local,
+        &config, backend,
     )) {
         Ok(res) => res,
         Err(e) => {

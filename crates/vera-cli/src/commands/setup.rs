@@ -2,13 +2,14 @@
 
 use anyhow::{Context, bail};
 use serde::Serialize;
+use vera_core::config::{InferenceBackend, OnnxExecutionProvider};
 
 use crate::commands;
 use crate::state::{self, ApiSetupInput};
 
 #[derive(Debug, Serialize)]
 struct SetupReport {
-    mode: &'static str,
+    mode: String,
     config_path: String,
     credentials_path: String,
     models_prefetched: usize,
@@ -16,19 +17,24 @@ struct SetupReport {
     indexed_path: Option<String>,
 }
 
+/// `backend`: Some(OnnxJina(..)) for local, None + api=true for API, None + api=false defaults to local CPU.
 pub fn run(
-    local: bool,
+    backend: Option<InferenceBackend>,
     api: bool,
     index_path: Option<String>,
     json_output: bool,
     yes: bool,
 ) -> anyhow::Result<()> {
-    if local && api {
-        bail!("setup mode conflict: choose either --local or --api");
-    }
+    // Resolve: explicit backend flag wins, then --api, then default to local CPU.
+    let effective_backend = if api {
+        InferenceBackend::Api
+    } else {
+        backend.unwrap_or(InferenceBackend::OnnxJina(OnnxExecutionProvider::Cpu))
+    };
 
-    let use_local = !api;
-    if !yes && !confirm(use_local, index_path.as_deref())? {
+    let use_local = effective_backend.is_local();
+
+    if !yes && !confirm(&effective_backend, index_path.as_deref())? {
         if !json_output {
             println!("Cancelled.");
         }
@@ -38,13 +44,13 @@ pub fn run(
     let mut models_prefetched = 0usize;
     let onnx_runtime_ready;
 
-    if use_local {
+    if let InferenceBackend::OnnxJina(ep) = effective_backend {
         state::save_local_mode(true)?;
         state::apply_saved_env_force()?;
 
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| anyhow::anyhow!("failed to create async runtime: {e}"))?;
-        let prefetched = rt.block_on(vera_core::local_models::prefetch_default_local_models())?;
+        let prefetched = rt.block_on(vera_core::local_models::prefetch_default_local_models_for_ep(ep))?;
         models_prefetched = prefetched.len();
         onnx_runtime_ready = vera_core::local_models::ensure_ort_runtime(None).is_ok();
     } else {
@@ -65,11 +71,11 @@ pub fn run(
     }
 
     if let Some(path) = index_path.as_deref() {
-        commands::index::execute(path, use_local)?;
+        commands::index::execute(path, effective_backend)?;
     }
 
     let report = SetupReport {
-        mode: if use_local { "local" } else { "api" },
+        mode: effective_backend.to_string(),
         config_path: state::config_path()?.display().to_string(),
         credentials_path: state::credentials_path()?.display().to_string(),
         models_prefetched,
@@ -104,9 +110,8 @@ pub fn run(
     Ok(())
 }
 
-fn confirm(use_local: bool, index_path: Option<&str>) -> anyhow::Result<bool> {
-    let mode = if use_local { "local" } else { "api" };
-    println!("This will configure Vera for {mode} mode.");
+fn confirm(backend: &InferenceBackend, index_path: Option<&str>) -> anyhow::Result<bool> {
+    println!("This will configure Vera for {backend} mode.");
     if let Some(path) = index_path {
         println!("It will also index: {path}");
     }

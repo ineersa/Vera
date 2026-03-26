@@ -1,6 +1,8 @@
 //! Configuration types and defaults for Vera's pipeline.
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::str::FromStr;
 
 /// Top-level configuration for Vera.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -101,11 +103,92 @@ impl Default for EmbeddingConfig {
     }
 }
 
-/// Check if the local inference mode is active.
+/// ONNX execution provider for local inference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OnnxExecutionProvider {
+    Cpu,
+    Cuda,
+    Rocm,
+    DirectMl,
+}
+
+impl fmt::Display for OnnxExecutionProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cpu => write!(f, "cpu"),
+            Self::Cuda => write!(f, "cuda"),
+            Self::Rocm => write!(f, "rocm"),
+            Self::DirectMl => write!(f, "directml"),
+        }
+    }
+}
+
+/// Inference backend selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InferenceBackend {
+    /// Use external OpenAI-compatible API for embeddings/reranking.
+    Api,
+    /// Use local Jina ONNX models with the specified execution provider.
+    OnnxJina(OnnxExecutionProvider),
+}
+
+impl InferenceBackend {
+    /// True if this backend uses local ONNX inference.
+    pub fn is_local(self) -> bool {
+        matches!(self, Self::OnnxJina(_))
+    }
+
+    /// Get the execution provider (only for local backends).
+    pub fn execution_provider(self) -> Option<OnnxExecutionProvider> {
+        match self {
+            Self::OnnxJina(ep) => Some(ep),
+            Self::Api => None,
+        }
+    }
+}
+
+impl fmt::Display for InferenceBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Api => write!(f, "api"),
+            Self::OnnxJina(ep) => write!(f, "onnx-jina-{ep}"),
+        }
+    }
+}
+
+impl FromStr for InferenceBackend {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "api" => Ok(Self::Api),
+            "onnx-jina-cpu" => Ok(Self::OnnxJina(OnnxExecutionProvider::Cpu)),
+            "onnx-jina-cuda" => Ok(Self::OnnxJina(OnnxExecutionProvider::Cuda)),
+            "onnx-jina-rocm" => Ok(Self::OnnxJina(OnnxExecutionProvider::Rocm)),
+            "onnx-jina-directml" => Ok(Self::OnnxJina(OnnxExecutionProvider::DirectMl)),
+            other => Err(format!("unknown backend: {other}")),
+        }
+    }
+}
+
+/// Check if the local inference mode is active (legacy env var support).
 pub fn is_local_mode() -> bool {
     std::env::var("VERA_LOCAL")
         .map(|v| v == "1" || v == "true")
         .unwrap_or(false)
+}
+
+/// Resolve the effective inference backend from a CLI flag or environment.
+pub fn resolve_backend(backend: Option<InferenceBackend>) -> InferenceBackend {
+    if let Some(b) = backend {
+        return b;
+    }
+    // Legacy: VERA_LOCAL=1 maps to onnx-jina-cpu
+    if is_local_mode() {
+        return InferenceBackend::OnnxJina(OnnxExecutionProvider::Cpu);
+    }
+    InferenceBackend::Api
 }
 
 #[cfg(test)]

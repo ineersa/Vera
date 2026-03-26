@@ -5,9 +5,27 @@ pub fn load_runtime_config() -> anyhow::Result<vera_core::config::VeraConfig> {
     crate::state::load_runtime_config()
 }
 
-/// Check if the local inference mode is active.
-pub fn is_local_mode(local_flag: bool) -> bool {
-    local_flag || vera_core::config::is_local_mode()
+/// Resolve an `InferenceBackend` from the per-command boolean flags.
+pub fn resolve_backend_flags(
+    onnx_jina_cpu: bool,
+    onnx_jina_cuda: bool,
+    onnx_jina_rocm: bool,
+    onnx_jina_directml: bool,
+    local: bool,
+) -> vera_core::config::InferenceBackend {
+    use vera_core::config::{InferenceBackend, OnnxExecutionProvider};
+    let explicit = if onnx_jina_cpu || local {
+        Some(InferenceBackend::OnnxJina(OnnxExecutionProvider::Cpu))
+    } else if onnx_jina_cuda {
+        Some(InferenceBackend::OnnxJina(OnnxExecutionProvider::Cuda))
+    } else if onnx_jina_rocm {
+        Some(InferenceBackend::OnnxJina(OnnxExecutionProvider::Rocm))
+    } else if onnx_jina_directml {
+        Some(InferenceBackend::OnnxJina(OnnxExecutionProvider::DirectMl))
+    } else {
+        None
+    };
+    vera_core::config::resolve_backend(explicit)
 }
 
 /// Output search results in human-readable or JSON format.

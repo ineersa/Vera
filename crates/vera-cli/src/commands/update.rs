@@ -3,14 +3,14 @@
 use std::path::Path;
 
 use anyhow::{Context, bail};
+use vera_core::config::InferenceBackend;
 
-use crate::helpers::{is_local_mode, load_runtime_config};
+use crate::helpers::load_runtime_config;
 
 /// Run the `vera update <path>` command.
-pub fn run(path: &str, json_output: bool, local_flag: bool) -> anyhow::Result<()> {
+pub fn run(path: &str, json_output: bool, backend: InferenceBackend) -> anyhow::Result<()> {
     let repo_path = Path::new(path);
 
-    // Validate path early.
     if !repo_path.exists() {
         bail!(
             "path does not exist: {path}\n\
@@ -24,17 +24,13 @@ pub fn run(path: &str, json_output: bool, local_flag: bool) -> anyhow::Result<()
         );
     }
 
-    let is_local = is_local_mode(local_flag);
-
-    // Build the tokio runtime for async embedding calls.
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| anyhow::anyhow!("failed to create async runtime: {e}"))?;
 
     let config = load_runtime_config()?;
 
-    // Create the embedding provider from environment or local model.
     let (provider, model_name) = rt.block_on(vera_core::embedding::create_dynamic_provider(
-        &config, is_local,
+        &config, backend,
     ))?;
 
     // Check metadata mismatch
