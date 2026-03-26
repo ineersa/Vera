@@ -28,7 +28,7 @@ Every decision made is intentional, with ample research, testing, analysis, benc
 - [How It Works](#how-it-works)
 - [Contributing](#contributing)
 
-**Docs:** [Query Guide](docs/query-guide.md) · [Troubleshooting](docs/troubleshooting.md) · [How It Works](docs/how-it-works.md) · [Supported Languages](docs/supported-languages.md)
+**Docs:** [Query Guide](docs/query-guide.md) · [Benchmarks](docs/benchmarks.md) · [Accuracy Recovery](docs/accuracy-recovery-v0.4-to-v0.6.md) · [How It Works](docs/how-it-works.md) · [Supported Languages](docs/supported-languages.md) · [Troubleshooting](docs/troubleshooting.md)
 
 ## Quick Start
 
@@ -51,7 +51,7 @@ Vera ships as one static binary with all 60+ language grammars compiled in via t
 
 ### High accuracy, extremely fast, proven on real codebases
 
-17 tasks across three real codebases (ripgrep, flask, fastify). Vera's hybrid pipeline scores 0.80 nDCG@10 and 0.75 Recall@10 against grep-based and embedding-only baselines. See [Benchmark Snapshot](#benchmark-snapshot) for the full breakdown.
+21 tasks across four real codebases (`ripgrep`, `flask`, `fastify`, `turborepo`). On the current local Jina CUDA ONNX benchmark, Vera v0.6.0 reaches `0.9832` nDCG@10 with `1.0` Recall@5, `1.0` Recall@10, and `1.0` MRR@10. See [Benchmark Snapshot](#benchmark-snapshot) for the release comparison.
 
 ## Features
 
@@ -269,34 +269,23 @@ Sample JSON output (`--json`):
 
 ## Benchmark Snapshot
 
-The benchmark suite covers 17 tasks across three open-source codebases (`ripgrep`, `flask`, `fastify`) and five workload categories: symbol lookup, intent search, cross-file discovery, config lookup, and disambiguation. Full details: [docs/benchmarks.md](docs/benchmarks.md).
+Current release benchmark: 21 tasks across four open-source codebases (`ripgrep`, `flask`, `fastify`, `turborepo`), using the local Jina embedding + reranker stack on CUDA. This is the benchmark used to recover the `v0.5.0` retrieval regressions and gate `v0.6.0`.
 
-| Metric | ripgrep | cocoindex-code | vector-only | Vera hybrid |
-|--------|---------|----------------|-------------|-------------|
-| Recall@5 | 0.2817 | 0.3730 | 0.4921 | **0.6961** |
-| Recall@10 | 0.3651 | 0.5040 | 0.6627 | **0.7549** |
-| MRR@10 | 0.2625 | 0.3517 | 0.2814 | **0.6009** |
-| nDCG@10 | 0.2929 | 0.5206 | 0.7077 | **0.8008** |
+| Version | Recall@1 | Recall@5 | Recall@10 | MRR@10 | nDCG@10 |
+|--------|----------|----------|-----------|--------|---------|
+| `v0.4.0` | 0.2421 | 0.5040 | 0.5159 | 0.5016 | 0.4570 |
+| `v0.5.0` | 0.3135 | 0.5635 | 0.6349 | 0.5452 | 0.5293 |
+| `v0.6.0` | **0.8135** | **1.0000** | **1.0000** | **1.0000** | **0.9832** |
 
-#### Retrieval Quality: Local vs API
+`Recall@1 = 0.8135` is the ceiling for this suite because several tasks have multiple ground-truth targets, so perfect top-1 recall is not possible on this benchmark.
 
-The local Jina models (239M embedding + 278M reranker) are competitive with the much larger Qwen3-Embedding-8B API model on the same 17-task benchmark:
+#### Latency And Indexing
 
-| Metric | Jina local (ONNX) | Qwen3-8B (API) |
-|--------|-------------------|----------------|
-| MRR@10 | **0.68** | 0.60 |
-| Recall@5 | 0.65 | **0.73** |
-| Recall@10 | 0.73 | **0.75** |
-| nDCG@10 | 0.72 | **0.81** |
+- Search latency: `3731 ms` p50, `5100 ms` p95
+- Combined indexing time for all 4 repos: `~70 s`
+- Same benchmark harness and pinned corpora were used for all three versions above
 
-Jina local ranks the best result higher (better MRR), while the API model retrieves more relevant results overall (better recall and nDCG). For most use cases, the local models are accurate enough to skip the API entirely.
-
-#### Latency
-
-- BM25-only search: `3.5 ms` p95 latency
-- API-backed hybrid search: `6749 ms` p95 (dominated by remote model calls)
-- Indexing `ripgrep` (~175K LOC): `65.1 s` (API), `~8 s` (CUDA)
-- Incremental updates: seconds for small changes
+The older 17-task public API snapshot is still documented in [docs/benchmarks.md](docs/benchmarks.md). The full recovery write-up for `v0.4.0` to `v0.6.0` is in [docs/accuracy-recovery-v0.4-to-v0.6.md](docs/accuracy-recovery-v0.4-to-v0.6.md).
 
 More detail: [docs/benchmarks.md](docs/benchmarks.md) · [benchmarks/indexing-performance.md](benchmarks/indexing-performance.md) · [benchmarks/reports/reproduction-guide.md](benchmarks/reports/reproduction-guide.md)
 

@@ -4,6 +4,8 @@ Code search for AI agents. Vera indexes your codebase using tree-sitter parsing 
 
 This package downloads and wraps the native Vera binary for your platform.
 
+Current benchmark snapshot: on Vera's local 21-task, 4-repo release benchmark, `v0.6.0` reaches `1.0` Recall@5, `1.0` Recall@10, `1.0` MRR@10, and `0.9832` nDCG@10 with the local Jina CUDA ONNX stack. Full details live in the main repo docs.
+
 ## Install
 
 ```bash
