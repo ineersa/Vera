@@ -2,7 +2,7 @@
 
 Vera supports 63 languages and file formats. Each file is detected by extension (or filename for extensionless files like `Dockerfile` and `Makefile`).
 
-Languages with a tree-sitter grammar get symbol-level chunking — functions, classes, structs, and methods are extracted as discrete search results. Languages without a grammar fall back to sliding-window text chunking.
+Languages with a tree-sitter grammar get symbol-level chunking. functions, classes, structs, and methods are extracted as discrete search results. Languages without a grammar fall back to sliding-window text chunking.
 
 ## Systems & Low-Level
 
@@ -108,9 +108,9 @@ Languages with a tree-sitter grammar get symbol-level chunking — functions, cl
 
 | Format | Extensions | Symbol extraction |
 |--------|-----------|:-:|
-| TOML | `.toml` | — |
-| YAML | `.yaml`, `.yml` | — |
-| JSON | `.json` | — |
-| Markdown | `.md`, `.markdown` | — |
+| TOML | `.toml` | - |
+| YAML | `.yaml`, `.yml` | - |
+| JSON | `.json` | - |
+| Markdown | `.md`, `.markdown` | - |
 
 Files with unrecognized extensions are indexed using text chunking.

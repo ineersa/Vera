@@ -83,7 +83,7 @@ Both tests used Jina v5 nano CUDA embeddings. GTE re-reranked Jina's top-30 cand
 | MRR@10 | **0.70** | 0.51 |
 | nDCG@10 | **0.68** | 0.59 |
 
-Jina reranker wins on the metrics that matter most for code search (MRR, Recall@1 — putting the right result first). GTE's slight Recall@5 edge is noise.
+Jina reranker wins on the metrics that matter most for code search (MRR, Recall@1. putting the right result first). GTE's slight Recall@5 edge is noise.
 
 CPU reranking speed (Ryzen 5 7600X3D, 6c/12t):
 
@@ -92,11 +92,11 @@ CPU reranking speed (Ryzen 5 7600X3D, 6c/12t):
 | Jina v2 (278M, int8) | **1.0s** | **104ms** |
 | GTE-ModernBERT (149M, int8) | 1.5s | 145ms |
 
-Jina is faster despite being larger — likely due to its simpler architecture vs ModernBERT's Flash Attention overhead on CPU.
+Jina is faster despite being larger. likely due to its simpler architecture vs ModernBERT's Flash Attention overhead on CPU.
 
 ### Embedding: Why Jina v5 nano stays
 
-Jina-embeddings-v5-text-nano (239M, Feb 2026) scores 71.0 on MTEB English v2 — the highest among models under 500M parameters. Alternatives considered:
+Jina-embeddings-v5-text-nano (239M, Feb 2026) scores 71.0 on MTEB English v2. the highest among models under 500M parameters. Alternatives considered:
 
 | Model | Params | MTEB English | Code-specific? | Notes |
 |-------|--------|-------------|----------------|-------|
@@ -105,7 +105,7 @@ Jina-embeddings-v5-text-nano (239M, Feb 2026) scores 71.0 on MTEB English v2 —
 | CodeRankEmbed | 137M | N/A | Yes (code-only) | Trained on code pairs, not NL→code queries |
 | snowflake-arctic-embed-xs | 22M | ~42 (est.) | No | 10x smaller but much lower quality |
 
-CodeRankEmbed (137M) is a bi-encoder that could be a drop-in replacement, but it's trained on code-to-code matching (CoRNStack dataset), not natural-language-to-code retrieval. Vera's primary use case is queries like "how does the search pipeline work" — general models handle this better than code-specialized ones.
+CodeRankEmbed (137M) is a bi-encoder that could be a drop-in replacement, but it's trained on code-to-code matching (CoRNStack dataset), not natural-language-to-code retrieval. Vera's primary use case is queries like "how does the search pipeline work". general models handle this better than code-specialized ones.
 
 ### CPU indexing speed in context
 

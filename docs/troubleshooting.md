@@ -28,9 +28,9 @@ vera doctor
 
 Common causes:
 
-- Models haven't been downloaded yet — run `vera setup` (or `vera setup --onnx-jina-cpu`)
-- ONNX Runtime auto-download failed — check network, or set `ORT_DYLIB_PATH` to a manually installed library
-- GPU backend not working — make sure the required drivers are installed (CUDA 12+ for `--onnx-jina-cuda`, ROCm for `--onnx-jina-rocm`, DirectX 12 for `--onnx-jina-directml`). If GPU init fails, Vera falls back to CPU automatically.
+- Models haven't been downloaded yet. run `vera setup` (or `vera setup --onnx-jina-cpu`)
+- ONNX Runtime auto-download failed. check network, or set `ORT_DYLIB_PATH` to a manually installed library
+- GPU backend not working. make sure the required drivers are installed (CUDA 12+ for `--onnx-jina-cuda`, ROCm for `--onnx-jina-rocm`, DirectX 12 for `--onnx-jina-directml`). If GPU init fails, Vera falls back to CPU automatically.
 - `vera doctor` will flag missing models or runtime
 
 ## API mode isn't working
@@ -53,10 +53,10 @@ vera setup --api
 
 Try narrowing your search:
 
-- `--lang rust` — filter by language
-- `--path "src/**/*.ts"` — filter by file path
-- `--type function` — filter by symbol type
-- `--limit 5` — return fewer results
+- `--lang rust`: filter by language
+- `--path "src/**/*.ts"`: filter by file path
+- `--type function`: filter by symbol type
+- `--limit 5`: return fewer results
 - Rewrite the query to be more specific about the behavior you're looking for
 
 See the [query guide](query-guide.md) for more tips on writing effective queries.

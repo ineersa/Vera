@@ -1,6 +1,6 @@
 ---
 name: vera
-description: Semantic code search and symbol lookup across a local repository. Returns ranked code capsules (file path, line range, content, score, symbol info) as JSON. Use when the user asks to find where logic lives, what calls a function, how a feature is implemented, which files handle a concept, or wants to explore unfamiliar code by intent. Also use for symbol lookup when the exact name appears in many files. Do NOT use for exact literal search, regex, counting occurrences, or bulk find-and-replace — use rg for those.
+description: Semantic code search and symbol lookup across a local repository. Returns ranked code capsules (file path, line range, content, score, symbol info) as JSON. Use when the user asks to find where logic lives, what calls a function, how a feature is implemented, which files handle a concept, or wants to explore unfamiliar code by intent. Also use for symbol lookup when the exact name appears in many files. Do NOT use for exact literal search, regex, counting occurrences, or bulk find-and-replace. use rg for those.
 ---
 
 # Vera
@@ -58,7 +58,7 @@ Fields: `file_path`, `line_start`, `line_end`, `content`, `language`, `score`, a
 
 ## References
 
-- `references/install.md` — install, setup, API and local config
-- `references/query-patterns.md` — more query examples and rg guidance
-- `references/troubleshooting.md` — common errors and fixes
-- `references/mcp.md` — optional MCP server usage
+- `references/install.md`: install, setup, API and local config
+- `references/query-patterns.md`: more query examples and rg guidance
+- `references/troubleshooting.md`: common errors and fixes
+- `references/mcp.md`: optional MCP server usage

@@ -19,7 +19,7 @@ vera-ai index .
 # Search
 vera-ai search "authentication middleware"
 
-# Local ONNX inference (no API keys needed — downloads models automatically)
+# Local ONNX inference (no API keys needed. downloads models automatically)
 vera-ai index . --onnx-jina-cpu
 vera-ai search "error handling" --onnx-jina-cpu
 

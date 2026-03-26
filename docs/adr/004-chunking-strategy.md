@@ -16,7 +16,7 @@ Three strategies compared using the same embedding model (Qwen3-8B) and retrieva
 
 ### Where it matters
 
-**Symbol lookup (6 tasks):** MRR jumps from 0.24 to 0.55 — the target function ranks ~2nd instead of ~4th.
+**Symbol lookup (6 tasks):** MRR jumps from 0.24 to 0.55. the target function ranks ~2nd instead of ~4th.
 
 **Intent search (5 tasks):** Recall@5 goes from 0.50 to 0.90. Semantically coherent chunks produce cleaner embeddings.
 
@@ -37,6 +37,6 @@ Three strategies compared using the same embedding model (Qwen3-8B) and retrieva
 ## Trade-offs
 
 - Requires a tree-sitter grammar per language (mitigated by sliding-window fallback)
-- Slightly lower Recall@10 than sliding-window (0.61 vs 0.66) — compensated by BM25 hybrid retrieval
-- Cross-file discovery doesn't improve — needs graph-level metadata, not better chunking
+- Slightly lower Recall@10 than sliding-window (0.61 vs 0.66). compensated by BM25 hybrid retrieval
+- Cross-file discovery doesn't improve. needs graph-level metadata, not better chunking
 - Large symbols (>150 lines) get split into sub-chunks to keep embedding quality stable

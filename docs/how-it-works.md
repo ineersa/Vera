@@ -4,7 +4,7 @@ Vera's search pipeline has three stages: retrieve candidates, fuse results, then
 
 ## Parsing: Tree-Sitter Chunks
 
-Vera parses source files into ASTs using tree-sitter grammars compiled into the binary. Instead of splitting code into arbitrary line ranges or whole files, it extracts discrete symbols — functions, classes, structs, methods — as individual chunks.
+Vera parses source files into ASTs using tree-sitter grammars compiled into the binary. Instead of splitting code into arbitrary line ranges or whole files, it extracts discrete symbols. functions, classes, structs, methods. as individual chunks.
 
 Each chunk carries metadata: file path, line range, language, symbol name, and symbol type. This means search results map to actual code boundaries, not random slices.
 
@@ -14,9 +14,9 @@ Symbol-aware chunking scores 2.3× higher MRR on symbol lookup than sliding-wind
 
 Two retrieval paths run in parallel for every query:
 
-**BM25 (keyword matching)** uses a Tantivy index over chunk content, symbol names, and file paths. It handles exact identifier lookups — searching for `parse_config` finds that exact function. BM25 alone scores sub-millisecond latency (0.067ms p50).
+**BM25 (keyword matching)** uses a Tantivy index over chunk content, symbol names, and file paths. It handles exact identifier lookups. searching for `parse_config` finds that exact function. BM25 alone scores sub-millisecond latency (0.067ms p50).
 
-**Vector search (semantic matching)** embeds the query and compares it against pre-computed chunk embeddings stored in sqlite-vec. This catches conceptual matches — searching "authentication middleware" finds relevant auth code even if those exact words don't appear. Vector search alone achieves 0.66 Recall@10 but only 0.28 MRR@10 (high recall, poor ranking).
+**Vector search (semantic matching)** embeds the query and compares it against pre-computed chunk embeddings stored in sqlite-vec. This catches conceptual matches. searching "authentication middleware" finds relevant auth code even if those exact words don't appear. Vector search alone achieves 0.66 Recall@10 but only 0.28 MRR@10 (high recall, poor ranking).
 
 Neither path alone is sufficient. BM25 misses semantic matches. Vector search misses exact identifiers and ranks poorly. Combining them covers both.
 
@@ -36,7 +36,7 @@ RRF is simple, parameter-light, and doesn't need training data. It consistently 
 
 The top 30 fused candidates are sent to a cross-encoder reranker. Unlike embeddings (which encode query and document separately), the cross-encoder reads the query and each candidate together as a single pair, scoring relevance jointly.
 
-This is the most expensive stage but also the most impactful. Reranking lifts MRR@10 from 0.39 to 0.60 — a 54% improvement in how often the best result appears at the top.
+This is the most expensive stage but also the most impactful. Reranking lifts MRR@10 from 0.39 to 0.60. a 54% improvement in how often the best result appears at the top.
 
 With local models, the reranker runs on-device via ONNX Runtime. With API mode, it calls your configured endpoint.
 
@@ -44,8 +44,8 @@ With local models, the reranker runs on-device via ONNX Runtime. With API mode, 
 
 Everything lives in two places:
 
-- **`.vera/`** in the project root — SQLite database with chunk metadata, Tantivy BM25 index, and sqlite-vec vector store. One directory per project.
-- **`~/.vera/models/`** — cached ONNX models (only in local mode). Downloaded once by `vera setup`.
+- **`.vera/`** in the project root. SQLite database with chunk metadata, Tantivy BM25 index, and sqlite-vec vector store. One directory per project.
+- **`~/.vera/models/`**: cached ONNX models (only in local mode). Downloaded once by `vera setup`.
 
 The index is a single SQLite database file plus a Tantivy directory. No external services, no daemons, no background processes.
 

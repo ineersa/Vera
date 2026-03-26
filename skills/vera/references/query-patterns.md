@@ -33,7 +33,7 @@ Fix: describe what the code *does*, not what it *is*.
 
 Add one filter at a time:
 
-1. `--lang rust` — restrict to a language
-2. `--path "src/auth/**"` — restrict to a path glob
-3. `--type function` — restrict to symbol type
-4. `--limit 3` — fewer, higher-confidence results
+1. `--lang rust`: restrict to a language
+2. `--path "src/auth/**"`: restrict to a path glob
+3. `--type function`: restrict to symbol type
+4. `--limit 3`: fewer, higher-confidence results

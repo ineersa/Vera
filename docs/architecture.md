@@ -12,21 +12,21 @@
 
 ## vera-core modules
 
-### `parsing/` — Language parsing & symbol extraction
+### `parsing/`: Language parsing & symbol extraction
 
 Files: `mod.rs` (public API), `languages.rs` (grammar dispatch), `extractor.rs` (AST node → SymbolType), `chunker.rs` (symbol-aware chunking).
 
 Data flow: file → grammar lookup → tree-sitter parse → node classification → chunk production.
 
-### `embedding/` — Embedding generation
+### `embedding/`: Embedding generation
 
 `EmbeddingProvider` trait with two implementations:
-- `ApiEmbeddingProvider` — HTTP calls to OpenAI-compatible endpoints
-- `LocalEmbeddingProvider` — ONNX Runtime inference with Jina v5 nano
+- `ApiEmbeddingProvider`: HTTP calls to OpenAI-compatible endpoints
+- `LocalEmbeddingProvider`: ONNX Runtime inference with Jina v5 nano
 
 `DynamicProvider` dispatches between them at runtime based on `--local` flag.
 
-### `retrieval/` — Search pipeline
+### `retrieval/`: Search pipeline
 
 1. Query enters `search_service.rs`
 2. BM25 (`bm25.rs`) and vector search (`vector.rs`) run in parallel
@@ -34,25 +34,25 @@ Data flow: file → grammar lookup → tree-sitter parse → node classification
 4. Top 30 candidates reranked by cross-encoder (`reranker.rs` or `local_reranker.rs`)
 5. Final `Vec<SearchResult>` returned
 
-### `storage/` — Persistent storage
+### `storage/`: Persistent storage
 
-- `metadata.rs` — SQLite: chunk metadata, file paths, content hashes
-- `bm25.rs` — Tantivy: full-text BM25 index
-- `vector.rs` — sqlite-vec: embedding vectors
+- `metadata.rs`: SQLite: chunk metadata, file paths, content hashes
+- `bm25.rs`: Tantivy: full-text BM25 index
+- `vector.rs`: sqlite-vec: embedding vectors
 
 All stored in `.vera/` at the project root.
 
-### `indexing/` — Index build & update
+### `indexing/`: Index build & update
 
-- `pipeline.rs` — Full build: discover → parse → chunk → embed → store
-- `update.rs` — Incremental: hash-based change detection, re-process only modified files
+- `pipeline.rs`: Full build: discover → parse → chunk → embed → store
+- `update.rs`: Incremental: hash-based change detection, re-process only modified files
 
 ### Other modules
 
-- `types.rs` — `Language` enum (60+ variants), `SearchResult`, `CodeChunk`, `SymbolType`
-- `config.rs` — `RetrievalConfig`, `IndexConfig` defaults
-- `local_models.rs` — Downloads ONNX models and ORT runtime to `~/.vera/`
-- `discovery/` — File discovery with gitignore support, binary/size filtering
+- `types.rs`: `Language` enum (60+ variants), `SearchResult`, `CodeChunk`, `SymbolType`
+- `config.rs`: `RetrievalConfig`, `IndexConfig` defaults
+- `local_models.rs`: Downloads ONNX models and ORT runtime to `~/.vera/`
+- `discovery/`: File discovery with gitignore support, binary/size filtering
 
 ## vera-cli
 

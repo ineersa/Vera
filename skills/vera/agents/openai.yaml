@@ -1,6 +1,6 @@
 interface:
   display_name: "Vera"
-  short_description: "Semantic code search — find where logic lives, what calls a function, how features are implemented"
+  short_description: "Semantic code search: find where logic lives, what calls a function, how features are implemented"
   default_prompt: "Use $vera to search the repository for the most relevant code. Pass --json for structured output."
 
 policy:

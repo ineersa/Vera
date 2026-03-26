@@ -29,10 +29,10 @@ Single generic words return too many results. Be specific about the behavior or 
 
 If your first search returns too much, add filters one at a time:
 
-- `--lang rust` — restrict to a specific language
-- `--path "src/**/*.ts"` — restrict to a file path pattern
-- `--type function` — restrict to functions, classes, methods, or structs
-- `--limit 5` — return fewer results
+- `--lang rust`: restrict to a specific language
+- `--path "src/**/*.ts"`: restrict to a file path pattern
+- `--type function`: restrict to functions, classes, methods, or structs
+- `--limit 5`: return fewer results
 
 These stack, so you can combine them:
 

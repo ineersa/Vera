@@ -74,12 +74,12 @@ Every result includes file path, line range, source content, symbol name, symbol
 bunx @vera-ai/cli install   # or: npx -y @vera-ai/cli install / uvx vera-ai install
 ```
 
-This downloads the `vera` binary, adds it to your PATH, and installs agent skill files. After this, `vera` is a standalone command — you don't need `bunx`/`npx`/`uvx` again.
+This downloads the `vera` binary, adds it to your PATH, and installs agent skill files. After this, `vera` is a standalone command. You don't need `bunx`/`npx`/`uvx` again.
 
 ```bash
 vera setup          # download local models (or vera setup --api for remote endpoints)
 vera index .        # index the current project (creates .vera/ in project root)
-vera search "query" # search — each project gets its own index
+vera search "query" # search (each project gets its own index)
 vera update .       # after code changes
 ```
 
@@ -159,7 +159,7 @@ Vera itself is always local: the index lives in `.vera/`, config in `~/.vera/`. 
 
 ### Curated Local Models
 
-`vera setup` downloads quantized ONNX models into `~/.vera/models/` and the ONNX Runtime shared library into `~/.vera/lib/`, then runs inference locally — no manual install required:
+`vera setup` downloads quantized ONNX models into `~/.vera/models/` and the ONNX Runtime shared library into `~/.vera/lib/`, then runs inference locally. No manual install required:
 
 - **Embeddings:** [`jinaai/jina-embeddings-v5-text-nano-retrieval`](https://huggingface.co/jinaai/jina-embeddings-v5-text-nano-retrieval) (quantized ONNX). At 239M parameters, this is the highest scoring embedding model under 500M on MMTEB (65.5), beating KaLM-mini-v2.5 (494M), Gemma-300M (308M), and voyage-4-nano (480M). It scores 71.0 on MTEB English v2. Built on EuroBERT-210M with distillation from Qwen3-Embedding-4B, it uses a retrieval-specific LoRA adapter designed for asymmetric search where the query is short and the document is a code block.
 - **Reranker:** [`jinaai/jina-reranker-v2-base-multilingual`](https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual) (quantized ONNX). A 278M parameter cross-encoder that scores query-document pairs jointly rather than comparing pre-computed embeddings. Its 1,024-token context window is a natural fit for Vera's tree-sitter symbol chunks: discrete functions and classes, not raw files. Fine-tuned on ToolBench (function-calling schemas) and NSText2SQL (structured queries), it scores 71.36 on CodeSearchNet MRR@10 and 77.75 on ToolBench recall@3 while being half the size and 15x faster than bge-reranker-v2-m3 (568M).
@@ -184,7 +184,7 @@ Vera downloads the matching ONNX Runtime build automatically. The same flag work
 
 #### Local Inference Speed
 
-Local mode runs neural networks (239M embedding + 278M reranker) on your machine — the indexing time is compute-bound matrix math, not file I/O. These models are designed for GPU inference; CPU works but is slow. After the initial index, `vera update .` only re-embeds changed files, so subsequent updates are fast.
+Local mode runs neural networks (239M embedding + 278M reranker) on your machine. The indexing time is compute-bound matrix math, not file I/O. These models are designed for GPU inference; CPU works but is slow. After the initial index, `vera update .` only re-embeds changed files, so subsequent updates are fast.
 
 | Backend | Hardware | Time | Notes |
 |---------|----------|------|-------|
@@ -244,7 +244,7 @@ Uninstall Vera and all its data:
 vera uninstall
 ```
 
-This removes `~/.vera/` (binary cache, models, ONNX Runtime libs, config), agent skill files, and the PATH shim. Per-project indexes (`.vera/` inside each project) are left in place — delete them manually if needed.
+This removes `~/.vera/` (binary cache, models, ONNX Runtime libs, config), agent skill files, and the PATH shim. Per-project indexes (`.vera/` inside each project) are left in place. Delete them manually if needed.
 
 If something isn't working, see [troubleshooting](docs/troubleshooting.md).
 
@@ -306,7 +306,7 @@ Vera supports 63 languages and file formats with tree-sitter symbol extraction, 
 
 ## How It Works
 
-Vera's retrieval pipeline runs BM25 keyword search and vector similarity search in parallel, merges results with Reciprocal Rank Fusion, then reranks the top candidates with a cross-encoder. For the full breakdown — parsing, fusion, reranking, storage, and the benchmarks behind each choice — see [docs/how-it-works.md](docs/how-it-works.md).
+Vera's retrieval pipeline runs BM25 keyword search and vector similarity search in parallel, merges results with Reciprocal Rank Fusion, then reranks the top candidates with a cross-encoder. For the full breakdown (parsing, fusion, reranking, storage, and the benchmarks behind each choice), see [docs/how-it-works.md](docs/how-it-works.md).
 
 ## Contributing
 

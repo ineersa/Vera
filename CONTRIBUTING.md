@@ -35,11 +35,11 @@ cargo fmt --all -- --check
 
 The core engine lives in `vera-core`. Most changes happen here:
 
-- `parsing/` — tree-sitter grammars, AST chunking, symbol extraction
-- `embedding/` — embedding providers (API + local ONNX)
-- `retrieval/` — BM25, vector search, RRF fusion, reranking
-- `storage/` — SQLite metadata, Tantivy BM25 index, sqlite-vec vectors
-- `indexing/` — index build and incremental update pipeline
+- `parsing/`: tree-sitter grammars, AST chunking, symbol extraction
+- `embedding/`: embedding providers (API + local ONNX)
+- `retrieval/`: BM25, vector search, RRF fusion, reranking
+- `storage/`: SQLite metadata, Tantivy BM25 index, sqlite-vec vectors
+- `indexing/`: index build and incremental update pipeline
 
 For how the pipeline fits together, see [docs/how-it-works.md](docs/how-it-works.md).
 
@@ -59,7 +59,7 @@ The full language list is at [docs/supported-languages.md](docs/supported-langua
 - **Error handling:** `anyhow::Result` in CLI code, `thiserror` for typed errors in `vera-core`
 - **Async:** `tokio` runtime for I/O-bound work
 - **Tests:** `#[cfg(test)]` modules at the bottom of source files, `tempfile` for filesystem tests
-- **Commits:** `type(scope): description` — e.g. `feat(lang): add HTML support`, `fix(retrieval): handle empty query`
+- **Commits:** `type(scope): description`: e.g. `feat(lang): add HTML support`, `fix(retrieval): handle empty query`
 
 ## Running Benchmarks
 

@@ -32,7 +32,7 @@ AMD Ryzen 5 7600X3D, 30GB RAM, Arch Linux. Rust 1.94.0, Bun 1.3.11.
 
 ## Why it wins
 
-- 1.6–1.8× faster parsing — same underlying C library, less FFI overhead
+- 1.6–1.8× faster parsing. same underlying C library, less FFI overhead
 - 10× faster cold start than Bun
 - Single ~10MB binary vs runtime + node_modules
 - `ignore` crate (from ripgrep) gives gitignore-aware walking out of the box
