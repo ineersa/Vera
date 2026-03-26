@@ -30,6 +30,19 @@ The tasks cover five workload categories:
 
 Vera's strongest gains show up in top-of-list ranking quality. On this benchmark set, the hybrid pipeline improves MRR@10 by about 71% over the best non-Vera baseline and improves Recall@10 by about 14% over the strongest recall-oriented baseline.
 
+### Local vs API Models
+
+The local Jina models (239M embedding + 278M reranker, ONNX) are competitive with the much larger Qwen3-Embedding-8B API model on the same 17-task benchmark:
+
+| Metric | Jina local (ONNX) | Qwen3-8B (API) |
+|--------|-------------------|----------------|
+| MRR@10 | **0.68** | 0.60 |
+| Recall@5 | 0.65 | **0.73** |
+| Recall@10 | 0.73 | **0.75** |
+| nDCG@10 | 0.72 | **0.81** |
+
+Jina local ranks the best result higher (better MRR), while the API model retrieves more relevant results overall (better recall and nDCG). For most use cases, the local models are accurate enough to skip the API entirely.
+
 ## What The Numbers Mean
 
 - BM25 helps with exact names, symbols, and disambiguation.
@@ -58,7 +71,7 @@ Two caveats matter here:
 ## Limits And Caveats
 
 - The public benchmark summary uses the stable 17-task subset. A larger polyglot benchmark was not included in the public summary because API rate limits made it unreliable.
-- The hybrid numbers above use remote embedding and reranking services. Local inference changes the latency profile.
+- The hybrid numbers above use remote embedding and reranking services. Local CUDA inference indexes the same repos in seconds (e.g., ~8s for ripgrep on an RTX 4080); CPU-only takes ~6 min on a 12-core Zen 4.
 - Benchmark data in this repository is intended to show comparative behavior, not guarantee exact performance on another machine or codebase.
 
 ## Related Docs

@@ -188,6 +188,17 @@ vera setup --onnx-jina-directml  # Any DirectX 12 GPU (Windows)
 
 Vera downloads the matching ONNX Runtime build automatically. The same flag works on `vera index` and `vera search` to override the configured backend per-command.
 
+#### Local Inference Speed
+
+Indexing ~3,100 chunks (Vera's own codebase, 239 files):
+
+| Backend | Hardware | Time |
+|---------|----------|------|
+| CUDA | RTX 4080 | **~8 s** |
+| CPU | 12-core (Zen 4) | ~6 min |
+
+CPU times scale with core count. Older or lower-core CPUs will be slower — expect 10–15+ minutes on a 4-core machine for a codebase this size. GPU acceleration is recommended for large repos.
+
 ### Any OpenAI-Compatible Endpoint
 
 Use `vera setup --api` to point Vera at your own endpoint. This works with remote APIs or local servers like `llama.cpp`.
@@ -266,9 +277,24 @@ The benchmark suite covers 17 tasks across three open-source codebases (`ripgrep
 | MRR@10 | 0.2625 | 0.3517 | 0.2814 | **0.6009** |
 | nDCG@10 | 0.2929 | 0.5206 | 0.7077 | **0.8008** |
 
+#### Retrieval Quality: Local vs API
+
+The local Jina models (239M embedding + 278M reranker) are competitive with the much larger Qwen3-Embedding-8B API model on the same 17-task benchmark:
+
+| Metric | Jina local (ONNX) | Qwen3-8B (API) |
+|--------|-------------------|----------------|
+| MRR@10 | **0.68** | 0.60 |
+| Recall@5 | 0.65 | **0.73** |
+| Recall@10 | 0.73 | **0.75** |
+| nDCG@10 | 0.72 | **0.81** |
+
+Jina local ranks the best result higher (better MRR), while the API model retrieves more relevant results overall (better recall and nDCG). For most use cases, the local models are accurate enough to skip the API entirely.
+
+#### Latency
+
 - BM25-only search: `3.5 ms` p95 latency
 - API-backed hybrid search: `6749 ms` p95 (dominated by remote model calls)
-- Indexing `ripgrep` (~175K LOC): `65.1 s`
+- Indexing `ripgrep` (~175K LOC): `65.1 s` (API), `~8 s` (CUDA)
 - Incremental updates: seconds for small changes
 
 More detail: [docs/benchmarks.md](docs/benchmarks.md) · [benchmarks/indexing-performance.md](benchmarks/indexing-performance.md) · [benchmarks/reports/reproduction-guide.md](benchmarks/reports/reproduction-guide.md)
