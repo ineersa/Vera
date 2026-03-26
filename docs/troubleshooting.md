@@ -18,7 +18,7 @@ Code changed after the last index. Update it:
 vera update .
 ```
 
-## Local mode isn't working
+## Local ONNX inference isn't working
 
 Run the diagnostic command first:
 
@@ -28,8 +28,9 @@ vera doctor
 
 Common causes:
 
-- Models haven't been downloaded yet — run `vera setup`
+- Models haven't been downloaded yet — run `vera setup` (or `vera setup --onnx-jina-cpu`)
 - ONNX Runtime auto-download failed — check network, or set `ORT_DYLIB_PATH` to a manually installed library
+- GPU backend not working — make sure the required drivers are installed (CUDA 12+ for `--onnx-jina-cuda`, ROCm for `--onnx-jina-rocm`, DirectX 12 for `--onnx-jina-directml`). If GPU init fails, Vera falls back to CPU automatically.
 - `vera doctor` will flag missing models or runtime
 
 ## API mode isn't working

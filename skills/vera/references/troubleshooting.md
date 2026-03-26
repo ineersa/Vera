@@ -27,7 +27,7 @@ Fix:
 vera update .
 ```
 
-## Local Mode Fails
+## Local ONNX Inference Fails
 
 Check:
 
@@ -39,11 +39,13 @@ Common causes:
 
 - ONNX Runtime auto-download failed (check network, or set `ORT_DYLIB_PATH`)
 - local model assets have not been downloaded yet
+- GPU backend missing drivers (CUDA 12+ for `--onnx-jina-cuda`, ROCm for `--onnx-jina-rocm`, DirectX 12 for `--onnx-jina-directml`)
 
 Helpful commands:
 
 ```sh
-vera setup
+vera setup                        # re-download models + ORT (CPU)
+vera setup --onnx-jina-cuda       # re-download with CUDA ORT
 vera doctor
 ```
 

@@ -24,16 +24,20 @@ The wrapper install downloads the correct Vera binary, installs a persistent `ve
 
 ## Built-In Local Models
 
-`vera setup` is the default path. It downloads the local ONNX models into `~/.vera/models/`.
+`vera setup` is the default path. It downloads the local ONNX models into `~/.vera/models/` and the ONNX Runtime library into `~/.vera/lib/`.
 
 ```sh
-vera setup
+vera setup                        # CPU inference (default)
+vera setup --onnx-jina-cuda       # NVIDIA GPU (CUDA 12+)
+vera setup --onnx-jina-rocm       # AMD GPU (Linux, ROCm)
+vera setup --onnx-jina-directml   # DirectX 12 GPU (Windows)
 ```
 
 Notes:
 
 - Vera keeps the repo index local in `.vera/`
 - `vera setup` only chooses the built-in local model backend
+- GPU flags download the matching ONNX Runtime build automatically
 - `vera doctor` will tell you if ONNX Runtime or model setup is incomplete
 
 You can configure and index in one step:

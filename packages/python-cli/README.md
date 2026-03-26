@@ -19,9 +19,12 @@ vera-ai index .
 # Search
 vera-ai search "authentication middleware"
 
-# Local mode (no API keys needed — downloads models automatically)
-vera-ai index . --local
-vera-ai search "error handling" --local
+# Local ONNX inference (no API keys needed — downloads models automatically)
+vera-ai index . --onnx-jina-cpu
+vera-ai search "error handling" --onnx-jina-cpu
+
+# GPU acceleration (NVIDIA/AMD/DirectML)
+vera-ai index . --onnx-jina-cuda
 ```
 
 ## What you get

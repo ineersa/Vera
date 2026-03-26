@@ -176,6 +176,18 @@ With both models cached locally, the full three-stage pipeline (BM25, vector sea
 - A local model cache under `~/.vera/models/`
 - A fully self-contained setup for private repos and offline workflows
 
+#### GPU Acceleration
+
+By default, `vera setup` configures CPU inference. If you have a compatible GPU, use a specific backend flag:
+
+```bash
+vera setup --onnx-jina-cuda      # NVIDIA GPU (requires CUDA 12+ drivers)
+vera setup --onnx-jina-rocm      # AMD GPU (Linux, requires ROCm drivers)
+vera setup --onnx-jina-directml  # Any DirectX 12 GPU (Windows)
+```
+
+Vera downloads the matching ONNX Runtime build automatically. The same flag works on `vera index` and `vera search` to override the configured backend per-command.
+
 ### Any OpenAI-Compatible Endpoint
 
 Use `vera setup --api` to point Vera at your own endpoint. This works with remote APIs or local servers like `llama.cpp`.
