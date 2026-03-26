@@ -109,7 +109,7 @@ fn ort_lib_filename() -> String {
 
 use crate::config::OnnxExecutionProvider;
 
-/// Platform-specific ORT archive info: (archive_ext, archive_name, lib_path_inside_archive, local_lib_name).
+/// Platform-specific ORT archive info: (archive_ext, archive_name, primary_lib_path_inside_archive, local_lib_name).
 fn ort_platform_info(ep: OnnxExecutionProvider) -> Result<(&'static str, String, String, &'static str)> {
     let gpu_suffix = match ep {
         OnnxExecutionProvider::Cpu => "",
@@ -194,6 +194,7 @@ pub async fn ensure_ort_library_for_ep(ep: OnnxExecutionProvider) -> Result<Path
     };
     let (ext, archive_name, lib_path_in_archive, local_lib_name) = ort_platform_info(ep)?;
     let target_path = lib_dir.join(local_lib_name);
+    let is_gpu = ep != OnnxExecutionProvider::Cpu;
 
     if target_path.exists() {
         return Ok(target_path);
@@ -210,7 +211,7 @@ pub async fn ensure_ort_library_for_ep(ep: OnnxExecutionProvider) -> Result<Path
         "https://github.com/microsoft/onnxruntime/releases/download/v{ORT_VERSION}/{archive_filename}"
     );
 
-    eprintln!("Downloading ONNX Runtime v{ORT_VERSION}...");
+    eprintln!("Downloading ONNX Runtime v{ORT_VERSION} ({ep})...");
     eprintln!("  {url}");
 
     crate::init_tls();
@@ -223,38 +224,32 @@ pub async fn ensure_ort_library_for_ep(ep: OnnxExecutionProvider) -> Result<Path
         .error_for_status()?;
     let bytes = res.bytes().await?;
 
-    let temp_path = target_path.with_extension(format!("part.{}", std::process::id()));
+    let lib_dir_clone = lib_dir.clone();
     let lib_path_in_archive_clone = lib_path_in_archive.clone();
-    let temp_path_clone = temp_path.clone();
 
     let extract_result = tokio::task::spawn_blocking(move || -> Result<()> {
         if ext == "tgz" {
-            extract_tgz(&bytes, &lib_path_in_archive_clone, &temp_path_clone)
+            if is_gpu {
+                extract_tgz_all_libs(&bytes, &lib_dir_clone)
+            } else {
+                extract_tgz_single(&bytes, &lib_path_in_archive_clone, &lib_dir_clone.join(local_lib_name))
+            }
         } else {
-            extract_zip(&bytes, &lib_path_in_archive_clone, &temp_path_clone)
+            extract_zip(&bytes, &lib_path_in_archive_clone, &lib_dir_clone.join(local_lib_name))
         }
     })
     .await?;
 
     if let Err(e) = extract_result {
-        let _ = fs::remove_file(&temp_path).await;
         return Err(e).context("Failed to extract ONNX Runtime from archive");
     }
 
-    if let Err(e) = fs::rename(&temp_path, &target_path).await {
-        if target_path.exists() {
-            let _ = fs::remove_file(&temp_path).await;
-        } else {
-            let _ = fs::remove_file(&temp_path).await;
-            return Err(e.into());
-        }
-    }
-
-    eprintln!("ONNX Runtime v{ORT_VERSION} installed to {}", target_path.display());
+    eprintln!("ONNX Runtime v{ORT_VERSION} installed to {}", lib_dir.display());
     Ok(target_path)
 }
 
-fn extract_tgz(data: &[u8], entry_path: &str, dest: &std::path::Path) -> Result<()> {
+/// Extract a single shared library from a tgz archive (CPU builds).
+fn extract_tgz_single(data: &[u8], entry_path: &str, dest: &std::path::Path) -> Result<()> {
     use flate2::read::GzDecoder;
 
     let decoder = GzDecoder::new(data);
@@ -264,19 +259,12 @@ fn extract_tgz(data: &[u8], entry_path: &str, dest: &std::path::Path) -> Result<
         let mut entry = entry?;
         let path = entry.path()?;
         if path.to_string_lossy() == entry_path {
-            let mut out = std::fs::File::create(dest)?;
-            std::io::copy(&mut entry, &mut out)?;
-            // Set executable permission on Unix
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755))?;
-            }
+            write_lib_file(&mut entry, dest)?;
             return Ok(());
         }
     }
 
-    // Try suffix match as fallback (archive structure may vary)
+    // Suffix fallback (archive structure may vary)
     let decoder2 = GzDecoder::new(data);
     let mut archive2 = tar::Archive::new(decoder2);
     let suffix = entry_path.rsplit('/').next().unwrap_or(entry_path);
@@ -286,18 +274,70 @@ fn extract_tgz(data: &[u8], entry_path: &str, dest: &std::path::Path) -> Result<
         let path = entry.path()?;
         let path_str = path.to_string_lossy();
         if path_str.ends_with(suffix) && path_str.contains("/lib/") {
-            let mut out = std::fs::File::create(dest)?;
-            std::io::copy(&mut entry, &mut out)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755))?;
-            }
+            write_lib_file(&mut entry, dest)?;
             return Ok(());
         }
     }
 
     anyhow::bail!("Could not find {entry_path} in ORT archive")
+}
+
+/// Extract all shared libraries from a tgz archive (GPU builds need provider libs).
+fn extract_tgz_all_libs(data: &[u8], dest_dir: &std::path::Path) -> Result<()> {
+    use flate2::read::GzDecoder;
+
+    let decoder = GzDecoder::new(data);
+    let mut archive = tar::Archive::new(decoder);
+    let mut extracted = 0usize;
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        // Skip symlinks — we want the real files
+        if entry.header().entry_type() != tar::EntryType::Regular {
+            continue;
+        }
+        let path = entry.path()?;
+        let path_str = path.to_string_lossy();
+        if !path_str.contains("/lib/") {
+            continue;
+        }
+        let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+        // Extract .so, .dylib, .dll files (skip .pc and other non-library files)
+        let is_lib = filename.contains(".so") || filename.ends_with(".dylib") || filename.ends_with(".dll");
+        if !is_lib {
+            continue;
+        }
+        // Normalize versioned names: libonnxruntime.so.1.23.2 → libonnxruntime.so
+        let local_name = strip_so_version(filename);
+        let dest = dest_dir.join(local_name);
+        write_lib_file(&mut entry, &dest)?;
+        extracted += 1;
+    }
+
+    if extracted == 0 {
+        anyhow::bail!("No shared libraries found in ORT archive");
+    }
+    Ok(())
+}
+
+/// Strip .so version suffix: "libonnxruntime.so.1.23.2" → "libonnxruntime.so"
+fn strip_so_version(name: &str) -> String {
+    if let Some(pos) = name.find(".so.") {
+        name[..pos + 3].to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+fn write_lib_file(reader: &mut impl std::io::Read, dest: &std::path::Path) -> Result<()> {
+    let mut out = std::fs::File::create(dest)?;
+    std::io::copy(reader, &mut out)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
 }
 
 fn extract_zip(data: &[u8], entry_path: &str, dest: &std::path::Path) -> Result<()> {
