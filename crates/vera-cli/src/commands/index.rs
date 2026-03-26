@@ -23,7 +23,10 @@ pub fn run(path: &str, json_output: bool, backend: InferenceBackend) -> anyhow::
 }
 
 /// Index a repository and return the resulting summary.
-pub fn execute(path: &str, backend: InferenceBackend) -> anyhow::Result<vera_core::indexing::IndexSummary> {
+pub fn execute(
+    path: &str,
+    backend: InferenceBackend,
+) -> anyhow::Result<vera_core::indexing::IndexSummary> {
     let repo_path = Path::new(path);
 
     if !repo_path.exists() {

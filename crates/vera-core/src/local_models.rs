@@ -129,7 +129,9 @@ fn detect_cuda_major_version() -> Option<u32> {
 }
 
 /// Platform-specific ORT archive info: (archive_ext, archive_name, primary_lib_path_inside_archive, local_lib_name).
-fn ort_platform_info(ep: OnnxExecutionProvider) -> Result<(&'static str, String, String, &'static str)> {
+fn ort_platform_info(
+    ep: OnnxExecutionProvider,
+) -> Result<(&'static str, String, String, &'static str)> {
     let gpu_suffix = match ep {
         OnnxExecutionProvider::Cpu => "",
         OnnxExecutionProvider::Cuda => {
@@ -152,7 +154,12 @@ fn ort_platform_info(ep: OnnxExecutionProvider) -> Result<(&'static str, String,
             anyhow::bail!("DirectML is only supported on Windows");
         }
         let base = format!("onnxruntime-linux-x64{gpu_suffix}-{ORT_VERSION}");
-        Ok(("tgz", base.clone(), format!("{base}/lib/libonnxruntime.so.{ORT_VERSION}"), "libonnxruntime.so"))
+        Ok((
+            "tgz",
+            base.clone(),
+            format!("{base}/lib/libonnxruntime.so.{ORT_VERSION}"),
+            "libonnxruntime.so",
+        ))
     }
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
     {
@@ -160,15 +167,27 @@ fn ort_platform_info(ep: OnnxExecutionProvider) -> Result<(&'static str, String,
             anyhow::bail!("Only CPU execution provider is supported on Linux aarch64");
         }
         let base = format!("onnxruntime-linux-aarch64-{ORT_VERSION}");
-        Ok(("tgz", base.clone(), format!("{base}/lib/libonnxruntime.so.{ORT_VERSION}"), "libonnxruntime.so"))
+        Ok((
+            "tgz",
+            base.clone(),
+            format!("{base}/lib/libonnxruntime.so.{ORT_VERSION}"),
+            "libonnxruntime.so",
+        ))
     }
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
         if !matches!(ep, OnnxExecutionProvider::Cpu) {
-            anyhow::bail!("Only CPU execution provider is supported on macOS ARM. CoreML support may be added in the future.");
+            anyhow::bail!(
+                "Only CPU execution provider is supported on macOS ARM. CoreML support may be added in the future."
+            );
         }
         let base = format!("onnxruntime-osx-arm64-{ORT_VERSION}");
-        Ok(("tgz", base.clone(), format!("{base}/lib/libonnxruntime.{ORT_VERSION}.dylib"), "libonnxruntime.dylib"))
+        Ok((
+            "tgz",
+            base.clone(),
+            format!("{base}/lib/libonnxruntime.{ORT_VERSION}.dylib"),
+            "libonnxruntime.dylib",
+        ))
     }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     {
@@ -176,7 +195,12 @@ fn ort_platform_info(ep: OnnxExecutionProvider) -> Result<(&'static str, String,
             anyhow::bail!("Only CPU execution provider is supported on macOS x86_64");
         }
         let base = format!("onnxruntime-osx-x86_64-{ORT_VERSION}");
-        Ok(("tgz", base.clone(), format!("{base}/lib/libonnxruntime.{ORT_VERSION}.dylib"), "libonnxruntime.dylib"))
+        Ok((
+            "tgz",
+            base.clone(),
+            format!("{base}/lib/libonnxruntime.{ORT_VERSION}.dylib"),
+            "libonnxruntime.dylib",
+        ))
     }
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
@@ -184,7 +208,12 @@ fn ort_platform_info(ep: OnnxExecutionProvider) -> Result<(&'static str, String,
             anyhow::bail!("ROCm is only supported on Linux");
         }
         let base = format!("onnxruntime-win-x64{gpu_suffix}-{ORT_VERSION}");
-        Ok(("zip", base.clone(), format!("{base}/lib/onnxruntime.dll"), "onnxruntime.dll"))
+        Ok((
+            "zip",
+            base.clone(),
+            format!("{base}/lib/onnxruntime.dll"),
+            "onnxruntime.dll",
+        ))
     }
     #[cfg(not(any(
         all(target_os = "linux", target_arch = "x86_64"),
@@ -260,10 +289,18 @@ pub async fn ensure_ort_library_for_ep(ep: OnnxExecutionProvider) -> Result<Path
             if is_gpu {
                 extract_tgz_all_libs(&bytes, &lib_dir_clone)
             } else {
-                extract_tgz_single(&bytes, &lib_path_in_archive_clone, &lib_dir_clone.join(local_lib_name))
+                extract_tgz_single(
+                    &bytes,
+                    &lib_path_in_archive_clone,
+                    &lib_dir_clone.join(local_lib_name),
+                )
             }
         } else {
-            extract_zip(&bytes, &lib_path_in_archive_clone, &lib_dir_clone.join(local_lib_name))
+            extract_zip(
+                &bytes,
+                &lib_path_in_archive_clone,
+                &lib_dir_clone.join(local_lib_name),
+            )
         }
     })
     .await?;
@@ -272,7 +309,10 @@ pub async fn ensure_ort_library_for_ep(ep: OnnxExecutionProvider) -> Result<Path
         return Err(e).context("Failed to extract ONNX Runtime from archive");
     }
 
-    eprintln!("ONNX Runtime v{ORT_VERSION} installed to {}", lib_dir.display());
+    eprintln!(
+        "ONNX Runtime v{ORT_VERSION} installed to {}",
+        lib_dir.display()
+    );
     Ok(target_path)
 }
 
@@ -331,7 +371,8 @@ fn extract_tgz_all_libs(data: &[u8], dest_dir: &std::path::Path) -> Result<()> {
         }
         let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
         // Extract .so, .dylib, .dll files (skip .pc and other non-library files)
-        let is_lib = filename.contains(".so") || filename.ends_with(".dylib") || filename.ends_with(".dll");
+        let is_lib =
+            filename.contains(".so") || filename.ends_with(".dylib") || filename.ends_with(".dll");
         if !is_lib {
             continue;
         }
@@ -477,7 +518,9 @@ pub async fn ensure_ort_library() -> Result<PathBuf> {
 }
 
 /// Download the default local embedding and reranker assets, plus the ORT library.
-pub async fn prefetch_default_local_models_for_ep(ep: OnnxExecutionProvider) -> Result<Vec<PathBuf>> {
+pub async fn prefetch_default_local_models_for_ep(
+    ep: OnnxExecutionProvider,
+) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     paths.push(ensure_ort_library_for_ep(ep).await?);
     paths.push(ensure_model_file(EMBEDDING_REPO, EMBEDDING_ONNX_FILE).await?);

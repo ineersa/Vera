@@ -15,6 +15,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+use crate::chunk_text::{file_name, normalize_path_tokens};
+use crate::retrieval::ranking::file_role_label;
 use crate::types::SearchResult;
 
 // ── Error types ──────────────────────────────────────────────────────
@@ -378,19 +380,28 @@ pub async fn rerank_results(
 /// Includes metadata context to help the cross-encoder understand the code.
 fn format_for_reranker(result: &SearchResult) -> String {
     let mut parts = Vec::new();
+    let filename = file_name(&result.file_path);
 
-    // Add symbol info if available.
+    if let Some(ref sym_name) = result.symbol_name {
+        parts.push(format!("Symbol: {sym_name}"));
+    }
     if let Some(ref sym_type) = result.symbol_type {
-        if let Some(ref sym_name) = result.symbol_name {
-            parts.push(format!("{sym_type} {sym_name}"));
-        }
+        parts.push(format!("Symbol type: {sym_type}"));
     }
 
-    // Add file path and language.
+    parts.push(format!("Filename: {filename}"));
     parts.push(format!("File: {} ({})", result.file_path, result.language));
+    parts.push(format!(
+        "Path tokens: {}",
+        normalize_path_tokens(&result.file_path)
+    ));
+    parts.push(format!(
+        "Role: {}",
+        file_role_label(&result.file_path, result.language)
+    ));
+    parts.push(format!("Lines: {}-{}", result.line_start, result.line_end));
 
-    // Add the code content.
-    parts.push(result.content.clone());
+    parts.push(format!("Code:\n{}", result.content));
 
     parts.join("\n")
 }
@@ -804,7 +815,9 @@ mod tests {
         let result = make_result("lib.rs", 1, 10, 0.5, Some("my_func"), "fn my_func() {}");
         let formatted = format_for_reranker(&result);
 
-        assert!(formatted.contains("function my_func"));
+        assert!(formatted.contains("Symbol: my_func"));
+        assert!(formatted.contains("Symbol type: function"));
+        assert!(formatted.contains("Filename: lib.rs"));
         assert!(formatted.contains("File: lib.rs"));
         assert!(formatted.contains("fn my_func() {}"));
     }
@@ -815,9 +828,10 @@ mod tests {
         result.symbol_type = None;
         let formatted = format_for_reranker(&result);
 
+        assert!(formatted.contains("Filename: lib.rs"));
         assert!(formatted.contains("File: lib.rs"));
         assert!(formatted.contains("some code"));
-        assert!(!formatted.contains("function"));
+        assert!(!formatted.contains("Symbol type:"));
     }
 
     // ── sanitize_error_message tests ─────────────────────────────────

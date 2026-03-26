@@ -91,11 +91,11 @@ fn symbol_line(chunk: &Chunk) -> Option<String> {
     }
 }
 
-fn file_name(path: &str) -> &str {
+pub(crate) fn file_name(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
-fn normalize_path_tokens(path: &str) -> String {
+pub(crate) fn normalize_path_tokens(path: &str) -> String {
     let filename = file_name(path);
     let mut normalized = String::with_capacity(path.len() * 2);
     let chars: Vec<char> = path.chars().collect();

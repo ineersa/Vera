@@ -211,15 +211,15 @@ fn register_execution_provider(
 ) -> ort::Result<ort::session::builder::SessionBuilder> {
     match ep {
         OnnxExecutionProvider::Cpu => Ok(builder),
-        OnnxExecutionProvider::Cuda => {
-            builder.with_execution_providers([ort::execution_providers::CUDAExecutionProvider::default().build()])
-        }
-        OnnxExecutionProvider::Rocm => {
-            builder.with_execution_providers([ort::execution_providers::ROCmExecutionProvider::default().build()])
-        }
-        OnnxExecutionProvider::DirectMl => {
-            builder.with_execution_providers([ort::execution_providers::DirectMLExecutionProvider::default().build()])
-        }
+        OnnxExecutionProvider::Cuda => builder.with_execution_providers([
+            ort::execution_providers::CUDAExecutionProvider::default().build(),
+        ]),
+        OnnxExecutionProvider::Rocm => builder.with_execution_providers([
+            ort::execution_providers::ROCmExecutionProvider::default().build(),
+        ]),
+        OnnxExecutionProvider::DirectMl => builder.with_execution_providers([
+            ort::execution_providers::DirectMLExecutionProvider::default().build(),
+        ]),
     }
 }
 
@@ -234,7 +234,9 @@ mod tests {
             eprintln!("Skipping: ONNX Runtime not available");
             return;
         }
-        let reranker = LocalReranker::new_with_ep(OnnxExecutionProvider::Cpu).await.unwrap();
+        let reranker = LocalReranker::new_with_ep(OnnxExecutionProvider::Cpu)
+            .await
+            .unwrap();
         let query = "How to parse JSON".to_string();
         let docs = vec![
             "This is a random document about cars.".to_string(),

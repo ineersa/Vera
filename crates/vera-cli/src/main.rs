@@ -424,9 +424,18 @@ fn main() {
             tracing::info!("setup command");
             let backend = if api {
                 None
-            } else if onnx_jina_cpu || onnx_jina_cuda || onnx_jina_rocm || onnx_jina_directml || local {
+            } else if onnx_jina_cpu
+                || onnx_jina_cuda
+                || onnx_jina_rocm
+                || onnx_jina_directml
+                || local
+            {
                 Some(helpers::resolve_backend_flags(
-                    onnx_jina_cpu, onnx_jina_cuda, onnx_jina_rocm, onnx_jina_directml, local,
+                    onnx_jina_cpu,
+                    onnx_jina_cuda,
+                    onnx_jina_rocm,
+                    onnx_jina_directml,
+                    local,
                 ))
             } else {
                 None
@@ -441,9 +450,22 @@ fn main() {
             tracing::info!("doctor command");
             commands::doctor::run(cli.json)
         }
-        Commands::Index { path, onnx_jina_cpu, onnx_jina_cuda, onnx_jina_rocm, onnx_jina_directml, local } => {
+        Commands::Index {
+            path,
+            onnx_jina_cpu,
+            onnx_jina_cuda,
+            onnx_jina_rocm,
+            onnx_jina_directml,
+            local,
+        } => {
             tracing::info!(path = %path, "indexing");
-            let backend = helpers::resolve_backend_flags(onnx_jina_cpu, onnx_jina_cuda, onnx_jina_rocm, onnx_jina_directml, local);
+            let backend = helpers::resolve_backend_flags(
+                onnx_jina_cpu,
+                onnx_jina_cuda,
+                onnx_jina_rocm,
+                onnx_jina_directml,
+                local,
+            );
             commands::index::run(&path, cli.json, backend)
         }
         Commands::Search {
@@ -464,12 +486,31 @@ fn main() {
                 path_glob: path,
                 symbol_type: r#type,
             };
-            let backend = helpers::resolve_backend_flags(onnx_jina_cpu, onnx_jina_cuda, onnx_jina_rocm, onnx_jina_directml, local);
+            let backend = helpers::resolve_backend_flags(
+                onnx_jina_cpu,
+                onnx_jina_cuda,
+                onnx_jina_rocm,
+                onnx_jina_directml,
+                local,
+            );
             commands::search::run(&query, limit, &filters, cli.json, backend)
         }
-        Commands::Update { path, onnx_jina_cpu, onnx_jina_cuda, onnx_jina_rocm, onnx_jina_directml, local } => {
+        Commands::Update {
+            path,
+            onnx_jina_cpu,
+            onnx_jina_cuda,
+            onnx_jina_rocm,
+            onnx_jina_directml,
+            local,
+        } => {
             tracing::info!(path = %path, "updating");
-            let backend = helpers::resolve_backend_flags(onnx_jina_cpu, onnx_jina_cuda, onnx_jina_rocm, onnx_jina_directml, local);
+            let backend = helpers::resolve_backend_flags(
+                onnx_jina_cpu,
+                onnx_jina_cuda,
+                onnx_jina_rocm,
+                onnx_jina_directml,
+                local,
+            );
             commands::update::run(&path, cli.json, backend)
         }
         Commands::Stats => {
@@ -540,7 +581,11 @@ mod tests {
     fn cli_parses_onnx_jina_cpu_flag() {
         let cli = Cli::parse_from(["vera", "index", ".", "--onnx-jina-cpu"]);
         match cli.command {
-            Commands::Index { onnx_jina_cpu, local, .. } => {
+            Commands::Index {
+                onnx_jina_cpu,
+                local,
+                ..
+            } => {
                 assert!(onnx_jina_cpu);
                 assert!(!local);
             }
@@ -564,7 +609,11 @@ mod tests {
         // --local is a hidden backwards-compat alias for --onnx-jina-cpu
         let cli = Cli::parse_from(["vera", "index", ".", "--local"]);
         match cli.command {
-            Commands::Index { local, onnx_jina_cpu, .. } => {
+            Commands::Index {
+                local,
+                onnx_jina_cpu,
+                ..
+            } => {
                 assert!(local);
                 assert!(!onnx_jina_cpu);
             }

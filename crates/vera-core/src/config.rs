@@ -189,14 +189,16 @@ impl VeraConfig {
         match backend {
             InferenceBackend::OnnxJina(OnnxExecutionProvider::Cpu) => {
                 self.embedding.batch_size = self.embedding.batch_size.min(4);
-                self.embedding.max_concurrent_requests = self.embedding.max_concurrent_requests.min(1);
+                self.embedding.max_concurrent_requests =
+                    self.embedding.max_concurrent_requests.min(1);
             }
             InferenceBackend::OnnxJina(_) => {
                 // GPU EPs benefit from larger batches but shouldn't exceed 32
                 // (VRAM-limited for the nano model). Single concurrent request
                 // since the GPU is already saturated by one batch.
                 self.embedding.batch_size = self.embedding.batch_size.min(32);
-                self.embedding.max_concurrent_requests = self.embedding.max_concurrent_requests.min(1);
+                self.embedding.max_concurrent_requests =
+                    self.embedding.max_concurrent_requests.min(1);
             }
             InferenceBackend::Api => {}
         }

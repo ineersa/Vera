@@ -165,6 +165,54 @@ impl MetadataStore {
         Ok(chunks)
     }
 
+    /// Get all chunks whose symbol name matches exactly (case-insensitive).
+    pub fn get_chunks_by_symbol_name(&self, symbol_name: &str) -> Result<Vec<Chunk>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached(
+                "SELECT id, file_path, line_start, line_end, content, language,
+                        symbol_type, symbol_name
+                 FROM chunks
+                 WHERE lower(symbol_name) = lower(?1)
+                 ORDER BY file_path, line_start",
+            )
+            .context("failed to prepare symbol chunks query")?;
+
+        let rows = stmt
+            .query_map(params![symbol_name], |row| Ok(row_to_chunk(row)))
+            .context("failed to query chunks by symbol name")?;
+
+        let mut chunks = Vec::new();
+        for row in rows {
+            chunks.push(row.context("failed to read symbol chunk row")??);
+        }
+        Ok(chunks)
+    }
+
+    /// Get all chunks whose symbol name matches exactly (case-sensitive).
+    pub fn get_chunks_by_symbol_name_case_sensitive(&self, symbol_name: &str) -> Result<Vec<Chunk>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached(
+                "SELECT id, file_path, line_start, line_end, content, language,
+                        symbol_type, symbol_name
+                 FROM chunks
+                 WHERE symbol_name = ?1
+                 ORDER BY file_path, line_start",
+            )
+            .context("failed to prepare case-sensitive symbol chunks query")?;
+
+        let rows = stmt
+            .query_map(params![symbol_name], |row| Ok(row_to_chunk(row)))
+            .context("failed to query chunks by symbol name (case-sensitive)")?;
+
+        let mut chunks = Vec::new();
+        for row in rows {
+            chunks.push(row.context("failed to read case-sensitive symbol chunk row")??);
+        }
+        Ok(chunks)
+    }
+
     /// Count total chunks in the store.
     pub fn chunk_count(&self) -> Result<u64> {
         let count: i64 = self
@@ -449,6 +497,29 @@ mod tests {
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0].id, "src/main.rs:0");
         assert_eq!(chunks[1].id, "src/main.rs:1");
+    }
+
+    #[test]
+    fn get_chunks_by_symbol_name() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        store.insert_chunks(&sample_chunks()).unwrap();
+
+        let chunks = store.get_chunks_by_symbol_name("config").unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].id, "src/main.rs:1");
+    }
+
+    #[test]
+    fn get_chunks_by_symbol_name_case_sensitive() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        store.insert_chunks(&sample_chunks()).unwrap();
+
+        let chunks = store.get_chunks_by_symbol_name_case_sensitive("Config").unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].id, "src/main.rs:1");
+
+        let lower = store.get_chunks_by_symbol_name_case_sensitive("config").unwrap();
+        assert!(lower.is_empty());
     }
 
     #[test]

@@ -25,6 +25,8 @@ struct Bm25Schema {
     schema: Schema,
     chunk_id: tantivy::schema::Field,
     file_path: tantivy::schema::Field,
+    filename: tantivy::schema::Field,
+    path_tokens: tantivy::schema::Field,
     content: tantivy::schema::Field,
     symbol_name: tantivy::schema::Field,
     language: tantivy::schema::Field,
@@ -96,6 +98,8 @@ impl Bm25Index {
                 .add_document(doc!(
                     self.schema.chunk_id => doc_data.chunk_id.to_string(),
                     self.schema.file_path => doc_data.file_path.to_string(),
+                    self.schema.filename => chunk_text::file_name(doc_data.file_path).to_string(),
+                    self.schema.path_tokens => chunk_text::normalize_path_tokens(doc_data.file_path),
                     self.schema.content => searchable_text,
                     self.schema.symbol_name => sym_name.to_string(),
                     self.schema.language => doc_data.language.to_string(),
@@ -124,10 +128,26 @@ impl Bm25Index {
             .context("failed to create BM25 reader")?;
 
         let searcher = reader.searcher();
-        let query_parser = QueryParser::for_index(
+        let mut query_parser = QueryParser::for_index(
             &self.index,
-            vec![self.schema.content, self.schema.symbol_name],
+            vec![
+                self.schema.filename,
+                self.schema.path_tokens,
+                self.schema.symbol_name,
+                self.schema.content,
+            ],
         );
+        let path_weighted = looks_path_weighted(query_text);
+        query_parser.set_field_boost(self.schema.content, 1.0);
+        query_parser.set_field_boost(
+            self.schema.symbol_name,
+            if path_weighted { 2.0 } else { 3.0 },
+        );
+        query_parser.set_field_boost(
+            self.schema.path_tokens,
+            if path_weighted { 5.0 } else { 1.5 },
+        );
+        query_parser.set_field_boost(self.schema.filename, if path_weighted { 8.0 } else { 2.0 });
 
         let query = query_parser
             .parse_query(query_text)
@@ -234,6 +254,8 @@ fn build_schema() -> Bm25Schema {
     // chunk_id and file_path use STRING (exact match, no tokenization) for deletion.
     let chunk_id = builder.add_text_field("chunk_id", STRING | STORED);
     let file_path = builder.add_text_field("file_path", STRING | STORED);
+    let filename = builder.add_text_field("filename", TEXT | STORED);
+    let path_tokens = builder.add_text_field("path_tokens", TEXT);
     let content = builder.add_text_field("content", TEXT | STORED);
     let symbol_name = builder.add_text_field("symbol_name", TEXT | STORED);
     let language = builder.add_text_field("language", TEXT | STORED);
@@ -243,10 +265,27 @@ fn build_schema() -> Bm25Schema {
         schema,
         chunk_id,
         file_path,
+        filename,
+        path_tokens,
         content,
         symbol_name,
         language,
     }
+}
+
+fn looks_path_weighted(query_text: &str) -> bool {
+    let lower = query_text.trim().to_ascii_lowercase();
+    lower.contains('/')
+        || lower.contains('\\')
+        || lower.contains(".toml")
+        || lower.contains(".json")
+        || lower.contains(".yaml")
+        || lower.contains(".yml")
+        || lower.contains(".ini")
+        || lower.contains(".conf")
+        || lower.contains("dockerfile")
+        || lower.contains("makefile")
+        || lower.contains("cmakelists.txt")
 }
 
 #[cfg(test)]
@@ -290,6 +329,27 @@ mod tests {
                 symbol_name: Some("Cargo.toml"),
                 language: "toml",
             },
+            Bm25Document {
+                chunk_id: "fuzz/Cargo.toml:0",
+                file_path: "fuzz/Cargo.toml",
+                content: "[package]\nname = \"vera-fuzz\"\nversion = \"0.1.0\"",
+                symbol_name: Some("Cargo.toml"),
+                language: "toml",
+            },
+            Bm25Document {
+                chunk_id: "turbo.json:0",
+                file_path: "turbo.json",
+                content: "{ \"pipeline\": { \"build\": { \"dependsOn\": [\"^build\"] } } }",
+                symbol_name: Some("turbo.json"),
+                language: "json",
+            },
+            Bm25Document {
+                chunk_id: "crates/turbo/src/pipeline.ts:0",
+                file_path: "crates/turbo/src/pipeline.ts",
+                content: "export type Pipeline = { dependsOn?: string[]; outputs?: string[] }",
+                symbol_name: Some("Pipeline"),
+                language: "typescript",
+            },
         ]
     }
 
@@ -297,7 +357,7 @@ mod tests {
     fn insert_and_count() {
         let index = Bm25Index::open_in_memory().unwrap();
         index.insert_batch(&sample_docs()).unwrap();
-        assert_eq!(index.doc_count().unwrap(), 5);
+        assert_eq!(index.doc_count().unwrap(), 8);
     }
 
     #[test]
@@ -368,10 +428,10 @@ mod tests {
     fn delete_by_chunk_id() {
         let index = Bm25Index::open_in_memory().unwrap();
         index.insert_batch(&sample_docs()).unwrap();
-        assert_eq!(index.doc_count().unwrap(), 5);
+        assert_eq!(index.doc_count().unwrap(), 8);
 
         index.delete_by_chunk_id("src/main.rs:0").unwrap();
-        assert_eq!(index.doc_count().unwrap(), 4);
+        assert_eq!(index.doc_count().unwrap(), 7);
     }
 
     #[test]
@@ -404,5 +464,27 @@ mod tests {
             .unwrap();
         assert!(!results.is_empty());
         assert_eq!(results[0].chunk_id, "Cargo.toml:0");
+    }
+
+    #[test]
+    fn path_boost_prefers_root_config_over_nested_match() {
+        let index = Bm25Index::open_in_memory().unwrap();
+        index.insert_batch(&sample_docs()).unwrap();
+
+        let results = index
+            .search("Cargo.toml workspace configuration", 10)
+            .unwrap();
+        assert_eq!(results[0].chunk_id, "Cargo.toml:0");
+    }
+
+    #[test]
+    fn path_boost_prefers_turbo_json_over_pipeline_symbol() {
+        let index = Bm25Index::open_in_memory().unwrap();
+        index.insert_batch(&sample_docs()).unwrap();
+
+        let results = index
+            .search("turbo.json pipeline configuration", 10)
+            .unwrap();
+        assert_eq!(results[0].chunk_id, "turbo.json:0");
     }
 }

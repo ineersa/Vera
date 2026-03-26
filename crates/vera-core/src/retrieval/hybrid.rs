@@ -16,6 +16,8 @@ use tracing::{debug, info, warn};
 
 use crate::embedding::EmbeddingProvider;
 use crate::retrieval::bm25::search_bm25;
+use crate::retrieval::query_classifier::{QueryType, classify_query};
+use crate::retrieval::ranking::{RankingStage, apply_query_ranking, is_path_weighted_query};
 use crate::retrieval::reranker::{Reranker, rerank_results};
 use crate::retrieval::vector::search_vector;
 use crate::types::SearchResult;
@@ -41,6 +43,23 @@ pub fn compute_vector_candidates(limit: usize, multiplier: usize) -> usize {
     limit.saturating_mul(multiplier).max(50)
 }
 
+fn compute_bm25_candidates(query: &str, limit: usize) -> usize {
+    let query_type = classify_query(query);
+    let token_count = query.split_whitespace().count();
+
+    if is_path_weighted_query(query) {
+        return limit.saturating_mul(20).max(400);
+    }
+    if query_type == QueryType::NaturalLanguage {
+        return limit.saturating_mul(8).max(limit + 80);
+    }
+    if token_count <= 2 {
+        return limit.saturating_mul(12).max(300);
+    }
+
+    limit.saturating_mul(3).max(limit + 20)
+}
+
 /// Perform hybrid search combining BM25 and vector retrieval via RRF fusion.
 ///
 /// Runs BM25 and vector search, merges results using Reciprocal Rank Fusion,
@@ -64,8 +83,7 @@ pub async fn search_hybrid(
     stored_dim: usize,
     vector_candidates: usize,
 ) -> Result<Vec<SearchResult>, HybridSearchError> {
-    // BM25 candidates: standard multiplier.
-    let bm25_candidates = limit.saturating_mul(3).max(limit + 20);
+    let bm25_candidates = compute_bm25_candidates(query, limit);
 
     // Run BM25 search.
     let bm25_results = search_bm25(index_dir, query, bm25_candidates);
@@ -82,14 +100,18 @@ pub async fn search_hybrid(
                 vector_count = vector.len(),
                 "merging BM25 and vector results via RRF"
             );
-            Ok(fuse_rrf(&bm25, &vector, rrf_k, limit))
+            Ok(apply_query_ranking(
+                query,
+                fuse_rrf(&bm25, &vector, rrf_k, limit),
+                RankingStage::Initial,
+            ))
         }
         (Ok(bm25), Err(vec_err)) => {
             warn!(
                 error = %vec_err,
                 "vector search failed, falling back to BM25-only results"
             );
-            let mut results = bm25;
+            let mut results = apply_query_ranking(query, bm25, RankingStage::Initial);
             results.truncate(limit);
             Ok(results)
         }
@@ -98,7 +120,7 @@ pub async fn search_hybrid(
                 error = %bm25_err,
                 "BM25 search failed, falling back to vector-only results"
             );
-            let mut results = vector;
+            let mut results = apply_query_ranking(query, vector, RankingStage::Initial);
             results.truncate(limit);
             Ok(results)
         }
@@ -170,6 +192,7 @@ pub async fn search_hybrid_reranked(
                 reranked = reranked.len(),
                 "reranking complete"
             );
+            reranked = apply_query_ranking(query, reranked, RankingStage::PostRerank);
             reranked.truncate(limit);
             Ok(reranked)
         }
@@ -826,6 +849,27 @@ mod tests {
         // For large limit, multiplier should dominate.
         assert_eq!(compute_vector_candidates(100, 3), 300);
         assert_eq!(compute_vector_candidates(100, 5), 500);
+    }
+
+    #[test]
+    fn path_queries_expand_bm25_candidate_pool() {
+        assert_eq!(
+            compute_bm25_candidates("turbo.json pipeline configuration", 20),
+            400
+        );
+    }
+
+    #[test]
+    fn natural_language_queries_expand_bm25_candidate_pool() {
+        assert_eq!(
+            compute_bm25_candidates("request validation and schema enforcement", 20),
+            160
+        );
+    }
+
+    #[test]
+    fn short_identifier_queries_expand_bm25_candidate_pool() {
+        assert_eq!(compute_bm25_candidates("Config", 20), 300);
     }
 
     // ── Integration: NL vs identifier query produces different fusion ──

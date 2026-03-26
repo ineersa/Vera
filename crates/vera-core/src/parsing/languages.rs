@@ -51,7 +51,9 @@ pub fn tree_sitter_grammar(lang: Language) -> Option<TsLanguage> {
         },
         Language::Html => tree_sitter_html::LANGUAGE.into(),
         Language::Css => tree_sitter_css::LANGUAGE.into(),
-        Language::Scss => unsafe { std::mem::transmute::<*const (), TsLanguage>(tree_sitter_scss()) },
+        Language::Scss => unsafe {
+            std::mem::transmute::<*const (), TsLanguage>(tree_sitter_scss())
+        },
         Language::Vue => unsafe { std::mem::transmute::<*const (), TsLanguage>(tree_sitter_vue()) },
         Language::GraphQl => tree_sitter_graphql::LANGUAGE.into(),
         Language::CMake => tree_sitter_cmake::LANGUAGE.into(),

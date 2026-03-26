@@ -674,6 +674,10 @@ fn classify_dart(kind: &str) -> Option<SymbolType> {
 ///
 /// Looks for the first `name` or `identifier`-type child node.
 pub fn extract_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    if node.kind() == "impl_item" {
+        return extract_impl_name(node, source);
+    }
+
     // HCL block name (second child that is an identifier or string_lit)
     if node.kind() == "block" {
         let mut cursor = node.walk();
@@ -745,6 +749,29 @@ pub fn extract_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Strin
         }
     }
     None
+}
+
+fn extract_impl_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    let text = node.utf8_text(source).ok()?;
+    let header = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    if !header.starts_with("impl") {
+        return None;
+    }
+
+    let mut header = header
+        .trim_end_matches('{')
+        .trim_end_matches("where")
+        .trim();
+    if let Some((prefix, _)) = header.split_once(" where ") {
+        header = prefix.trim();
+    }
+
+    let cleaned = header.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!cleaned.is_empty()).then_some(cleaned)
 }
 
 /// Extract a name string from a node, handling nested patterns.
@@ -1667,11 +1694,23 @@ impl Point {
         let symbols = parse_and_extract(source, Language::Rust);
         assert_eq!(symbols.len(), 3);
         assert_eq!(symbols[0].symbol_type, SymbolType::Block);
-        assert_eq!(symbols[0].name.as_deref(), Some("Point"));
+        assert_eq!(symbols[0].name.as_deref(), Some("impl Point"));
         assert_eq!(symbols[1].symbol_type, SymbolType::Method);
         assert_eq!(symbols[1].name.as_deref(), Some("new"));
         assert_eq!(symbols[2].symbol_type, SymbolType::Method);
         assert_eq!(symbols[2].name.as_deref(), Some("distance"));
+    }
+
+    #[test]
+    fn rust_extracts_trait_impl_names() {
+        let source = r#"
+impl Sink for StdoutSink {
+    fn write(&self) {}
+}
+"#;
+        let symbols = parse_and_extract(source, Language::Rust);
+        assert_eq!(symbols[0].symbol_type, SymbolType::Block);
+        assert_eq!(symbols[0].name.as_deref(), Some("impl Sink for StdoutSink"));
     }
 
     #[test]

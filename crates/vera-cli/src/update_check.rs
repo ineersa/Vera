@@ -70,7 +70,9 @@ fn check_skill_staleness() {
 
 fn read_skill_version(skill_dir: &Path) -> Option<String> {
     let version_file = skill_dir.join(".version");
-    fs::read_to_string(version_file).ok().map(|s| s.trim().to_string())
+    fs::read_to_string(version_file)
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -167,10 +169,7 @@ fn fetch_latest_version() -> Option<String> {
         .ok()?;
 
     rt.block_on(async {
-        let url = format!(
-            "https://api.github.com/repos/{}/releases/latest",
-            REPO
-        );
+        let url = format!("https://api.github.com/repos/{}/releases/latest", REPO);
         let client = reqwest::Client::builder()
             .timeout(GITHUB_API_TIMEOUT)
             .build()
