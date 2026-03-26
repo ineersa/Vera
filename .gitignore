@@ -1,4 +1,7 @@
 secrets.env
+.env
+.env.*
+!.env.example
 /AGENTS.md
 .junie/
 .bench/
