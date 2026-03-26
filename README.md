@@ -269,7 +269,7 @@ Sample JSON output (`--json`):
 
 ## Benchmark Snapshot
 
-The public comparison snapshot below is older and reflects the `v0.4.0` era pipeline and nearby public runs, not the current `v0.6.0` retrieval quality. It is kept here because it compares Vera against other tools on the same workload. Since then, Vera's local 21-task release benchmark improved from `0.2421` to `0.8135` Recall@1 and from `0.5016` to `1.0000` MRR@10. More detail: [Accuracy improvements from `v0.4.0` to `v0.6.0`](docs/accuracy-improvements-v0.4-to-v0.6.md).
+The public comparison snapshot below is older and reflects the `v0.4.0` era pipeline and nearby public runs, not the current `v0.6.0` retrieval quality. It is kept here because it compares Vera against other tools on the same workload. Since then, Vera's local 21-task release benchmark improved from `0.2421` to `0.8135` Recall@1 and from `0.5016` to `1.0000` MRR@10. More detail: [`v0.6.0` accuracy improvements](docs/releases/v0.6.0-accuracy-improvements.md).
 
 The older public benchmark suite covers 17 tasks across three open-source codebases (`ripgrep`, `flask`, `fastify`) and five workload categories: symbol lookup, intent search, cross-file discovery, config lookup, and disambiguation.
 
