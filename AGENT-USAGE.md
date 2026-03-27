@@ -5,7 +5,7 @@ Vera is a semantic code search CLI. For the full skill definition, see [`skills/
 ## Quick Start
 
 ```bash
-npx -y @vera-ai/cli install   # install binary
+bunx @vera-ai/cli install      # install binary (or: npx -y @vera-ai/cli install)
 vera index .                    # index the repo (add .vera/ to .gitignore)
 vera search "query"              # search. returns ranked markdown codeblocks
 vera update .                   # after code changes

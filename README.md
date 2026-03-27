@@ -148,14 +148,6 @@ bunx @vera-ai/cli install   # re-downloads latest binary + refreshes skill files
 
 Set `VERA_NO_UPDATE_CHECK=1` to disable the automatic check.
 
-### Uninstalling
-
-```bash
-vera uninstall   # removes binary, models, config, skill files, and PATH shim
-```
-
-Per-project indexes (`.vera/`) are not removed. Delete them manually if needed.
-
 ## Model Backend
 
 Vera itself is always local: the index lives in `.vera/`, config in `~/.vera/`. The backend choice only affects where embeddings and reranking run.
@@ -267,8 +259,6 @@ vera uninstall
 This removes `~/.vera/` (binary cache, models, ONNX Runtime libs, config), agent skill files, and the PATH shim. Per-project indexes (`.vera/` inside each project) are left in place. Delete them manually if needed.
 
 If something isn't working, see [troubleshooting](docs/troubleshooting.md).
-
-The skill file at [skills/vera/SKILL.md](skills/vera/SKILL.md) teaches AI agents how to use Vera effectively. If you're an AI agent reading this repo directly, start with [AGENT-USAGE.md](AGENT-USAGE.md).
 
 Output uses markdown codeblocks by default, the most token-efficient format for AI agents:
 

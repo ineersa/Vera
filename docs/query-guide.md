@@ -62,12 +62,8 @@ Vera is a semantic search tool. For these tasks, use `rg` (ripgrep) or plain gre
 
 ## Output Format
 
-Output uses markdown codeblocks by default, the most token-efficient format for AI agents. Each result is a fenced codeblock with file path, line range, and optional symbol info in the info string. Use `--json` for compact single-line JSON (programmatic consumption or piping to other tools), or `--raw` for verbose human-readable output with all fields. Use `--timing` to print pipeline step durations to stderr. See the [README](../README.md#usage) for a sample.
+See the [README usage section](../README.md#usage) for output format options (`--json`, `--raw`, `--timing`) and a sample.
 
 ## Keeping Results Fresh
 
-If you've changed code since the last index, results may be stale. Run:
-
-```bash
-vera update .
-```
+If results feel stale after code changes, run `vera update .`. See [troubleshooting](troubleshooting.md#results-feel-stale-or-outdated) for details.
