@@ -41,36 +41,21 @@ vera search "authentication logic"
 
 ## Why Vera is Better
 
-### Cross-encoder reranking
+**Cross-encoder reranking.** Most code search tools retrieve candidates and stop. Vera adds a reranking stage that reads query and candidate as a single pair, scoring relevance jointly instead of comparing pre-computed vectors. Result: 0.60 MRR@10 vs. 0.28 with vector retrieval alone.
 
-Most code indexing tools retrieve candidates and stop there. Vera adds a cross-encoder reranking stage that reads query and candidate together as a single pair, scoring relevance jointly instead of comparing pre-computed vectors. This is the difference between 0.28 MRR@10 (vector retrieval alone) and 0.60 MRR@10 (with reranking).
+**Zero-dependency, single binary.** One static binary with 60+ tree-sitter grammars compiled in. No Python, no language servers, no per-language toolchains. Drop it on any machine, run `vera setup`, done. Compare: Serena requires Python, uv, and separate LSP installs per language.
 
-### Zero-dependency, single binary
+**Higher accuracy, proven on real codebases.** Vera scores 0.80 nDCG@10 and 0.70 Recall@5 on a 17-task benchmark across `ripgrep`, `flask`, and `fastify`. The current 21-task suite scores even higher. See [Benchmark Snapshot](#benchmark-snapshot).
 
-Vera ships as one static binary with all 60+ language grammars compiled in via tree-sitter. No Python runtime, no language servers, no per-language toolchains to install or manage. Drop the binary on any machine, run `vera setup`, and the full search pipeline is ready. Tools like Serena require a Python runtime and uv just to start, plus separate LSP dependencies for some languages. Vera has zero external dependencies.
-
-### Higher accuracy, proven on real codebases
-
-On a 17-task benchmark across `ripgrep`, `flask`, and `fastify`, Vera's hybrid pipeline scores `0.80` nDCG@10 and `0.70` Recall@5, compared to `0.52` nDCG@10 for cocoindex-code and `0.71` for vector-only search. The current 21-task suite scores even higher. See [Benchmark Snapshot](#benchmark-snapshot) for the full numbers.
-
-### Token-efficient output, built for AI agents
-
-Vera defaults to markdown codeblocks, cutting output size ~35-40% compared to typical JSON. It ships with skill files that teach agents how to write effective queries, what filters to use, and when to reach for `rg` instead.
+**Token-efficient output.** Defaults to markdown codeblocks, cutting output size ~35-40% vs. JSON. Ships with skill files that teach AI agents how to write effective queries and when to reach for `rg` instead.
 
 ## Features
 
-### Model-agnostic, local-first
+**Model-agnostic, local-first.** Point Vera at any OpenAI-compatible embedding or reranker endpoint, remote or local. Indexing, storage, and search logic always stay on your machine. Run `vera setup` to download two curated ONNX models and run the full pipeline offline. Details: [Model Backend](#model-backend).
 
-Point Vera at any OpenAI-compatible embedding or reranker endpoint, remote or local. Everything else (indexing, storage, search logic) stays on your machine regardless, no cloud hosted services needed. Run `vera setup` to download two curated ONNX models and run the full pipeline offline. Details: [Model Backend](#model-backend).
+**Tree-sitter structural parsing.** 60+ language grammars extract functions, classes, methods, and structs as discrete chunks. Results map to actual symbol boundaries, not arbitrary line ranges. Filter with `--type function` or `--type class`.
 
-### Tree-sitter structural parsing
-
-Vera uses tree-sitter grammars for 60+ languages to extract functions, classes, methods, and structs as discrete chunks. Search results map to actual symbol boundaries, not arbitrary line ranges. Filter by type with `--type function` or `--type class` to narrow results to exactly the kind of symbol you need.
-
-
-### Structured, code-aware results
-
-Every result includes file path, line range, source content, symbol name, and symbol type. Agents and scripts consume this directly without parsing. See [AGENT-USAGE.md](AGENT-USAGE.md) for AI agent integration.
+**Structured, code-aware results.** Every result includes file path, line range, source content, symbol name, and type. Agents and scripts consume this directly without parsing. See [AGENT-USAGE.md](AGENT-USAGE.md) for AI agent integration.
 
 ## Installation
 
@@ -156,36 +141,32 @@ Vera itself is always local: the index lives in `.vera/`, config in `~/.vera/`. 
 
 ### Curated Local Models
 
-`vera setup` downloads quantized ONNX models into `~/.vera/models/` and the ONNX Runtime shared library into `~/.vera/lib/`, then runs inference locally. No manual install required:
+`vera setup` downloads quantized ONNX models into `~/.vera/models/` and the ONNX Runtime library into `~/.vera/lib/`. No manual install required.
 
-- **Embeddings:** [`jina-embeddings-v5-text-nano-retrieval`](https://huggingface.co/jinaai/jina-embeddings-v5-text-nano-retrieval) (239M, quantized ONNX). Highest-scoring embedding model under 500M parameters on MMTEB. Uses a retrieval-specific LoRA adapter designed for asymmetric search (short query, long code block).
-- **Reranker:** [`jina-reranker-v2-base-multilingual`](https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual) (278M, quantized ONNX). Cross-encoder that scores query-document pairs jointly. Half the size and 15x faster than bge-reranker-v2-m3.
+| Model | Size | Role |
+|-------|------|------|
+| [`jina-embeddings-v5-text-nano-retrieval`](https://huggingface.co/jinaai/jina-embeddings-v5-text-nano-retrieval) | 239M | Embedding (retrieval LoRA, asymmetric search) |
+| [`jina-reranker-v2-base-multilingual`](https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual) | 278M | Cross-encoder reranker (15x faster than bge-reranker-v2-m3) |
 
-For detailed model specs, benchmarks, and training details, see [docs/models.md](docs/models.md).
+With both models cached, the full pipeline (BM25 + vector search + rerank) runs without external calls. For detailed specs, see [docs/models.md](docs/models.md).
 
-With both models cached locally, the full three-stage pipeline (BM25, vector search, rerank) runs without any external calls. This gives you:
+### GPU Acceleration
 
-- A local repo index on disk in `.vera/`
-- A local model cache under `~/.vera/models/`
-- A fully self-contained setup for private repos and offline workflows
+`vera setup` auto-detects your GPU. You can also specify a backend directly:
 
-#### GPU Acceleration
-
-By default, `vera setup` configures CPU inference. If you have a compatible GPU, use a specific backend flag:
-
-```bash
-vera setup --onnx-jina-cuda      # NVIDIA GPU (requires CUDA 12+ drivers)
-vera setup --onnx-jina-rocm      # AMD GPU (Linux, requires ROCm drivers)
-vera setup --onnx-jina-directml  # Any DirectX 12 GPU (Windows)
-vera setup --onnx-jina-coreml    # Apple Silicon (macOS, M1/M2/M3/M4)
-vera setup --onnx-jina-openvino  # Intel GPU/iGPU (Linux only, requires Intel compute runtime)
-```
+| Flag | Hardware |
+|------|----------|
+| `--onnx-jina-cuda` | NVIDIA (CUDA 12+) |
+| `--onnx-jina-rocm` | AMD (Linux, ROCm) |
+| `--onnx-jina-directml` | Any DirectX 12 GPU (Windows) |
+| `--onnx-jina-coreml` | Apple Silicon (macOS) |
+| `--onnx-jina-openvino` | Intel GPU/iGPU (Linux) |
 
 Vera downloads the matching ONNX Runtime build automatically. The same flag works on `vera index` and `vera search` to override the configured backend per-command.
 
-#### Local Inference Speed
+### Inference Speed
 
-Local mode runs neural networks (239M embedding + 278M reranker) on your machine. The indexing time is compute-bound matrix math, not file I/O. These models are designed for GPU inference; CPU works but will be slow indexing a codebase for the first time. After the initial index, `vera update .` only re-embeds changed files, so subsequent updates will be fast enough even for CPU.
+Local mode runs neural networks on your machine. GPU is recommended; CPU works but is slow for initial indexing. After the first index, `vera update .` only re-embeds changed files, so updates are fast even on CPU.
 
 | Backend | Hardware | Time | Notes |
 |---------|----------|------|-------|
@@ -193,9 +174,9 @@ Local mode runs neural networks (239M embedding + 278M reranker) on your machine
 | API mode | Remote GPU | ~30 s | Requires API key, no local compute |
 | CPU | Ryzen 5 7600X3D (6c/12t) | ~6 min | Use GPU or API mode if this is too slow |
 
-### Any OpenAI-Compatible Endpoint
+### API Mode
 
-Use `vera setup --api` to point Vera at your own endpoint. This works with remote APIs or local servers like `llama.cpp`.
+Use `vera setup --api` to point Vera at any OpenAI-compatible endpoint (remote APIs or local servers like `llama.cpp`).
 
 ```bash
 export EMBEDDING_MODEL_BASE_URL=https://your-embedding-api/v1
@@ -221,32 +202,28 @@ vera search "routes" --path "src/**/*.ts"
 vera search "handler" --type function --limit 5
 ```
 
-For tips on writing effective queries, filtering results, and when to use `rg` instead, see the [query guide](docs/query-guide.md).
+See the [query guide](docs/query-guide.md) for tips on writing effective queries and when to use `rg` instead.
 
-Update the index after code changes:
-
-```bash
-vera update .
-```
+Update the index after code changes: `vera update .`
 
 ### Excluding Files
 
-Vera respects `.gitignore` by default. For more control, create a `.veraignore` file in your project root using gitignore syntax. When present, `.veraignore` completely replaces `.gitignore` rules, giving you full control over what gets indexed (useful for indexing untracked local docs while excluding other files).
+Vera respects `.gitignore` by default. For more control, create a `.veraignore` file in your project root (gitignore syntax). When present, `.veraignore` completely replaces `.gitignore` rules, giving you full control over what gets indexed.
 
 To keep `.gitignore` rules and add extra exclusions on top, put `#include .gitignore` at the top of `.veraignore`.
 
-One-off exclusions without editing files:
+One-off exclusions:
 
 ```bash
 vera index . --exclude "tests/**" --exclude "*.generated.ts"
 vera update . --exclude "vendor/**"
 ```
 
-Power-user flags: `--no-ignore` disables all ignore file parsing, `--no-default-excludes` disables the built-in exclusions (node_modules, .git, target, etc.).
+`--no-ignore` disables all ignore file parsing. `--no-default-excludes` disables built-in exclusions (node_modules, .git, target, etc.).
 
 ### Output Format
 
-Output uses markdown codeblocks by default, the most token-efficient format for AI agents:
+Defaults to markdown codeblocks (the most token-efficient format for AI agents):
 
 ````
 ```src/auth/login.rs:42-68 function:authenticate
@@ -254,7 +231,11 @@ pub fn authenticate(credentials: &Credentials) -> Result<Token> { ... }
 ```
 ````
 
-Use `--json` for compact single-line JSON (useful for programmatic consumption or piping to other tools), or `--raw` for verbose human-readable output with all fields. Use `--timing` to print per-stage pipeline durations (embedding, BM25, vector, fusion, reranking) to stderr.
+| Flag | Output |
+|------|--------|
+| `--json` | Compact single-line JSON |
+| `--raw` | Verbose human-readable output |
+| `--timing` | Per-stage pipeline durations to stderr |
 
 ### Other Commands
 
@@ -272,13 +253,13 @@ vera agent status --scope all  # check skill installation status
 vera uninstall
 ```
 
-This removes `~/.vera/` (binary cache, models, ONNX Runtime libs, config), agent skill files, and the PATH shim. Per-project indexes (`.vera/` inside each project) are left in place. Delete them manually if needed.
+Removes `~/.vera/` (binary, models, ONNX Runtime libs, config), agent skill files, and the PATH shim. Per-project indexes (`.vera/` in each project) are left in place.
 
 If something isn't working, see [troubleshooting](docs/troubleshooting.md).
 
 ## Benchmark Snapshot
 
-Public comparison from `v0.4.0` (kept because it compares Vera against other tools on the same workload). Vera has improved ~55% on Recall@5 and ~83% on nDCG@10 since then. 17 tasks across `ripgrep`, `flask`, `fastify`:
+Comparison from `v0.4.0` against other tools on the same workload (17 tasks across `ripgrep`, `flask`, `fastify`). Vera has improved ~55% on Recall@5 and ~83% on nDCG@10 since this comparison.
 
 | Metric | ripgrep | cocoindex-code | vector-only | Vera hybrid |
 |--------|---------|----------------|-------------|-------------|
@@ -287,7 +268,7 @@ Public comparison from `v0.4.0` (kept because it compares Vera against other too
 | MRR@10 | 0.2625 | 0.3517 | 0.2814 | **0.6009** |
 | nDCG@10 | 0.2929 | 0.5206 | 0.7077 | **0.8008** |
 
-#### Current Results (`v0.7.0+`)
+### Current Results (v0.7.0+)
 
 21 tasks across `ripgrep`, `flask`, `fastify`, and `turborepo`:
 
@@ -300,11 +281,11 @@ More detail: [docs/benchmarks.md](docs/benchmarks.md) · [benchmarks/indexing-pe
 
 ## Supported Languages
 
-Vera supports 63 languages and file formats with tree-sitter symbol extraction, plus text chunking for data formats. Full list with extensions and extraction support: [docs/supported-languages.md](docs/supported-languages.md).
+63 languages and file formats with tree-sitter symbol extraction, plus text chunking for data formats. Full list: [docs/supported-languages.md](docs/supported-languages.md).
 
 ## How It Works
 
-Vera's retrieval pipeline runs BM25 keyword search and vector similarity search in parallel, merges results with Reciprocal Rank Fusion, then reranks the top candidates with a cross-encoder. For the full breakdown (parsing, fusion, reranking, storage, and the benchmarks behind each choice), see [docs/how-it-works.md](docs/how-it-works.md).
+BM25 keyword search and vector similarity run in parallel, merge via Reciprocal Rank Fusion, then a cross-encoder reranks the top candidates. Full breakdown: [docs/how-it-works.md](docs/how-it-works.md).
 
 ## Contributing
 
