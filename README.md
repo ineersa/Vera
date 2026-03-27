@@ -49,9 +49,13 @@ Most code indexing tools retrieve candidates and stop there. Vera adds a cross-e
 
 Vera ships as one static binary with all 60+ language grammars compiled in via tree-sitter. No Python runtime, no language servers, no per-language toolchains to install or manage. Drop the binary on any machine, run `vera setup`, and the full search pipeline is ready. Tools like Serena require a Python runtime and uv just to start, plus separate LSP dependencies for some languages. Vera has zero external dependencies.
 
-### High accuracy, extremely fast, proven on real codebases
+### Higher accuracy than other tools, proven on real codebases
 
-21 tasks across four real codebases (`ripgrep`, `flask`, `fastify`, `turborepo`). On the current local Jina CUDA ONNX benchmark, Vera v0.7.0 reaches `0.8361` nDCG@10 with `0.78` Recall@5, `0.83` Recall@10, and `0.91` MRR@10. See [Benchmark Snapshot](#benchmark-snapshot) for the release comparison.
+On the same 17-task benchmark suite, Vera's hybrid pipeline scores `0.80` nDCG@10 and `0.70` Recall@5, compared to `0.52` nDCG@10 for cocoindex-code and `0.71` nDCG@10 for vector-only search. Since that public comparison, Vera's internal 21-task benchmark (across `ripgrep`, `flask`, `fastify`, `turborepo`) improved further to `0.84` nDCG@10 with `0.78` Recall@5 and `0.91` MRR@10. See [Benchmark Snapshot](#benchmark-snapshot) for the full comparison.
+
+### Token-efficient output, built for AI agents
+
+Most code search tools dump verbose pretty-printed JSON with fields agents don't need (scores, language tags inferrable from file extensions, null placeholders). Vera defaults to markdown codeblocks, the most token-efficient structured format, cutting output size by roughly 35-40% compared to typical JSON. It also ships with skill files that teach agents how to write effective queries, what filters to use, and when to reach for `rg` instead. Other tools leave agents to figure this out from generic help text.
 
 ## Features
 
@@ -66,7 +70,7 @@ Vera uses tree-sitter grammars for 60+ languages to extract functions, classes, 
 
 ### Structured, code-aware results
 
-Every result includes file path, line range, source content, symbol name, symbol type, language, and relevance score. Agents and scripts consume this directly without parsing. See [AGENT-USAGE.md](AGENT-USAGE.md) for AI agent integration.
+Every result includes file path, line range, source content, symbol name, and symbol type. Agents and scripts consume this directly without parsing. See [AGENT-USAGE.md](AGENT-USAGE.md) for AI agent integration.
 
 ## Installation
 
