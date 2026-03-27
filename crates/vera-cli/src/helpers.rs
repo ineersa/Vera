@@ -60,20 +60,23 @@ impl<'a> CompactResult<'a> {
     }
 }
 
-/// Output search results in human-readable or JSON format.
+/// Output search results.
 ///
-/// When `raw` is true, outputs the full `SearchResult` with all fields
-/// (pretty-printed JSON or verbose human text). When false (default),
-/// outputs compact single-line JSON optimized for AI agent token budgets.
-pub fn output_results(results: &[vera_core::types::SearchResult], json_output: bool, raw: bool) {
-    if json_output || !raw {
+/// Priority: `markdown` > default compact JSON > `raw` verbose.
+pub fn output_results(
+    results: &[vera_core::types::SearchResult],
+    json_output: bool,
+    raw: bool,
+    markdown: bool,
+) {
+    if markdown {
+        format_markdown(results);
+    } else if json_output || !raw {
         if raw {
-            // --raw --json: full pretty-printed output with all fields
             let json = serde_json::to_string_pretty(results)
                 .unwrap_or_else(|e| format!("{{\"error\": \"failed to serialize: {e}\"}}"));
             println!("{json}");
         } else {
-            // Default: compact single-line JSON, no score/language/nulls
             let compact: Vec<CompactResult> =
                 results.iter().map(CompactResult::from_search_result).collect();
             let json = serde_json::to_string(&compact)
@@ -100,8 +103,6 @@ pub fn output_results(results: &[vera_core::types::SearchResult], json_output: b
                 }
             }
             println!("   score: {:.6}", result.score);
-
-            // Show a preview of the content (first 3 lines).
             let preview: String = result
                 .content
                 .lines()
@@ -112,6 +113,25 @@ pub fn output_results(results: &[vera_core::types::SearchResult], json_output: b
             println!("{preview}");
             println!();
         }
+    }
+}
+
+/// Format results as markdown codeblocks for token-efficient LLM consumption.
+fn format_markdown(results: &[vera_core::types::SearchResult]) {
+    for (i, r) in results.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+        let mut info = format!("{}:{}-{}", r.file_path, r.line_start, r.line_end);
+        if let (Some(stype), Some(name)) = (&r.symbol_type, &r.symbol_name) {
+            info.push_str(&format!(" {stype}:{name}"));
+        }
+        println!("```{info}");
+        print!("{}", r.content);
+        if !r.content.ends_with('\n') {
+            println!();
+        }
+        println!("```");
     }
 }
 

@@ -185,7 +185,7 @@ fn handle_search_code(args: &Value) -> ToolCallResult {
     }
 
     // Use the shared search service from vera-core.
-    let results = match vera_core::retrieval::search_service::execute_search(
+    let (results, _timings) = match vera_core::retrieval::search_service::execute_search(
         &index_dir,
         query,
         &config,

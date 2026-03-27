@@ -52,6 +52,18 @@ struct Cli {
     /// to get the full verbose output with all fields.
     #[arg(long, global = true)]
     raw: bool,
+
+    /// Output results as markdown codeblocks.
+    ///
+    /// The most token-efficient format for LLM agents reading results as
+    /// text context. Each result is a fenced codeblock with file path and
+    /// line range in the info string.
+    #[arg(long, alias = "md", global = true)]
+    markdown: bool,
+
+    /// Print search pipeline step timings to stderr.
+    #[arg(long, global = true)]
+    timing: bool,
 }
 
 #[derive(Subcommand)]
@@ -520,7 +532,7 @@ fn main() {
                 onnx_jina_coreml,
                 local,
             );
-            commands::search::run(&query, limit, &filters, cli.json, cli.raw, backend)
+            commands::search::run(&query, limit, &filters, cli.json, cli.raw, cli.markdown, cli.timing, backend)
         }
         Commands::Update {
             path,

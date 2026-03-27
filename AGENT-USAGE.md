@@ -18,7 +18,7 @@ vera update .                   # after code changes
 
 ## Output
 
-Default output is compact single-line JSON with `file_path`, `line_start`, `line_end`, `content`, and optional `symbol_name`/`symbol_type`. Use `--raw` for verbose output with all fields (score, language, nulls).
+Default output is compact single-line JSON with `file_path`, `line_start`, `line_end`, `content`, and optional `symbol_name`/`symbol_type`. Use `--markdown` for token-efficient markdown codeblocks, or `--raw` for verbose output with all fields (score, language, nulls). Use `--timing` to print pipeline step durations to stderr.
 
 ## References
 

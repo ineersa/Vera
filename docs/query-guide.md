@@ -62,7 +62,7 @@ Vera is a semantic search tool. For these tasks, use `rg` (ripgrep) or plain gre
 
 ## Output Format
 
-Output is compact single-line JSON by default, optimized for AI agent token budgets. It includes file path, line range, content, and optional symbol info. Use `--raw` for verbose pretty-printed JSON with all fields (score, language, nulls). See the [README](../README.md#usage) for a sample.
+Output is compact single-line JSON by default, optimized for AI agent token budgets. It includes file path, line range, content, and optional symbol info. Use `--markdown` for token-efficient markdown codeblocks, or `--raw` for verbose pretty-printed JSON with all fields (score, language, nulls). Use `--timing` to print pipeline step durations to stderr. See the [README](../README.md#usage) for a sample.
 
 ## Keeping Results Fresh
 

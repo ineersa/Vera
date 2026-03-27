@@ -29,7 +29,7 @@ vera search "hybrid search" --limit 1
 [{"file_path":"crates/vera-core/src/retrieval/hybrid.rs","line_start":58,"line_end":110,"content":"pub async fn search_hybrid(...) -> Result<Vec<SearchResult>> { ... }","symbol_name":"search_hybrid","symbol_type":"function"}]
 ```
 
-Fields: `file_path`, `line_start`, `line_end`, `content`, and optional `symbol_name`/`symbol_type`. Use `--raw` for verbose output with all fields (score, language, nulls).
+Fields: `file_path`, `line_start`, `line_end`, `content`, and optional `symbol_name`/`symbol_type`. Use `--markdown` for token-efficient markdown codeblocks, or `--raw` for verbose output with all fields (score, language, nulls). Use `--timing` to print pipeline step durations to stderr.
 
 ## Query Strategy
 

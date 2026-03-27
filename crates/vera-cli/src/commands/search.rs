@@ -6,12 +6,15 @@ use vera_core::config::InferenceBackend;
 use crate::helpers::{load_runtime_config, output_results};
 
 /// Run the `vera search <query>` command.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     query: &str,
     limit: Option<usize>,
     filters: &vera_core::types::SearchFilters,
     json_output: bool,
     raw: bool,
+    markdown: bool,
+    timing: bool,
     backend: InferenceBackend,
 ) -> anyhow::Result<()> {
     let mut config = load_runtime_config()?;
@@ -29,7 +32,7 @@ pub fn run(
         );
     }
 
-    let results = vera_core::retrieval::search_service::execute_search(
+    let (results, timings) = vera_core::retrieval::search_service::execute_search(
         &index_dir,
         query,
         &config,
@@ -38,6 +41,22 @@ pub fn run(
         backend,
     )?;
 
-    output_results(&results, json_output, raw);
+    output_results(&results, json_output, raw, markdown);
+
+    if timing {
+        use std::io::Write;
+        let stderr = std::io::stderr();
+        let mut err = stderr.lock();
+        let fmt = |d: Option<std::time::Duration>| -> String {
+            match d {
+                Some(d) => format!("{}ms", d.as_millis()),
+                None => "n/a".to_string(),
+            }
+        };
+        let _ = writeln!(err, "[timing] search: {}", fmt(timings.reranking));
+        let _ = writeln!(err, "[timing] augmentation: {}", fmt(timings.augmentation));
+        let _ = writeln!(err, "[timing] total: {}", fmt(timings.total));
+    }
+
     Ok(())
 }

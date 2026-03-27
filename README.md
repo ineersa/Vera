@@ -268,7 +268,7 @@ Output is compact JSON by default, optimized for AI agent token budgets. It omit
 [{"file_path":"src/auth/login.rs","line_start":42,"line_end":68,"content":"pub fn authenticate(credentials: &Credentials) -> Result<Token> { ... }","symbol_name":"authenticate","symbol_type":"function"}]
 ```
 
-Use `--raw` for pretty-printed JSON with all fields (score, language, nulls included).
+Use `--markdown` for token-efficient markdown codeblocks, or `--raw` for pretty-printed JSON with all fields. Use `--timing` to print pipeline step durations to stderr.
 
 ## Benchmark Snapshot
 

@@ -5,6 +5,7 @@
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use tracing::warn;
@@ -19,6 +20,18 @@ use crate::retrieval::ranking::{
 use crate::retrieval::{apply_filters, search_bm25, search_hybrid, search_hybrid_reranked};
 use crate::types::{Chunk, SearchFilters, SearchResult, SymbolType};
 
+/// Timing data for each stage of the search pipeline.
+#[derive(Debug, Default)]
+pub struct SearchTimings {
+    pub embedding: Option<Duration>,
+    pub bm25: Option<Duration>,
+    pub vector: Option<Duration>,
+    pub fusion: Option<Duration>,
+    pub reranking: Option<Duration>,
+    pub augmentation: Option<Duration>,
+    pub total: Option<Duration>,
+}
+
 /// Execute a search against the index at `index_dir`.
 ///
 /// Attempts hybrid search (BM25 + vector + optional reranking). Falls
@@ -30,7 +43,8 @@ pub fn execute_search(
     filters: &SearchFilters,
     result_limit: usize,
     backend: InferenceBackend,
-) -> Result<Vec<SearchResult>> {
+) -> Result<(Vec<SearchResult>, SearchTimings)> {
+    let total_start = Instant::now();
     let fetch_limit = compute_fetch_limit(filters, result_limit);
     let rt = tokio::runtime::Runtime::new()?;
 
@@ -46,12 +60,18 @@ pub fn execute_search(
                     "Failed to create embedding provider ({}), using BM25-only search",
                     e
                 );
+                let bm25_start = Instant::now();
                 let results = apply_query_ranking(
                     query,
                     search_bm25(index_dir, query, fetch_limit)?,
                     RankingStage::Initial,
                 );
-                return Ok(apply_filters(results, filters, result_limit));
+                let timings = SearchTimings {
+                    bm25: Some(bm25_start.elapsed()),
+                    total: Some(total_start.elapsed()),
+                    ..Default::default()
+                };
+                return Ok((apply_filters(results, filters, result_limit), timings));
             }
         };
 
@@ -114,6 +134,9 @@ pub fn execute_search(
         RankingStage::Initial
     };
 
+    let mut timings = SearchTimings::default();
+
+    let search_start = Instant::now();
     let results = if let Some(ref reranker) = reranker {
         rt.block_on(search_hybrid_reranked(
             index_dir,
@@ -137,9 +160,14 @@ pub fn execute_search(
             vector_candidates,
         ))?
     };
+    timings.reranking = Some(search_start.elapsed());
 
+    let aug_start = Instant::now();
     let results = augment_exact_match_candidates(index_dir, query, results, ranking_stage)?;
-    Ok(apply_filters(results, filters, result_limit))
+    timings.augmentation = Some(aug_start.elapsed());
+
+    timings.total = Some(total_start.elapsed());
+    Ok((apply_filters(results, filters, result_limit), timings))
 }
 
 /// Compute how many candidates to fetch before filtering.
