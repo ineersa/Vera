@@ -88,8 +88,9 @@ async function writeInstallMetadata({ installMethod, version, binaryPath }) {
     version: version ?? current.version ?? null,
     binary_path: binaryPath ?? current.binary_path ?? null,
   };
-  await fsp.writeFile(`${metadataPath}.tmp`, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-  await fsp.rename(`${metadataPath}.tmp`, metadataPath);
+  const tmpPath = `${metadataPath}.tmp.${process.pid}`;
+  await fsp.writeFile(tmpPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  await fsp.rename(tmpPath, metadataPath);
 }
 
 function preferredBinDirs() {

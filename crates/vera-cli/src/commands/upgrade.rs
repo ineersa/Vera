@@ -120,7 +120,7 @@ fn print_manual_commands() {
     println!("Manual options:");
     for method in update_check::supported_update_methods() {
         println!(
-            "  {:<4} {}",
+            "  {:<5} {}",
             format!("{method}:"),
             update_check::suggested_update_command(Some(method))
         );

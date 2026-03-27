@@ -85,7 +85,7 @@ def detect_wrapper_install_method() -> str | None:
     ):
         return "uv"
 
-    return None
+    return "pip"
 
 
 def read_install_metadata() -> dict[str, object]:
@@ -113,7 +113,7 @@ def write_install_metadata(
         "version": version_value or current.get("version"),
         "binary_path": str(binary_path) if binary_path is not None else current.get("binary_path"),
     }
-    tmp_path = path.with_suffix(".tmp")
+    tmp_path = path.with_suffix(f".tmp.{os.getpid()}")
     tmp_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
     tmp_path.replace(path)
 

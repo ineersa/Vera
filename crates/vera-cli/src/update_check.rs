@@ -477,4 +477,93 @@ mod tests {
     fn read_skill_version_missing_dir() {
         assert_eq!(read_skill_version(Path::new("/nonexistent/path")), None);
     }
+
+    #[test]
+    fn suggested_update_command_known_methods() {
+        assert!(suggested_update_command(Some("npm")).contains("npm update"));
+        assert!(suggested_update_command(Some("bun")).contains("bunx"));
+        assert!(suggested_update_command(Some("pip")).contains("pip install"));
+        assert!(suggested_update_command(Some("uv")).contains("uvx"));
+        assert_eq!(suggested_update_command(None), "vera upgrade");
+        assert_eq!(suggested_update_command(Some("unknown")), "vera upgrade");
+    }
+
+    #[test]
+    fn supported_update_methods_contains_all() {
+        let methods = supported_update_methods();
+        assert!(methods.contains(&"npm"));
+        assert!(methods.contains(&"bun"));
+        assert!(methods.contains(&"pip"));
+        assert!(methods.contains(&"uv"));
+    }
+
+    #[test]
+    fn binary_version_status_no_update_when_equal() {
+        let status = BinaryVersionStatus {
+            current_version: CURRENT_VERSION,
+            latest_version: Some(CURRENT_VERSION.to_string()),
+            install_method: Some("npm".to_string()),
+            install_method_source: InstallMethodSource::Provenance,
+            detected_install_methods: vec!["npm".to_string()],
+            source: VersionCheckSource::Cache,
+        };
+        assert!(!status.update_available());
+        assert!(status.can_apply_update());
+    }
+
+    #[test]
+    fn binary_version_status_update_available() {
+        let status = BinaryVersionStatus {
+            current_version: "0.0.1",
+            latest_version: Some("99.0.0".to_string()),
+            install_method: Some("pip".to_string()),
+            install_method_source: InstallMethodSource::Heuristic,
+            detected_install_methods: vec!["pip".to_string()],
+            source: VersionCheckSource::Live,
+        };
+        assert!(status.update_available());
+        assert!(status.can_apply_update());
+        assert!(status.update_command().contains("pip"));
+    }
+
+    #[test]
+    fn binary_version_status_cannot_apply_when_ambiguous() {
+        let status = BinaryVersionStatus {
+            current_version: "0.0.1",
+            latest_version: Some("99.0.0".to_string()),
+            install_method: None,
+            install_method_source: InstallMethodSource::Ambiguous,
+            detected_install_methods: vec!["npm".to_string(), "pip".to_string()],
+            source: VersionCheckSource::Live,
+        };
+        assert!(!status.can_apply_update());
+        assert_eq!(status.update_command(), "vera upgrade");
+    }
+
+    #[test]
+    fn binary_version_status_cannot_apply_when_unknown() {
+        let status = BinaryVersionStatus {
+            current_version: "0.0.1",
+            latest_version: Some("99.0.0".to_string()),
+            install_method: None,
+            install_method_source: InstallMethodSource::Unknown,
+            detected_install_methods: vec![],
+            source: VersionCheckSource::Live,
+        };
+        assert!(!status.can_apply_update());
+    }
+
+    #[test]
+    fn format_command_joins_args() {
+        assert_eq!(format_command("npm", &["update", "-g"]), "npm update -g");
+        assert_eq!(format_command("vera", &[]), "vera");
+    }
+
+    #[test]
+    fn shell_command_returns_program() {
+        // On non-Windows, shell_command returns the program as-is.
+        if !cfg!(windows) {
+            assert_eq!(shell_command("npm"), "npm");
+        }
+    }
 }
