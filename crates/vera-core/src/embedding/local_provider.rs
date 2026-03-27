@@ -275,6 +275,18 @@ fn register_execution_provider(
                 ort::execution_providers::DirectMLExecutionProvider::default().build(),
             ])
         }
+        OnnxExecutionProvider::CoreMl => {
+            tracing::info!("registering CoreML execution provider");
+            let result = builder.with_execution_providers([
+                ort::execution_providers::CoreMLExecutionProvider::default().build(),
+            ]);
+            if result.is_ok() {
+                tracing::info!(
+                    "CoreML execution provider registered (will fall back to CPU if unavailable)"
+                );
+            }
+            result
+        }
     }
 }
 

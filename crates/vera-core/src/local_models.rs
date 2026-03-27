@@ -146,6 +146,7 @@ fn ort_platform_info(
         }
         OnnxExecutionProvider::Rocm => "-rocm",
         OnnxExecutionProvider::DirectMl => "-directml",
+        OnnxExecutionProvider::CoreMl => "",
     };
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -176,9 +177,9 @@ fn ort_platform_info(
     }
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        if !matches!(ep, OnnxExecutionProvider::Cpu) {
+        if !matches!(ep, OnnxExecutionProvider::Cpu | OnnxExecutionProvider::CoreMl) {
             anyhow::bail!(
-                "Only CPU execution provider is supported on macOS ARM. CoreML support may be added in the future."
+                "Only CPU and CoreML execution providers are supported on macOS ARM"
             );
         }
         let base = format!("onnxruntime-osx-arm64-{ORT_VERSION}");

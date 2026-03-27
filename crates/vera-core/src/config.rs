@@ -111,6 +111,7 @@ pub enum OnnxExecutionProvider {
     Cuda,
     Rocm,
     DirectMl,
+    CoreMl,
 }
 
 impl fmt::Display for OnnxExecutionProvider {
@@ -120,6 +121,7 @@ impl fmt::Display for OnnxExecutionProvider {
             Self::Cuda => write!(f, "cuda"),
             Self::Rocm => write!(f, "rocm"),
             Self::DirectMl => write!(f, "directml"),
+            Self::CoreMl => write!(f, "coreml"),
         }
     }
 }
@@ -167,6 +169,7 @@ impl FromStr for InferenceBackend {
             "onnx-jina-cuda" => Ok(Self::OnnxJina(OnnxExecutionProvider::Cuda)),
             "onnx-jina-rocm" => Ok(Self::OnnxJina(OnnxExecutionProvider::Rocm)),
             "onnx-jina-directml" => Ok(Self::OnnxJina(OnnxExecutionProvider::DirectMl)),
+            "onnx-jina-coreml" => Ok(Self::OnnxJina(OnnxExecutionProvider::CoreMl)),
             other => Err(format!("unknown backend: {other}")),
         }
     }

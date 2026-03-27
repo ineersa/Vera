@@ -149,6 +149,9 @@ enum Commands {
         /// Use local Jina ONNX models with DirectML (Windows GPU).
         #[arg(long = "onnx-jina-directml", group = "backend")]
         onnx_jina_directml: bool,
+        /// Use local Jina ONNX models with CoreML (Apple Silicon).
+        #[arg(long = "onnx-jina-coreml", group = "backend")]
+        onnx_jina_coreml: bool,
         /// Alias for --onnx-jina-cpu (backwards compatibility).
         #[arg(long, group = "backend", hide = true)]
         local: bool,
@@ -214,6 +217,9 @@ enum Commands {
         /// Use local Jina ONNX models with DirectML (Windows GPU).
         #[arg(long = "onnx-jina-directml", group = "backend")]
         onnx_jina_directml: bool,
+        /// Use local Jina ONNX models with CoreML (Apple Silicon).
+        #[arg(long = "onnx-jina-coreml", group = "backend")]
+        onnx_jina_coreml: bool,
         /// Alias for --onnx-jina-cpu (backwards compatibility).
         #[arg(long, group = "backend", hide = true)]
         local: bool,
@@ -283,6 +289,9 @@ enum Commands {
         /// Use local Jina ONNX models with DirectML (Windows GPU).
         #[arg(long = "onnx-jina-directml", group = "backend")]
         onnx_jina_directml: bool,
+        /// Use local Jina ONNX models with CoreML (Apple Silicon).
+        #[arg(long = "onnx-jina-coreml", group = "backend")]
+        onnx_jina_coreml: bool,
         /// Alias for --onnx-jina-cpu (backwards compatibility).
         #[arg(long, group = "backend", hide = true)]
         local: bool,
@@ -322,6 +331,9 @@ enum Commands {
         /// Use local Jina ONNX models with DirectML (Windows GPU).
         #[arg(long = "onnx-jina-directml", group = "backend")]
         onnx_jina_directml: bool,
+        /// Use local Jina ONNX models with CoreML (Apple Silicon).
+        #[arg(long = "onnx-jina-coreml", group = "backend")]
+        onnx_jina_coreml: bool,
         /// Alias for --onnx-jina-cpu (backwards compatibility).
         #[arg(long, group = "backend", hide = true)]
         local: bool,
@@ -424,6 +436,7 @@ fn main() {
             onnx_jina_cuda,
             onnx_jina_rocm,
             onnx_jina_directml,
+            onnx_jina_coreml,
             local,
             api,
             index,
@@ -436,6 +449,7 @@ fn main() {
                 || onnx_jina_cuda
                 || onnx_jina_rocm
                 || onnx_jina_directml
+                || onnx_jina_coreml
                 || local
             {
                 Some(helpers::resolve_backend_flags(
@@ -443,6 +457,7 @@ fn main() {
                     onnx_jina_cuda,
                     onnx_jina_rocm,
                     onnx_jina_directml,
+                    onnx_jina_coreml,
                     local,
                 ))
             } else {
@@ -464,6 +479,7 @@ fn main() {
             onnx_jina_cuda,
             onnx_jina_rocm,
             onnx_jina_directml,
+            onnx_jina_coreml,
             local,
         } => {
             tracing::info!(path = %path, "indexing");
@@ -472,6 +488,7 @@ fn main() {
                 onnx_jina_cuda,
                 onnx_jina_rocm,
                 onnx_jina_directml,
+                onnx_jina_coreml,
                 local,
             );
             commands::index::run(&path, cli.json, backend)
@@ -486,6 +503,7 @@ fn main() {
             onnx_jina_cuda,
             onnx_jina_rocm,
             onnx_jina_directml,
+            onnx_jina_coreml,
             local,
         } => {
             tracing::info!(query = %query, "searching");
@@ -499,6 +517,7 @@ fn main() {
                 onnx_jina_cuda,
                 onnx_jina_rocm,
                 onnx_jina_directml,
+                onnx_jina_coreml,
                 local,
             );
             commands::search::run(&query, limit, &filters, cli.json, cli.raw, backend)
@@ -509,6 +528,7 @@ fn main() {
             onnx_jina_cuda,
             onnx_jina_rocm,
             onnx_jina_directml,
+            onnx_jina_coreml,
             local,
         } => {
             tracing::info!(path = %path, "updating");
@@ -517,6 +537,7 @@ fn main() {
                 onnx_jina_cuda,
                 onnx_jina_rocm,
                 onnx_jina_directml,
+                onnx_jina_coreml,
                 local,
             );
             commands::update::run(&path, cli.json, backend)

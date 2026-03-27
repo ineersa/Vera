@@ -178,6 +178,7 @@ By default, `vera setup` configures CPU inference. If you have a compatible GPU,
 vera setup --onnx-jina-cuda      # NVIDIA GPU (requires CUDA 12+ drivers)
 vera setup --onnx-jina-rocm      # AMD GPU (Linux, requires ROCm drivers)
 vera setup --onnx-jina-directml  # Any DirectX 12 GPU (Windows)
+vera setup --onnx-jina-coreml    # Apple Silicon (macOS, M1/M2/M3/M4)
 ```
 
 Vera downloads the matching ONNX Runtime build automatically. The same flag works on `vera index` and `vera search` to override the configured backend per-command.

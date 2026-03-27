@@ -242,6 +242,9 @@ fn register_execution_provider(
         OnnxExecutionProvider::DirectMl => builder.with_execution_providers([
             ort::execution_providers::DirectMLExecutionProvider::default().build(),
         ]),
+        OnnxExecutionProvider::CoreMl => builder.with_execution_providers([
+            ort::execution_providers::CoreMLExecutionProvider::default().build(),
+        ]),
     }
 }
 

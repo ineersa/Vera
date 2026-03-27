@@ -13,6 +13,7 @@ pub fn resolve_backend_flags(
     onnx_jina_cuda: bool,
     onnx_jina_rocm: bool,
     onnx_jina_directml: bool,
+    onnx_jina_coreml: bool,
     local: bool,
 ) -> vera_core::config::InferenceBackend {
     use vera_core::config::{InferenceBackend, OnnxExecutionProvider};
@@ -24,6 +25,8 @@ pub fn resolve_backend_flags(
         Some(InferenceBackend::OnnxJina(OnnxExecutionProvider::Rocm))
     } else if onnx_jina_directml {
         Some(InferenceBackend::OnnxJina(OnnxExecutionProvider::DirectMl))
+    } else if onnx_jina_coreml {
+        Some(InferenceBackend::OnnxJina(OnnxExecutionProvider::CoreMl))
     } else {
         None
     };

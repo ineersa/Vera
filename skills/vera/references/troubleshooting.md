@@ -39,7 +39,7 @@ Common causes:
 
 - ONNX Runtime auto-download failed (check network, or set `ORT_DYLIB_PATH`)
 - local model assets have not been downloaded yet
-- GPU backend missing drivers (CUDA 12+ for `--onnx-jina-cuda`, ROCm for `--onnx-jina-rocm`, DirectX 12 for `--onnx-jina-directml`)
+- GPU backend missing drivers (CUDA 12+ for `--onnx-jina-cuda`, ROCm for `--onnx-jina-rocm`, DirectX 12 for `--onnx-jina-directml`, macOS Apple Silicon for `--onnx-jina-coreml`)
 
 Helpful commands:
 
