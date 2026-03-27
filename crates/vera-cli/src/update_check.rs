@@ -9,8 +9,10 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -25,11 +27,28 @@ pub enum VersionCheckSource {
     Unavailable,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallMethodSource {
+    Provenance,
+    Heuristic,
+    Ambiguous,
+    Unknown,
+}
+
+#[derive(Debug, Clone)]
+pub struct InstallMethodResolution {
+    pub install_method: Option<String>,
+    pub detected_install_methods: Vec<String>,
+    pub source: InstallMethodSource,
+}
+
 #[derive(Debug, Clone)]
 pub struct BinaryVersionStatus {
     pub current_version: &'static str,
     pub latest_version: Option<String>,
     pub install_method: Option<String>,
+    pub install_method_source: InstallMethodSource,
+    pub detected_install_methods: Vec<String>,
     pub source: VersionCheckSource,
 }
 
@@ -41,7 +60,18 @@ impl BinaryVersionStatus {
     }
 
     pub fn update_command(&self) -> String {
-        suggested_update_command(self.install_method.as_deref())
+        if self.install_method.is_some() && self.can_apply_update() {
+            suggested_update_command(self.install_method.as_deref())
+        } else {
+            "vera upgrade".to_string()
+        }
+    }
+
+    pub fn can_apply_update(&self) -> bool {
+        matches!(
+            self.install_method_source,
+            InstallMethodSource::Provenance | InstallMethodSource::Heuristic
+        ) && self.install_method.is_some()
     }
 }
 
@@ -126,28 +156,37 @@ fn check_binary_staleness() {
     let status = binary_version_status(false);
     if let Some(latest) = status.latest_version.as_deref() {
         if status.update_available() {
-            print_binary_nudge(latest, status.install_method.as_deref());
+            print_binary_nudge(latest, &status);
         }
     }
 }
 
-fn print_binary_nudge(latest: &str, install_method: Option<&str>) {
-    let update_cmd = suggested_update_command(install_method);
-    eprintln!(
-        "hint: vera v{} is available (current: v{}). Update: `{}`",
-        latest, CURRENT_VERSION, update_cmd,
-    );
+fn print_binary_nudge(latest: &str, status: &BinaryVersionStatus) {
+    let update_cmd = status.update_command();
+    if status.install_method_source == InstallMethodSource::Ambiguous {
+        eprintln!(
+            "hint: vera v{} is available (current: v{}). Multiple install methods were detected; run `vera upgrade` to choose the right update command.",
+            latest, CURRENT_VERSION,
+        );
+    } else {
+        eprintln!(
+            "hint: vera v{} is available (current: v{}). Update: `{}`",
+            latest, CURRENT_VERSION, update_cmd,
+        );
+    }
 }
 
 pub fn binary_version_status(force_refresh: bool) -> BinaryVersionStatus {
-    let install_method = detect_install_method();
+    let install_method = resolve_install_method();
     let cache_file = match cache_path() {
         Some(path) => path,
         None => {
             return BinaryVersionStatus {
                 current_version: CURRENT_VERSION,
                 latest_version: None,
-                install_method,
+                install_method: install_method.install_method,
+                install_method_source: install_method.source,
+                detected_install_methods: install_method.detected_install_methods,
                 source: VersionCheckSource::Unavailable,
             };
         }
@@ -165,7 +204,12 @@ pub fn binary_version_status(force_refresh: bool) -> BinaryVersionStatus {
                 return BinaryVersionStatus {
                     current_version: CURRENT_VERSION,
                     latest_version: Some(cached.latest_version.clone()),
-                    install_method: cached.install_method.clone().or(install_method),
+                    install_method: cached
+                        .install_method
+                        .clone()
+                        .or(install_method.install_method.clone()),
+                    install_method_source: install_method.source,
+                    detected_install_methods: install_method.detected_install_methods.clone(),
                     source: VersionCheckSource::Cache,
                 };
             }
@@ -176,13 +220,15 @@ pub fn binary_version_status(force_refresh: bool) -> BinaryVersionStatus {
         let cache = UpdateCache {
             latest_version: latest.clone(),
             checked_at_secs: now,
-            install_method: install_method.clone(),
+            install_method: install_method.install_method.clone(),
         };
         let _ = save_cache(&cache_file, &cache);
         return BinaryVersionStatus {
             current_version: CURRENT_VERSION,
             latest_version: Some(latest),
-            install_method,
+            install_method: install_method.install_method.clone(),
+            install_method_source: install_method.source,
+            detected_install_methods: install_method.detected_install_methods.clone(),
             source: VersionCheckSource::Live,
         };
     }
@@ -191,7 +237,9 @@ pub fn binary_version_status(force_refresh: bool) -> BinaryVersionStatus {
         return BinaryVersionStatus {
             current_version: CURRENT_VERSION,
             latest_version: Some(cached.latest_version),
-            install_method: cached.install_method.or(install_method),
+            install_method: cached.install_method.or(install_method.install_method),
+            install_method_source: install_method.source,
+            detected_install_methods: install_method.detected_install_methods,
             source: VersionCheckSource::Cache,
         };
     }
@@ -199,18 +247,20 @@ pub fn binary_version_status(force_refresh: bool) -> BinaryVersionStatus {
     BinaryVersionStatus {
         current_version: CURRENT_VERSION,
         latest_version: None,
-        install_method,
+        install_method: install_method.install_method,
+        install_method_source: install_method.source,
+        detected_install_methods: install_method.detected_install_methods,
         source: VersionCheckSource::Unavailable,
     }
 }
 
-fn suggested_update_command(install_method: Option<&str>) -> String {
+pub fn suggested_update_command(install_method: Option<&str>) -> String {
     match install_method {
         Some("npm") => "npm update -g @vera-ai/cli && vera agent install".to_string(),
         Some("bun") => "bunx @vera-ai/cli install".to_string(),
         Some("pip") => "pip install --upgrade vera-ai && vera agent install".to_string(),
         Some("uv") => "uvx vera-ai install".to_string(),
-        _ => "bunx @vera-ai/cli install".to_string(),
+        _ => "vera upgrade".to_string(),
     }
 }
 
@@ -257,56 +307,143 @@ fn fetch_latest_version() -> Option<String> {
     })
 }
 
-fn detect_install_method() -> Option<String> {
-    // Check for global npm install.
-    if std::process::Command::new("npm")
-        .args(["list", "-g", "--depth=0", "@vera-ai/cli"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-    {
-        return Some("npm".to_string());
-    }
-
-    // Check for bun global install.
-    if let Ok(output) = std::process::Command::new("bun")
-        .args(["pm", "ls", "-g"])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-    {
-        if String::from_utf8_lossy(&output.stdout).contains("@vera-ai/cli") {
-            return Some("bun".to_string());
+pub fn resolve_install_method() -> InstallMethodResolution {
+    if let Ok(provenance) = crate::state::load_install_provenance() {
+        if let Some(method) = provenance.install_method {
+            return InstallMethodResolution {
+                detected_install_methods: vec![method.clone()],
+                install_method: Some(method),
+                source: InstallMethodSource::Provenance,
+            };
         }
     }
 
-    // Check for pip install.
-    if std::process::Command::new("pip")
-        .args(["show", "vera-ai"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+    if let Ok(config) = crate::state::load_saved_config() {
+        if let Some(method) = config.install_method {
+            return InstallMethodResolution {
+                detected_install_methods: vec![method.clone()],
+                install_method: Some(method),
+                source: InstallMethodSource::Heuristic,
+            };
+        }
+    }
+
+    let detected_install_methods = detect_install_methods();
+    match detected_install_methods.as_slice() {
+        [] => InstallMethodResolution {
+            install_method: None,
+            detected_install_methods,
+            source: InstallMethodSource::Unknown,
+        },
+        [method] => InstallMethodResolution {
+            install_method: Some(method.clone()),
+            detected_install_methods,
+            source: InstallMethodSource::Heuristic,
+        },
+        _ => InstallMethodResolution {
+            install_method: None,
+            detected_install_methods,
+            source: InstallMethodSource::Ambiguous,
+        },
+    }
+}
+
+pub fn detect_install_methods() -> Vec<String> {
+    let mut methods = Vec::new();
+
+    if command_succeeds("npm", &["list", "-g", "--depth=0", "@vera-ai/cli"]) {
+        methods.push("npm".to_string());
+    }
+
+    if let Ok(output) = Command::new(shell_command("bun"))
+        .args(["pm", "ls", "-g"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+    {
+        if String::from_utf8_lossy(&output.stdout).contains("@vera-ai/cli") {
+            methods.push("bun".to_string());
+        }
+    }
+
+    if command_succeeds("pip", &["show", "vera-ai"]) {
+        methods.push("pip".to_string());
+    }
+
+    if command_succeeds("uv", &["pip", "show", "vera-ai"]) {
+        methods.push("uv".to_string());
+    }
+
+    methods
+}
+
+pub fn supported_update_methods() -> &'static [&'static str] {
+    &["npm", "bun", "pip", "uv"]
+}
+
+pub fn apply_update(method: &str) -> Result<()> {
+    match method {
+        "npm" => {
+            run_update_step("npm", &["update", "-g", "@vera-ai/cli"])?;
+            run_update_step("vera", &["agent", "install"])?;
+        }
+        "bun" => run_update_step("bunx", &["@vera-ai/cli", "install"])?,
+        "pip" => {
+            run_update_step("pip", &["install", "--upgrade", "vera-ai"])?;
+            run_update_step("vera", &["agent", "install"])?;
+        }
+        "uv" => run_update_step("uvx", &["vera-ai", "install"])?,
+        other => bail!("unsupported install method: {other}"),
+    }
+
+    Ok(())
+}
+
+fn command_succeeds(program: &str, args: &[&str]) -> bool {
+    Command::new(shell_command(program))
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
-    {
-        return Some("pip".to_string());
-    }
+}
 
-    // Check for uv install.
-    if std::process::Command::new("uv")
-        .args(["pip", "show", "vera-ai"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+fn run_update_step(program: &str, args: &[&str]) -> Result<()> {
+    let status = Command::new(shell_command(program))
+        .args(args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-    {
-        return Some("uv".to_string());
+        .with_context(|| format!("failed to start `{program}`"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "`{}` exited with status {}",
+            format_command(program, args),
+            status
+                .code()
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        ))
     }
+}
 
-    None
+fn format_command(program: &str, args: &[&str]) -> String {
+    std::iter::once(program)
+        .chain(args.iter().copied())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_command(program: &str) -> String {
+    if cfg!(windows) {
+        format!("{program}.cmd")
+    } else {
+        program.to_string()
+    }
 }
 
 fn load_cache(path: &Path) -> Option<UpdateCache> {

@@ -392,35 +392,11 @@ fn inspect_shared_library_deps_impl(
         return Ok(None);
     }
 
-    if std::process::Command::new("ldd")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_err()
-    {
+    if !command_exists("ldd", &["--version"]) {
         return Ok(None);
     }
 
-    let mut inspected_files = vec![runtime_path.to_path_buf()];
-    if let Some(dir) = runtime_path.parent() {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                    continue;
-                };
-                if name.starts_with("libonnxruntime")
-                    && name.contains(".so")
-                    && path != runtime_path
-                {
-                    inspected_files.push(path);
-                }
-            }
-        }
-    }
-    inspected_files.sort();
-    inspected_files.dedup();
+    let inspected_files = collect_runtime_libraries(runtime_path, ".so");
 
     let mut missing_details = Vec::new();
     let mut missing_libraries = Vec::new();
@@ -458,22 +434,219 @@ fn inspect_shared_library_deps_impl(
     }))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn inspect_shared_library_deps_impl(
+    runtime_path: &std::path::Path,
+) -> Result<Option<SharedLibraryDependencyStatus>> {
+    if !runtime_path.exists() {
+        return Ok(None);
+    }
+
+    if !command_exists("otool", &["-L", runtime_path.to_string_lossy().as_ref()]) {
+        return Ok(None);
+    }
+
+    let inspected_files = collect_runtime_libraries(runtime_path, ".dylib");
+    let mut missing_details = Vec::new();
+    let mut missing_libraries = Vec::new();
+
+    for inspected in &inspected_files {
+        let dependencies = macos_dependencies(inspected)?;
+        let rpaths = macos_rpaths(inspected)?;
+        let file_name = inspected
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("unknown");
+        for dependency in dependencies {
+            if macos_dependency_exists(&dependency, inspected, &rpaths) {
+                continue;
+            }
+            missing_details.push(format!("{file_name}: {dependency}"));
+            missing_libraries.push(dependency);
+        }
+    }
+
+    missing_details.sort();
+    missing_details.dedup();
+    missing_libraries.sort();
+    missing_libraries.dedup();
+
+    Ok(Some(SharedLibraryDependencyStatus {
+        inspected_files,
+        missing_details,
+        missing_libraries,
+    }))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn inspect_shared_library_deps_impl(
     _: &std::path::Path,
 ) -> Result<Option<SharedLibraryDependencyStatus>> {
     Ok(None)
 }
 
+fn collect_runtime_libraries(runtime_path: &std::path::Path, suffix: &str) -> Vec<PathBuf> {
+    let mut inspected_files = vec![runtime_path.to_path_buf()];
+    if let Some(dir) = runtime_path.parent() {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                if name.starts_with("libonnxruntime")
+                    && name.contains(suffix)
+                    && path != runtime_path
+                {
+                    inspected_files.push(path);
+                }
+            }
+        }
+    }
+    inspected_files.sort();
+    inspected_files.dedup();
+    inspected_files
+}
+
+fn command_exists(program: &str, args: &[&str]) -> bool {
+    std::process::Command::new(program)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_dependencies(inspected: &std::path::Path) -> Result<Vec<String>> {
+    let output = std::process::Command::new("otool")
+        .args(["-L", inspected.to_string_lossy().as_ref()])
+        .output()
+        .with_context(|| format!("failed to run `otool -L` on {}", inspected.display()))?;
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(text
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_whitespace().next())
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_rpaths(inspected: &std::path::Path) -> Result<Vec<String>> {
+    let output = std::process::Command::new("otool")
+        .args(["-l", inspected.to_string_lossy().as_ref()])
+        .output()
+        .with_context(|| format!("failed to run `otool -l` on {}", inspected.display()))?;
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut rpaths = Vec::new();
+    let mut in_rpath = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed == "cmd LC_RPATH" {
+            in_rpath = true;
+            continue;
+        }
+        if in_rpath && trimmed.starts_with("path ") {
+            if let Some(path) = trimmed
+                .strip_prefix("path ")
+                .and_then(|rest| rest.split(" (offset").next())
+            {
+                rpaths.push(path.trim().to_string());
+            }
+            in_rpath = false;
+        }
+    }
+    Ok(rpaths)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_dependency_exists(
+    dependency: &str,
+    inspected: &std::path::Path,
+    rpaths: &[String],
+) -> bool {
+    if dependency.starts_with("/System/Library/") || dependency.starts_with("/usr/lib/") {
+        return true;
+    }
+
+    if let Some(rest) = dependency.strip_prefix("@loader_path/") {
+        return inspected
+            .parent()
+            .map(|parent| parent.join(rest).exists())
+            .unwrap_or(false);
+    }
+
+    if let Some(rest) = dependency.strip_prefix("@executable_path/") {
+        let exe_path = std::env::current_exe().ok();
+        let exe_exists = exe_path
+            .as_deref()
+            .and_then(|exe| exe.parent())
+            .map(|parent| parent.join(rest).exists())
+            .unwrap_or(false);
+        return exe_exists
+            || inspected
+                .parent()
+                .map(|parent| parent.join(rest).exists())
+                .unwrap_or(false);
+    }
+
+    if let Some(rest) = dependency.strip_prefix("@rpath/") {
+        return rpaths
+            .iter()
+            .map(|rpath| resolve_macos_rpath(rpath, inspected))
+            .any(|candidate| candidate.join(rest).exists());
+    }
+
+    if dependency.starts_with('@') {
+        return false;
+    }
+
+    std::path::Path::new(dependency).exists()
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_macos_rpath(rpath: &str, inspected: &std::path::Path) -> PathBuf {
+    if let Some(rest) = rpath.strip_prefix("@loader_path/") {
+        return inspected
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(""))
+            .join(rest);
+    }
+
+    if let Some(rest) = rpath.strip_prefix("@executable_path/") {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(parent) = exe.parent() {
+                return parent.join(rest);
+            }
+        }
+    }
+
+    PathBuf::from(rpath)
+}
+
 fn dependency_hint(ep: OnnxExecutionProvider) -> Option<String> {
     match ep {
         OnnxExecutionProvider::Cpu => None,
-        OnnxExecutionProvider::Cuda => {
-            let cuda_major = detect_cuda_major_version().unwrap_or(12);
-            Some(format!(
+        OnnxExecutionProvider::Cuda => Some(match detect_cuda_major_version() {
+            Some(cuda_major) => format!(
                 "Install the CUDA {cuda_major} toolkit and cuDNN 9, then ensure they're on the linker path."
-            ))
-        }
+            ),
+            None => {
+                "Install the CUDA toolkit and cuDNN 9, then ensure they're on the linker path."
+                    .to_string()
+            }
+        }),
         OnnxExecutionProvider::Rocm => {
             Some("Install the ROCm userspace libraries, then ensure they're on the linker path.".to_string())
         }

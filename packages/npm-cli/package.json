@@ -13,6 +13,9 @@
     "url": "https://github.com/lemon07r/Vera/issues"
   },
   "bin": "./bin/vera.js",
+  "scripts": {
+    "postinstall": "node ./bin/vera.js _record-install-method"
+  },
   "files": [
     "bin/vera.js",
     "README.md"

@@ -74,7 +74,7 @@ vera update .       # after code changes
 
 `vera setup` with no flags shows a backend picker and auto-detects your GPU. You can also skip the menu: `vera setup --onnx-jina-cuda` (NVIDIA), `--onnx-jina-coreml` (Apple Silicon), `--api` (remote endpoints), etc. Run `vera setup --help` for all options.
 
-Use `vera doctor` if anything goes wrong. It reports the saved and active backend, installed Vera version, and checks GitHub for newer releases. Add `--probe` for a deeper read-only ONNX session check that does not download or repair missing assets. Use `vera repair` to re-fetch missing local assets or re-save API config from the current environment.
+Use `vera doctor` if anything goes wrong. It reports the saved and active backend, installed Vera version, and checks GitHub for newer releases. Add `--probe` for a deeper read-only ONNX session check that does not download or repair missing assets. Use `vera repair` to re-fetch missing local assets or re-save API config from the current environment. Use `vera upgrade` to inspect or apply the binary update plan.
 
 <details>
 <summary>MCP server (JSON-RPC over stdio)</summary>
@@ -127,7 +127,16 @@ vera agent install && vera setup
 
 ### Updating
 
-Vera checks for new releases once per day and prints a hint with the exact update command. To update manually:
+Vera checks for new releases once per day and prints a hint when a newer release is available. To inspect the current update plan:
+
+```bash
+vera upgrade
+vera upgrade --apply
+```
+
+`vera upgrade` is a dry run by default. It shows the detected install method and the exact command Vera would run. `--apply` only runs when Vera can determine a single install method.
+
+You can still update manually:
 
 ```bash
 bunx @vera-ai/cli install   # re-downloads latest binary + refreshes skill files
@@ -244,6 +253,8 @@ vera doctor                    # diagnose setup issues
 vera doctor --probe            # deeper read-only ONNX probe
 vera doctor --probe --json     # machine-readable deep diagnostics
 vera repair                    # re-fetch missing assets for current backend
+vera upgrade                   # inspect the binary update plan
+vera upgrade --apply           # run it when the install method is known
 vera stats                     # index statistics
 vera config                    # show current configuration
 vera agent install             # install skill files for AI agents

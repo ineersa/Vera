@@ -26,6 +26,7 @@ Run the diagnostic command first:
 vera doctor
 vera doctor --probe
 vera doctor --probe --json
+vera upgrade
 ```
 
 Common causes:
@@ -34,7 +35,7 @@ Common causes:
 - If assets are missing or partially downloaded, run `vera repair` after fixing the underlying environment issue
 - ONNX Runtime auto-download failed. check network, or set `ORT_DYLIB_PATH` to a manually installed library
 - GPU backend not working. make sure the required drivers are installed (CUDA 12+ for `--onnx-jina-cuda`, ROCm for `--onnx-jina-rocm`, DirectX 12 for `--onnx-jina-directml`). CoreML (`--onnx-jina-coreml`) requires macOS on Apple Silicon. OpenVINO (`--onnx-jina-openvino`) requires Intel compute runtime on Linux x86_64. If GPU init still fails, rerun with `--onnx-jina-cpu` or fix the provider-specific dependencies.
-- `vera doctor` will flag missing models or runtime, show the saved and active backend, print the installed Vera version, and check for newer releases. `vera doctor --probe` adds a deeper read-only session probe and does not download or repair missing assets. `vera repair` is the write path if you need Vera to re-fetch local assets.
+- `vera doctor` will flag missing models or runtime, show the saved and active backend, print the installed Vera version, and check for newer releases. `vera doctor --probe` adds a deeper read-only session probe and does not download or repair missing assets. `vera repair` is the write path if you need Vera to re-fetch local assets. `vera upgrade` shows the binary update plan and can apply it when the install method is known.
 
 If Vera now fails fast with a message like `CUDA backend selected, but required libraries are missing`, the ONNX Runtime CUDA provider was downloaded but your system linker cannot find the CUDA or cuDNN shared libraries it depends on. Install the required userspace libraries, refresh the linker cache if needed, then rerun `vera doctor --probe`.
 

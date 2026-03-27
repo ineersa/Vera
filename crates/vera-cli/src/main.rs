@@ -32,7 +32,8 @@ use clap::{Parser, Subcommand};
                   vera index .          # Index current directory\n  \
                   vera search \"auth\"    # Search for authentication code\n  \
                   vera doctor           # Check local setup and index health\n  \
-                  vera repair           # Re-fetch missing backend assets",
+                  vera repair           # Re-fetch missing backend assets\n  \
+                  vera upgrade          # Show the binary update plan",
     version
 )]
 struct Cli {
@@ -143,27 +144,8 @@ enum Commands {
                       vera setup --yes                 # Auto-detect GPU, no prompts"
     )]
     Setup {
-        /// Use local Jina ONNX models on CPU.
-        #[arg(long = "onnx-jina-cpu", group = "backend")]
-        onnx_jina_cpu: bool,
-        /// Use local Jina ONNX models with CUDA (NVIDIA GPU).
-        #[arg(long = "onnx-jina-cuda", group = "backend")]
-        onnx_jina_cuda: bool,
-        /// Use local Jina ONNX models with ROCm (AMD GPU, Linux only).
-        #[arg(long = "onnx-jina-rocm", group = "backend")]
-        onnx_jina_rocm: bool,
-        /// Use local Jina ONNX models with DirectML (Windows GPU).
-        #[arg(long = "onnx-jina-directml", group = "backend")]
-        onnx_jina_directml: bool,
-        /// Use local Jina ONNX models with CoreML (Apple Silicon).
-        #[arg(long = "onnx-jina-coreml", group = "backend")]
-        onnx_jina_coreml: bool,
-        /// Use local Jina ONNX models with OpenVINO (Intel GPU/iGPU, Linux only).
-        #[arg(long = "onnx-jina-openvino", group = "backend")]
-        onnx_jina_openvino: bool,
-        /// Alias for --onnx-jina-cpu (backwards compatibility).
-        #[arg(long, group = "backend", hide = true)]
-        local: bool,
+        #[command(flatten)]
+        backend: helpers::LocalBackendFlags,
         /// Configure Vera for API-backed mode using current env vars.
         #[arg(long, group = "backend")]
         api: bool,
@@ -211,30 +193,31 @@ enum Commands {
                       vera repair --onnx-jina-cuda\n  \
                       vera repair --api")]
     Repair {
-        /// Use local Jina ONNX models on CPU.
-        #[arg(long = "onnx-jina-cpu", group = "backend")]
-        onnx_jina_cpu: bool,
-        /// Use local Jina ONNX models with CUDA (NVIDIA GPU).
-        #[arg(long = "onnx-jina-cuda", group = "backend")]
-        onnx_jina_cuda: bool,
-        /// Use local Jina ONNX models with ROCm (AMD GPU, Linux only).
-        #[arg(long = "onnx-jina-rocm", group = "backend")]
-        onnx_jina_rocm: bool,
-        /// Use local Jina ONNX models with DirectML (Windows GPU).
-        #[arg(long = "onnx-jina-directml", group = "backend")]
-        onnx_jina_directml: bool,
-        /// Use local Jina ONNX models with CoreML (Apple Silicon).
-        #[arg(long = "onnx-jina-coreml", group = "backend")]
-        onnx_jina_coreml: bool,
-        /// Use local Jina ONNX models with OpenVINO (Intel GPU/iGPU, Linux only).
-        #[arg(long = "onnx-jina-openvino", group = "backend")]
-        onnx_jina_openvino: bool,
-        /// Alias for --onnx-jina-cpu (backwards compatibility).
-        #[arg(long, group = "backend", hide = true)]
-        local: bool,
+        #[command(flatten)]
+        backend: helpers::LocalBackendFlags,
         /// Repair API-backed mode using current env vars.
         #[arg(long, group = "backend")]
         api: bool,
+    },
+
+    /// Show the binary update plan, or apply it when the install method is known.
+    #[command(
+        long_about = "Show the binary update plan, or apply it when the install method is known.\n\n\
+                      By default, `vera upgrade` is a dry run: it checks for a newer Vera \
+                      release, resolves the saved or detected install method, and prints the \
+                      exact command it would use.\n\n\
+                      `--apply` runs the installer command only when Vera can determine a \
+                      single install method. If multiple install methods are detected, Vera \
+                      prints the manual options and refuses to guess.\n\n\
+                      Examples:\n  \
+                      vera upgrade\n  \
+                      vera upgrade --apply\n  \
+                      vera upgrade --json"
+    )]
+    Upgrade {
+        /// Run the planned installer command instead of printing it only.
+        #[arg(long)]
+        apply: bool,
     },
 
     /// Index a codebase for search.
@@ -261,27 +244,8 @@ enum Commands {
     Index {
         /// Path to the directory to index.
         path: String,
-        /// Use local Jina ONNX models on CPU.
-        #[arg(long = "onnx-jina-cpu", group = "backend")]
-        onnx_jina_cpu: bool,
-        /// Use local Jina ONNX models with CUDA (NVIDIA GPU).
-        #[arg(long = "onnx-jina-cuda", group = "backend")]
-        onnx_jina_cuda: bool,
-        /// Use local Jina ONNX models with ROCm (AMD GPU, Linux only).
-        #[arg(long = "onnx-jina-rocm", group = "backend")]
-        onnx_jina_rocm: bool,
-        /// Use local Jina ONNX models with DirectML (Windows GPU).
-        #[arg(long = "onnx-jina-directml", group = "backend")]
-        onnx_jina_directml: bool,
-        /// Use local Jina ONNX models with CoreML (Apple Silicon).
-        #[arg(long = "onnx-jina-coreml", group = "backend")]
-        onnx_jina_coreml: bool,
-        /// Use local Jina ONNX models with OpenVINO (Intel GPU/iGPU, Linux only).
-        #[arg(long = "onnx-jina-openvino", group = "backend")]
-        onnx_jina_openvino: bool,
-        /// Alias for --onnx-jina-cpu (backwards compatibility).
-        #[arg(long, group = "backend", hide = true)]
-        local: bool,
+        #[command(flatten)]
+        backend: helpers::LocalBackendFlags,
         /// Exclude files matching this glob pattern (repeatable).
         #[arg(long = "exclude")]
         exclude: Vec<String>,
@@ -345,27 +309,8 @@ enum Commands {
         #[arg(long, rename_all = "snake_case")]
         r#type: Option<String>,
 
-        /// Use local Jina ONNX models on CPU.
-        #[arg(long = "onnx-jina-cpu", group = "backend")]
-        onnx_jina_cpu: bool,
-        /// Use local Jina ONNX models with CUDA (NVIDIA GPU).
-        #[arg(long = "onnx-jina-cuda", group = "backend")]
-        onnx_jina_cuda: bool,
-        /// Use local Jina ONNX models with ROCm (AMD GPU, Linux only).
-        #[arg(long = "onnx-jina-rocm", group = "backend")]
-        onnx_jina_rocm: bool,
-        /// Use local Jina ONNX models with DirectML (Windows GPU).
-        #[arg(long = "onnx-jina-directml", group = "backend")]
-        onnx_jina_directml: bool,
-        /// Use local Jina ONNX models with CoreML (Apple Silicon).
-        #[arg(long = "onnx-jina-coreml", group = "backend")]
-        onnx_jina_coreml: bool,
-        /// Use local Jina ONNX models with OpenVINO (Intel GPU/iGPU, Linux only).
-        #[arg(long = "onnx-jina-openvino", group = "backend")]
-        onnx_jina_openvino: bool,
-        /// Alias for --onnx-jina-cpu (backwards compatibility).
-        #[arg(long, group = "backend", hide = true)]
-        local: bool,
+        #[command(flatten)]
+        backend: helpers::LocalBackendFlags,
     },
 
     /// Incrementally update the index for changed files.
@@ -390,27 +335,8 @@ enum Commands {
     Update {
         /// Path to the directory to update.
         path: String,
-        /// Use local Jina ONNX models on CPU.
-        #[arg(long = "onnx-jina-cpu", group = "backend")]
-        onnx_jina_cpu: bool,
-        /// Use local Jina ONNX models with CUDA (NVIDIA GPU).
-        #[arg(long = "onnx-jina-cuda", group = "backend")]
-        onnx_jina_cuda: bool,
-        /// Use local Jina ONNX models with ROCm (AMD GPU, Linux only).
-        #[arg(long = "onnx-jina-rocm", group = "backend")]
-        onnx_jina_rocm: bool,
-        /// Use local Jina ONNX models with DirectML (Windows GPU).
-        #[arg(long = "onnx-jina-directml", group = "backend")]
-        onnx_jina_directml: bool,
-        /// Use local Jina ONNX models with CoreML (Apple Silicon).
-        #[arg(long = "onnx-jina-coreml", group = "backend")]
-        onnx_jina_coreml: bool,
-        /// Use local Jina ONNX models with OpenVINO (Intel GPU/iGPU, Linux only).
-        #[arg(long = "onnx-jina-openvino", group = "backend")]
-        onnx_jina_openvino: bool,
-        /// Alias for --onnx-jina-cpu (backwards compatibility).
-        #[arg(long, group = "backend", hide = true)]
-        local: bool,
+        #[command(flatten)]
+        backend: helpers::LocalBackendFlags,
         /// Exclude files matching this glob pattern (repeatable).
         #[arg(long = "exclude")]
         exclude: Vec<String>,
@@ -497,7 +423,7 @@ fn main() {
 
     let show_nudges = !matches!(
         cli.command,
-        Commands::Mcp | Commands::Agent { .. } | Commands::Uninstall
+        Commands::Mcp | Commands::Agent { .. } | Commands::Uninstall | Commands::Upgrade { .. }
     ) && !cli.json;
 
     let result = match cli.command {
@@ -515,41 +441,13 @@ fn main() {
             commands::agent::run(command, client, scope, cli.json)
         }
         Commands::Setup {
-            onnx_jina_cpu,
-            onnx_jina_cuda,
-            onnx_jina_rocm,
-            onnx_jina_directml,
-            onnx_jina_coreml,
-            onnx_jina_openvino,
-            local,
+            backend,
             api,
             index,
             yes,
         } => {
             tracing::info!("setup command");
-            let backend = if api {
-                None
-            } else if onnx_jina_cpu
-                || onnx_jina_cuda
-                || onnx_jina_rocm
-                || onnx_jina_directml
-                || onnx_jina_coreml
-                || onnx_jina_openvino
-                || local
-            {
-                Some(helpers::resolve_backend_flags(
-                    onnx_jina_cpu,
-                    onnx_jina_cuda,
-                    onnx_jina_rocm,
-                    onnx_jina_directml,
-                    onnx_jina_coreml,
-                    onnx_jina_openvino,
-                    local,
-                ))
-            } else {
-                None
-            };
-            commands::setup::run(backend, api, index, cli.json, yes)
+            commands::setup::run(backend.explicit_backend(), api, index, cli.json, yes)
         }
         Commands::Uninstall => {
             tracing::info!("uninstall command");
@@ -559,68 +457,26 @@ fn main() {
             tracing::info!("doctor command");
             commands::doctor::run(cli.json, probe)
         }
-        Commands::Repair {
-            onnx_jina_cpu,
-            onnx_jina_cuda,
-            onnx_jina_rocm,
-            onnx_jina_directml,
-            onnx_jina_coreml,
-            onnx_jina_openvino,
-            local,
-            api,
-        } => {
+        Commands::Repair { backend, api } => {
             tracing::info!("repair command");
-            let backend = if api {
-                None
-            } else if onnx_jina_cpu
-                || onnx_jina_cuda
-                || onnx_jina_rocm
-                || onnx_jina_directml
-                || onnx_jina_coreml
-                || onnx_jina_openvino
-                || local
-            {
-                Some(helpers::resolve_backend_flags(
-                    onnx_jina_cpu,
-                    onnx_jina_cuda,
-                    onnx_jina_rocm,
-                    onnx_jina_directml,
-                    onnx_jina_coreml,
-                    onnx_jina_openvino,
-                    local,
-                ))
-            } else {
-                None
-            };
-            commands::repair::run(backend, api, cli.json)
+            commands::repair::run(backend.explicit_backend(), api, cli.json)
+        }
+        Commands::Upgrade { apply } => {
+            tracing::info!("upgrade command");
+            commands::upgrade::run(apply, cli.json)
         }
         Commands::Index {
             path,
-            onnx_jina_cpu,
-            onnx_jina_cuda,
-            onnx_jina_rocm,
-            onnx_jina_directml,
-            onnx_jina_coreml,
-            onnx_jina_openvino,
-            local,
+            backend,
             exclude,
             no_ignore,
             no_default_excludes,
         } => {
             tracing::info!(path = %path, "indexing");
-            let backend = helpers::resolve_backend_flags(
-                onnx_jina_cpu,
-                onnx_jina_cuda,
-                onnx_jina_rocm,
-                onnx_jina_directml,
-                onnx_jina_coreml,
-                onnx_jina_openvino,
-                local,
-            );
             commands::index::run(
                 &path,
                 cli.json,
-                backend,
+                backend.resolve(),
                 exclude,
                 no_ignore,
                 no_default_excludes,
@@ -632,13 +488,7 @@ fn main() {
             path,
             limit,
             r#type,
-            onnx_jina_cpu,
-            onnx_jina_cuda,
-            onnx_jina_rocm,
-            onnx_jina_directml,
-            onnx_jina_coreml,
-            onnx_jina_openvino,
-            local,
+            backend,
         } => {
             tracing::info!(query = %query, "searching");
             let filters = vera_core::types::SearchFilters {
@@ -646,46 +496,28 @@ fn main() {
                 path_glob: path,
                 symbol_type: r#type,
             };
-            let backend = helpers::resolve_backend_flags(
-                onnx_jina_cpu,
-                onnx_jina_cuda,
-                onnx_jina_rocm,
-                onnx_jina_directml,
-                onnx_jina_coreml,
-                onnx_jina_openvino,
-                local,
-            );
             commands::search::run(
-                &query, limit, &filters, cli.json, cli.raw, cli.timing, backend,
+                &query,
+                limit,
+                &filters,
+                cli.json,
+                cli.raw,
+                cli.timing,
+                backend.resolve(),
             )
         }
         Commands::Update {
             path,
-            onnx_jina_cpu,
-            onnx_jina_cuda,
-            onnx_jina_rocm,
-            onnx_jina_directml,
-            onnx_jina_coreml,
-            onnx_jina_openvino,
-            local,
+            backend,
             exclude,
             no_ignore,
             no_default_excludes,
         } => {
             tracing::info!(path = %path, "updating");
-            let backend = helpers::resolve_backend_flags(
-                onnx_jina_cpu,
-                onnx_jina_cuda,
-                onnx_jina_rocm,
-                onnx_jina_directml,
-                onnx_jina_coreml,
-                onnx_jina_openvino,
-                local,
-            );
             commands::update::run(
                 &path,
                 cli.json,
-                backend,
+                backend.resolve(),
                 exclude,
                 no_ignore,
                 no_default_excludes,
@@ -745,9 +577,12 @@ mod tests {
         let cli = Cli::parse_from(["vera", "setup", "--local", "--index", "."]);
         match cli.command {
             Commands::Setup {
-                local, api, index, ..
+                backend,
+                api,
+                index,
+                ..
             } => {
-                assert!(local);
+                assert!(backend.local);
                 assert!(!api);
                 assert_eq!(index, Some(".".to_string()));
             }
@@ -759,13 +594,9 @@ mod tests {
     fn cli_parses_onnx_jina_cpu_flag() {
         let cli = Cli::parse_from(["vera", "index", ".", "--onnx-jina-cpu"]);
         match cli.command {
-            Commands::Index {
-                onnx_jina_cpu,
-                local,
-                ..
-            } => {
-                assert!(onnx_jina_cpu);
-                assert!(!local);
+            Commands::Index { backend, .. } => {
+                assert!(backend.onnx_jina_cpu);
+                assert!(!backend.local);
             }
             _ => panic!("expected Index command"),
         }
@@ -775,8 +606,8 @@ mod tests {
     fn cli_parses_onnx_jina_cuda_flag() {
         let cli = Cli::parse_from(["vera", "search", "test", "--onnx-jina-cuda"]);
         match cli.command {
-            Commands::Search { onnx_jina_cuda, .. } => {
-                assert!(onnx_jina_cuda);
+            Commands::Search { backend, .. } => {
+                assert!(backend.onnx_jina_cuda);
             }
             _ => panic!("expected Search command"),
         }
@@ -787,13 +618,9 @@ mod tests {
         // --local is a hidden backwards-compat alias for --onnx-jina-cpu
         let cli = Cli::parse_from(["vera", "index", ".", "--local"]);
         match cli.command {
-            Commands::Index {
-                local,
-                onnx_jina_cpu,
-                ..
-            } => {
-                assert!(local);
-                assert!(!onnx_jina_cpu);
+            Commands::Index { backend, .. } => {
+                assert!(backend.local);
+                assert!(!backend.onnx_jina_cpu);
             }
             _ => panic!("expected Index command"),
         }
@@ -815,9 +642,15 @@ mod tests {
     fn cli_parses_repair_command() {
         let cli = Cli::parse_from(["vera", "repair", "--onnx-jina-cuda"]);
         match cli.command {
-            Commands::Repair { onnx_jina_cuda, .. } => assert!(onnx_jina_cuda),
+            Commands::Repair { backend, .. } => assert!(backend.onnx_jina_cuda),
             _ => panic!("expected Repair command"),
         }
+    }
+
+    #[test]
+    fn cli_parses_upgrade_command() {
+        let cli = Cli::parse_from(["vera", "upgrade", "--apply"]);
+        assert!(matches!(cli.command, Commands::Upgrade { apply: true }));
     }
 
     #[test]

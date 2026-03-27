@@ -32,7 +32,10 @@ vera index . --onnx-jina-cuda
 vera doctor
 vera doctor --probe
 vera repair
+vera upgrade
 ```
+
+`vera doctor --probe` runs a deeper read-only ONNX session check. `vera upgrade` shows the binary update plan and can apply it when the install method is known.
 
 ## What you get
 

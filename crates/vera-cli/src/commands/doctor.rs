@@ -333,8 +333,8 @@ fn probe_local_backend(
         checks.push(if tiny_inference_ok {
             DoctorCheck {
                 name: "probe-provider-confirmation",
-                status: CheckStatus::Warn,
-                detail: "session init and tiny inference succeeded, but active GPU execution cannot be confirmed via the ONNX Runtime Rust API; check trace logs for provider registration details".to_string(),
+                status: CheckStatus::Ok,
+                detail: "session init and tiny inference succeeded; active GPU execution still cannot be confirmed via the ONNX Runtime Rust API, so use trace logs if you need explicit provider confirmation".to_string(),
             }
         } else {
             skipped_check(
@@ -344,7 +344,14 @@ fn probe_local_backend(
         });
     }
 
-    checks.push(dependency_probe_check(runtime_path));
+    checks.push(if ep == vera_core::config::OnnxExecutionProvider::Cpu {
+        skipped_check(
+            "probe-dependencies",
+            "skipped for the CPU backend because provider-specific shared-library checks are not needed",
+        )
+    } else {
+        dependency_probe_check(runtime_path)
+    });
     Ok(checks)
 }
 
@@ -420,7 +427,7 @@ fn dependency_probe_check(runtime_path: &std::path::Path) -> DoctorCheck {
         }
         Ok(None) => skipped_check(
             "probe-dependencies",
-            "dependency inspection is currently available only on Linux with `ldd`",
+            "dependency inspection is currently available on Linux with `ldd` and macOS with `otool`",
         ),
         Err(err) => DoctorCheck {
             name: "probe-dependencies",
@@ -466,7 +473,9 @@ fn version_check(status: &update_check::BinaryVersionStatus) -> DoctorCheck {
 
 fn one_line_error(err: &anyhow::Error) -> String {
     err.to_string()
-        .split_whitespace()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
-        .join(" ")
+        .join("; ")
 }

@@ -62,6 +62,36 @@ function defaultVeraHome() {
   return process.env.VERA_HOME || path.join(os.homedir(), ".vera");
 }
 
+function installMetadataPath() {
+  return path.join(defaultVeraHome(), "install.json");
+}
+
+function currentInstallMethod() {
+  return process.versions.bun ? "bun" : "npm";
+}
+
+async function readInstallMetadata() {
+  try {
+    const raw = await fsp.readFile(installMetadataPath(), "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+async function writeInstallMetadata({ installMethod, version, binaryPath }) {
+  const metadataPath = installMetadataPath();
+  await fsp.mkdir(path.dirname(metadataPath), { recursive: true });
+  const current = await readInstallMetadata();
+  const next = {
+    install_method: installMethod ?? current.install_method ?? null,
+    version: version ?? current.version ?? null,
+    binary_path: binaryPath ?? current.binary_path ?? null,
+  };
+  await fsp.writeFile(`${metadataPath}.tmp`, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  await fsp.rename(`${metadataPath}.tmp`, metadataPath);
+}
+
 function preferredBinDirs() {
   const home = os.homedir();
   if (process.env.VERA_USER_BIN_DIR) {
@@ -260,6 +290,11 @@ async function ensureBinaryInstalled() {
   const binaryPath = path.join(installDir, binaryName());
   if (fs.existsSync(binaryPath)) {
     await createShim(binaryPath);
+    await writeInstallMetadata({
+      installMethod: currentInstallMethod(),
+      version,
+      binaryPath,
+    });
     return { binaryPath, version };
   }
 
@@ -289,6 +324,11 @@ async function ensureBinaryInstalled() {
       console.error(`Added Vera to ${path.dirname(shimPath)}. Add that directory to PATH to run \`vera\` directly.`);
     }
 
+    await writeInstallMetadata({
+      installMethod: currentInstallMethod(),
+      version,
+      binaryPath,
+    });
     return { binaryPath, version };
   } finally {
     await fsp.rm(tempRoot, { recursive: true, force: true });
@@ -305,6 +345,16 @@ function runBinary(binaryPath, args) {
 
 async function main() {
   const { command, rest } = parseArgs(process.argv.slice(2));
+
+  if (command === "_record-install-method") {
+    await writeInstallMetadata({
+      installMethod: "npm",
+      version: packageVersion,
+      binaryPath: null,
+    });
+    return;
+  }
+
   const { binaryPath, version } = await ensureBinaryInstalled();
 
   if (command === "install") {

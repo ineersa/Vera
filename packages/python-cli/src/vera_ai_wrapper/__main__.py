@@ -70,6 +70,54 @@ def vera_home() -> Path:
     return Path(os.environ.get("VERA_HOME", Path.home() / ".vera")).expanduser()
 
 
+def install_metadata_path() -> Path:
+    return vera_home() / "install.json"
+
+
+def detect_wrapper_install_method() -> str | None:
+    explicit = os.environ.get("VERA_INSTALL_METHOD")
+    if explicit in {"pip", "uv"}:
+        return explicit
+
+    if any(
+        os.environ.get(name)
+        for name in ("UV", "UV_CACHE_DIR", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR")
+    ):
+        return "uv"
+
+    return None
+
+
+def read_install_metadata() -> dict[str, object]:
+    path = install_metadata_path()
+    if not path.exists():
+        return {}
+
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def write_install_metadata(
+    *,
+    install_method: str | None,
+    version_value: str | None,
+    binary_path: Path | None,
+) -> None:
+    path = install_metadata_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    current = read_install_metadata()
+    payload = {
+        "install_method": install_method or current.get("install_method"),
+        "version": version_value or current.get("version"),
+        "binary_path": str(binary_path) if binary_path is not None else current.get("binary_path"),
+    }
+    tmp_path = path.with_suffix(".tmp")
+    tmp_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
+    tmp_path.replace(path)
+
+
 def preferred_bin_dirs() -> list[Path]:
     override = os.environ.get("VERA_USER_BIN_DIR")
     if override:
@@ -176,6 +224,11 @@ def ensure_binary_installed() -> tuple[Path, str]:
     binary_path = install_dir / binary_name()
     if binary_path.exists():
         create_shim(binary_path)
+        write_install_metadata(
+            install_method=detect_wrapper_install_method(),
+            version_value=version_value,
+            binary_path=binary_path,
+        )
         return binary_path, version_value
 
     with tempfile.TemporaryDirectory(prefix="vera-install-") as temp_dir_str:
@@ -203,6 +256,11 @@ def ensure_binary_installed() -> tuple[Path, str]:
             file=sys.stderr,
         )
 
+    write_install_metadata(
+        install_method=detect_wrapper_install_method(),
+        version_value=version_value,
+        binary_path=binary_path,
+    )
     return binary_path, version_value
 
 

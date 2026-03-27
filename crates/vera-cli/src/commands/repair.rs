@@ -4,12 +4,17 @@
 use vera_core::config::InferenceBackend;
 
 use crate::commands::setup;
+use crate::state;
 
 pub fn run(backend: Option<InferenceBackend>, api: bool, json_output: bool) -> anyhow::Result<()> {
     let effective_backend = if api {
         InferenceBackend::Api
+    } else if let Some(backend) = backend {
+        backend
+    } else if let Some(saved_backend) = state::saved_backend()? {
+        saved_backend
     } else {
-        backend.unwrap_or_else(|| vera_core::config::resolve_backend(None))
+        vera_core::config::resolve_backend(None)
     };
 
     setup::configure_backend(

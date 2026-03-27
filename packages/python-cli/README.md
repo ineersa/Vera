@@ -32,7 +32,10 @@ vera-ai index . --onnx-jina-cuda
 vera-ai doctor
 vera-ai doctor --probe
 vera-ai repair
+vera-ai upgrade
 ```
+
+`vera-ai doctor --probe` runs a deeper read-only ONNX session check. `vera-ai upgrade` shows the binary update plan and can apply it when the install method is known.
 
 ## What you get
 

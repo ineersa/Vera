@@ -14,6 +14,8 @@ pub struct StoredConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<vera_core::config::InferenceBackend>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding_api: Option<ApiEndpointConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reranker_api: Option<ApiEndpointConfig>,
@@ -35,6 +37,16 @@ pub struct StoredSecrets {
     pub reranker_api_key: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InstallProvenance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary_path: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ApiSetupInput {
     pub base_url: String,
@@ -50,10 +62,31 @@ pub fn load_saved_secrets() -> Result<StoredSecrets> {
     load_json_file(&credentials_path()?)
 }
 
+pub fn load_install_provenance() -> Result<InstallProvenance> {
+    load_json_file(&install_path()?)
+}
+
 pub fn save_backend(backend: vera_core::config::InferenceBackend) -> Result<()> {
     let mut config = load_saved_config()?;
     config.backend = Some(backend);
     config.local_mode = Some(backend.is_local());
+    save_config(&config)
+}
+
+pub fn saved_backend() -> Result<Option<vera_core::config::InferenceBackend>> {
+    use vera_core::config::{InferenceBackend, OnnxExecutionProvider};
+
+    let config = load_saved_config()?;
+    Ok(config.backend.or(match config.local_mode {
+        Some(true) => Some(InferenceBackend::OnnxJina(OnnxExecutionProvider::Cpu)),
+        Some(false) => Some(InferenceBackend::Api),
+        None => None,
+    }))
+}
+
+pub fn save_install_method(install_method: Option<&str>) -> Result<()> {
+    let mut config = load_saved_config()?;
+    config.install_method = install_method.map(|method| method.to_string());
     save_config(&config)
 }
 
@@ -94,6 +127,10 @@ pub fn config_path() -> Result<PathBuf> {
 
 pub fn credentials_path() -> Result<PathBuf> {
     Ok(vera_dir()?.join("credentials.json"))
+}
+
+pub fn install_path() -> Result<PathBuf> {
+    Ok(vera_dir()?.join("install.json"))
 }
 
 pub fn vera_dir() -> Result<PathBuf> {
@@ -253,6 +290,7 @@ mod tests {
         let config = StoredConfig::default();
         assert!(config.local_mode.is_none());
         assert!(config.backend.is_none());
+        assert!(config.install_method.is_none());
         assert!(config.embedding_api.is_none());
         assert!(config.reranker_api.is_none());
         assert!(config.core_config.is_none());
@@ -263,5 +301,13 @@ mod tests {
         let secrets = StoredSecrets::default();
         assert!(secrets.embedding_api_key.is_none());
         assert!(secrets.reranker_api_key.is_none());
+    }
+
+    #[test]
+    fn install_provenance_defaults_are_empty() {
+        let provenance = InstallProvenance::default();
+        assert!(provenance.install_method.is_none());
+        assert!(provenance.version.is_none());
+        assert!(provenance.binary_path.is_none());
     }
 }

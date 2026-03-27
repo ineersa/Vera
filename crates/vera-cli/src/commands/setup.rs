@@ -99,6 +99,10 @@ pub(crate) fn configure_backend(
         onnx_runtime_ready = None;
     }
 
+    if let Some(install_method) = crate::update_check::resolve_install_method().install_method {
+        state::save_install_method(Some(&install_method))?;
+    }
+
     if let Some(path) = index_path.as_deref() {
         commands::index::execute(path, effective_backend, Vec::new(), false, false)?;
     }

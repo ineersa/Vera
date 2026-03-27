@@ -1,5 +1,6 @@
 //! Shared helper functions for CLI command implementations.
 
+use clap::Args;
 use serde::Serialize;
 
 /// Load the effective runtime configuration.
@@ -7,28 +8,65 @@ pub fn load_runtime_config() -> anyhow::Result<vera_core::config::VeraConfig> {
     crate::state::load_runtime_config()
 }
 
+#[derive(Debug, Clone, Default, Args)]
+pub struct LocalBackendFlags {
+    /// Use local Jina ONNX models on CPU.
+    #[arg(long = "onnx-jina-cpu", group = "backend")]
+    pub onnx_jina_cpu: bool,
+    /// Use local Jina ONNX models with CUDA (NVIDIA GPU).
+    #[arg(long = "onnx-jina-cuda", group = "backend")]
+    pub onnx_jina_cuda: bool,
+    /// Use local Jina ONNX models with ROCm (AMD GPU, Linux only).
+    #[arg(long = "onnx-jina-rocm", group = "backend")]
+    pub onnx_jina_rocm: bool,
+    /// Use local Jina ONNX models with DirectML (Windows GPU).
+    #[arg(long = "onnx-jina-directml", group = "backend")]
+    pub onnx_jina_directml: bool,
+    /// Use local Jina ONNX models with CoreML (Apple Silicon).
+    #[arg(long = "onnx-jina-coreml", group = "backend")]
+    pub onnx_jina_coreml: bool,
+    /// Use local Jina ONNX models with OpenVINO (Intel GPU/iGPU, Linux only).
+    #[arg(long = "onnx-jina-openvino", group = "backend")]
+    pub onnx_jina_openvino: bool,
+    /// Alias for --onnx-jina-cpu (backwards compatibility).
+    #[arg(long, group = "backend", hide = true)]
+    pub local: bool,
+}
+
+impl LocalBackendFlags {
+    pub fn any_set(&self) -> bool {
+        self.onnx_jina_cpu
+            || self.onnx_jina_cuda
+            || self.onnx_jina_rocm
+            || self.onnx_jina_directml
+            || self.onnx_jina_coreml
+            || self.onnx_jina_openvino
+            || self.local
+    }
+
+    pub fn explicit_backend(&self) -> Option<vera_core::config::InferenceBackend> {
+        self.any_set().then(|| resolve_backend_flags(self))
+    }
+
+    pub fn resolve(&self) -> vera_core::config::InferenceBackend {
+        resolve_backend_flags(self)
+    }
+}
+
 /// Resolve an `InferenceBackend` from the per-command boolean flags.
-pub fn resolve_backend_flags(
-    onnx_jina_cpu: bool,
-    onnx_jina_cuda: bool,
-    onnx_jina_rocm: bool,
-    onnx_jina_directml: bool,
-    onnx_jina_coreml: bool,
-    onnx_jina_openvino: bool,
-    local: bool,
-) -> vera_core::config::InferenceBackend {
+pub fn resolve_backend_flags(flags: &LocalBackendFlags) -> vera_core::config::InferenceBackend {
     use vera_core::config::{InferenceBackend, OnnxExecutionProvider};
-    let explicit = if onnx_jina_cpu || local {
+    let explicit = if flags.onnx_jina_cpu || flags.local {
         Some(InferenceBackend::OnnxJina(OnnxExecutionProvider::Cpu))
-    } else if onnx_jina_cuda {
+    } else if flags.onnx_jina_cuda {
         Some(InferenceBackend::OnnxJina(OnnxExecutionProvider::Cuda))
-    } else if onnx_jina_rocm {
+    } else if flags.onnx_jina_rocm {
         Some(InferenceBackend::OnnxJina(OnnxExecutionProvider::Rocm))
-    } else if onnx_jina_directml {
+    } else if flags.onnx_jina_directml {
         Some(InferenceBackend::OnnxJina(OnnxExecutionProvider::DirectMl))
-    } else if onnx_jina_coreml {
+    } else if flags.onnx_jina_coreml {
         Some(InferenceBackend::OnnxJina(OnnxExecutionProvider::CoreMl))
-    } else if onnx_jina_openvino {
+    } else if flags.onnx_jina_openvino {
         Some(InferenceBackend::OnnxJina(OnnxExecutionProvider::OpenVino))
     } else {
         None
