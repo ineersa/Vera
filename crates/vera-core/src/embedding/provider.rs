@@ -52,6 +52,11 @@ pub trait EmbeddingProvider: Send + Sync {
 
     /// Return the expected vector dimensionality (if known ahead of time).
     fn expected_dim(&self) -> Option<usize>;
+
+    /// Rewrite query text for providers that require asymmetric query prefixes.
+    fn prepare_query_text(&self, query: &str) -> String {
+        query.to_string()
+    }
 }
 
 // ── Configuration ────────────────────────────────────────────────────
@@ -423,6 +428,10 @@ impl<P: EmbeddingProvider> EmbeddingProvider for CachedEmbeddingProvider<P> {
 
     fn expected_dim(&self) -> Option<usize> {
         self.inner.expected_dim()
+    }
+
+    fn prepare_query_text(&self, query: &str) -> String {
+        self.inner.prepare_query_text(query)
     }
 }
 

@@ -10,22 +10,22 @@ pub fn load_runtime_config() -> anyhow::Result<vera_core::config::VeraConfig> {
 
 #[derive(Debug, Clone, Default, Args)]
 pub struct LocalBackendFlags {
-    /// Use local Jina ONNX models on CPU.
+    /// Use local ONNX models on CPU.
     #[arg(long = "onnx-jina-cpu", group = "backend")]
     pub onnx_jina_cpu: bool,
-    /// Use local Jina ONNX models with CUDA (NVIDIA GPU).
+    /// Use local ONNX models with CUDA (NVIDIA GPU).
     #[arg(long = "onnx-jina-cuda", group = "backend")]
     pub onnx_jina_cuda: bool,
-    /// Use local Jina ONNX models with ROCm (AMD GPU, Linux only).
+    /// Use local ONNX models with ROCm (AMD GPU, Linux only).
     #[arg(long = "onnx-jina-rocm", group = "backend")]
     pub onnx_jina_rocm: bool,
-    /// Use local Jina ONNX models with DirectML (Windows GPU).
+    /// Use local ONNX models with DirectML (Windows GPU).
     #[arg(long = "onnx-jina-directml", group = "backend")]
     pub onnx_jina_directml: bool,
-    /// Use local Jina ONNX models with CoreML (Apple Silicon).
+    /// Use local ONNX models with CoreML (Apple Silicon).
     #[arg(long = "onnx-jina-coreml", group = "backend")]
     pub onnx_jina_coreml: bool,
-    /// Use local Jina ONNX models with OpenVINO (Intel GPU/iGPU, Linux only).
+    /// Use local ONNX models with OpenVINO (Intel GPU/iGPU, Linux only).
     #[arg(long = "onnx-jina-openvino", group = "backend")]
     pub onnx_jina_openvino: bool,
     /// Alias for --onnx-jina-cpu (backwards compatibility).
@@ -50,6 +50,75 @@ impl LocalBackendFlags {
 
     pub fn resolve(&self) -> vera_core::config::InferenceBackend {
         resolve_backend_flags(self)
+    }
+}
+
+#[derive(Debug, Clone, Default, Args)]
+pub struct LocalEmbeddingModelFlags {
+    /// Use CodeRankEmbed instead of Vera's default Jina local embedding model.
+    #[arg(
+        long = "code-rank-embed",
+        alias = "coderankembed",
+        group = "local_embedding_source"
+    )]
+    pub code_rank_embed: bool,
+    /// Hugging Face repo id or full Hugging Face URL for a custom local embedding model.
+    #[arg(
+        long = "embedding-repo",
+        value_name = "REPO_OR_URL",
+        group = "local_embedding_source"
+    )]
+    pub embedding_repo: Option<String>,
+    /// Local directory containing a custom ONNX embedding model.
+    #[arg(
+        long = "embedding-dir",
+        value_name = "DIR",
+        group = "local_embedding_source"
+    )]
+    pub embedding_dir: Option<String>,
+    /// Relative path to the ONNX file inside the selected repo or directory.
+    #[arg(long = "embedding-onnx-file", value_name = "PATH")]
+    pub embedding_onnx_file: Option<String>,
+    /// Relative path to the ONNX external data file inside the selected repo or directory.
+    #[arg(
+        long = "embedding-onnx-data-file",
+        value_name = "PATH",
+        conflicts_with = "embedding_no_onnx_data"
+    )]
+    pub embedding_onnx_data_file: Option<String>,
+    /// Use models that do not require an ONNX external data file.
+    #[arg(long = "embedding-no-onnx-data")]
+    pub embedding_no_onnx_data: bool,
+    /// Relative path to the tokenizer file inside the selected repo or directory.
+    #[arg(long = "embedding-tokenizer-file", value_name = "PATH")]
+    pub embedding_tokenizer_file: Option<String>,
+    /// Embedding dimension the model returns.
+    #[arg(long = "embedding-dim", value_name = "DIM")]
+    pub embedding_dim: Option<usize>,
+    /// Pooling strategy for token-level output models.
+    #[arg(long = "embedding-pooling", value_name = "POOLING", value_parser = ["mean", "cls"])]
+    pub embedding_pooling: Option<String>,
+    /// Tokenizer truncation length for local embedding inference.
+    #[arg(long = "embedding-max-length", value_name = "TOKENS")]
+    pub embedding_max_length: Option<usize>,
+    /// Optional asymmetric query prefix for models that require it.
+    #[arg(long = "embedding-query-prefix", value_name = "TEXT")]
+    pub embedding_query_prefix: Option<String>,
+}
+
+impl LocalEmbeddingModelFlags {
+    pub fn any_set(&self) -> bool {
+        self.code_rank_embed
+            || self.embedding_repo.is_some()
+            || self.embedding_dir.is_some()
+            || self.embedding_onnx_file.is_some()
+            || self.embedding_onnx_data_file.is_some()
+            || self.embedding_no_onnx_data
+            || self.embedding_tokenizer_file.is_some()
+            || self.embedding_dim.is_some()
+            || self.embedding_pooling.is_some()
+            || self.embedding_max_length.is_some()
+            || self.embedding_query_prefix.is_some()
     }
 }
 

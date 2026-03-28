@@ -5,8 +5,12 @@ use std::io::Write;
 use anyhow::{Context, bail};
 use serde::Serialize;
 use vera_core::config::{InferenceBackend, OnnxExecutionProvider};
+use vera_core::local_models::{
+    LocalEmbeddingModelConfig, LocalEmbeddingPooling, normalize_huggingface_repo,
+};
 
 use crate::commands;
+use crate::helpers::LocalEmbeddingModelFlags;
 use crate::state::{self, ApiSetupInput};
 
 #[derive(Debug, Serialize)]
@@ -17,6 +21,8 @@ pub(crate) struct SetupReport {
     models_prefetched: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     onnx_runtime_ready: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    local_embedding_model: Option<String>,
     indexed_path: Option<String>,
 }
 
@@ -27,6 +33,7 @@ pub fn run(
     index_path: Option<String>,
     json_output: bool,
     yes: bool,
+    embedding_flags: LocalEmbeddingModelFlags,
 ) -> anyhow::Result<()> {
     // Resolve: explicit backend flag wins, then --api, then interactive menu.
     let effective_backend = if api {
@@ -44,8 +51,21 @@ pub fn run(
         // Interactive: show backend selection menu.
         prompt_backend()?
     };
+    if !effective_backend.is_local() && embedding_flags.any_set() {
+        bail!("custom local embedding flags can only be used with local ONNX backends");
+    }
+    let local_embedding_model = effective_backend
+        .is_local()
+        .then(|| resolve_local_embedding_model(&embedding_flags))
+        .transpose()?;
 
-    if !yes && !confirm(&effective_backend, index_path.as_deref())? {
+    if !yes
+        && !confirm(
+            &effective_backend,
+            local_embedding_model.as_ref(),
+            index_path.as_deref(),
+        )?
+    {
         if !json_output {
             println!("Cancelled.");
         }
@@ -54,6 +74,7 @@ pub fn run(
 
     configure_backend(
         effective_backend,
+        local_embedding_model,
         index_path,
         json_output,
         "Vera setup complete.",
@@ -62,6 +83,7 @@ pub fn run(
 
 pub(crate) fn configure_backend(
     effective_backend: InferenceBackend,
+    local_embedding_model: Option<LocalEmbeddingModelConfig>,
     index_path: Option<String>,
     json_output: bool,
     success_header: &str,
@@ -69,12 +91,16 @@ pub(crate) fn configure_backend(
     let use_local = effective_backend.is_local();
     let mut models_prefetched = 0usize;
     let onnx_runtime_ready;
+    let mut local_embedding_summary = None;
 
     if let InferenceBackend::OnnxJina(ep) = effective_backend {
+        let local_embedding_model = local_embedding_model.unwrap_or_default();
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| anyhow::anyhow!("failed to create async runtime: {e}"))?;
-        let prefetched =
-            rt.block_on(vera_core::local_models::prefetch_default_local_models_for_ep(ep))?;
+        let prefetched = rt.block_on(vera_core::local_models::prepare_local_models_for_ep(
+            ep,
+            &local_embedding_model,
+        ))?;
         models_prefetched = prefetched.len();
         // Use the downloaded library path (first prefetched file) for the readiness check.
         onnx_runtime_ready = Some(
@@ -82,7 +108,9 @@ pub(crate) fn configure_backend(
                 .is_ok(),
         );
         state::save_backend(effective_backend)?;
+        state::save_local_embedding_model(&local_embedding_model)?;
         state::apply_saved_env_force()?;
+        local_embedding_summary = Some(local_embedding_model.display_name());
     } else {
         let embedding = read_required_api_env(
             "EMBEDDING_MODEL_BASE_URL",
@@ -115,6 +143,7 @@ pub(crate) fn configure_backend(
         credentials_path: state::credentials_path()?.display().to_string(),
         models_prefetched,
         onnx_runtime_ready,
+        local_embedding_model: local_embedding_summary,
         indexed_path: index_path,
     };
 
@@ -127,6 +156,9 @@ pub(crate) fn configure_backend(
         println!("  Config:               {}", report.config_path);
         println!("  Credentials:          {}", report.credentials_path);
         if use_local {
+            if let Some(model) = report.local_embedding_model.as_deref() {
+                println!("  Embedding model:      {model}");
+            }
             println!("  Prefetched model files: {}", report.models_prefetched);
             println!(
                 "  ONNX Runtime ready:   {}",
@@ -253,8 +285,61 @@ fn prompt_backend() -> anyhow::Result<InferenceBackend> {
     }
 }
 
-fn confirm(backend: &InferenceBackend, index_path: Option<&str>) -> anyhow::Result<bool> {
+fn resolve_local_embedding_model(
+    flags: &LocalEmbeddingModelFlags,
+) -> anyhow::Result<LocalEmbeddingModelConfig> {
+    let mut model = if flags.code_rank_embed {
+        LocalEmbeddingModelConfig::coderankembed()
+    } else if let Some(repo_or_url) = flags.embedding_repo.as_deref() {
+        LocalEmbeddingModelConfig::from_huggingface_repo(normalize_huggingface_repo(repo_or_url)?)
+    } else if let Some(dir) = flags.embedding_dir.as_deref() {
+        let path = std::path::Path::new(dir)
+            .canonicalize()
+            .with_context(|| format!("failed to resolve embedding directory: {dir}"))?;
+        LocalEmbeddingModelConfig::from_directory(path)
+    } else {
+        LocalEmbeddingModelConfig::default()
+    };
+
+    if let Some(onnx_file) = flags.embedding_onnx_file.as_ref() {
+        model.onnx_file = onnx_file.clone();
+    }
+    if flags.embedding_no_onnx_data {
+        model.onnx_data_file = None;
+    } else if let Some(onnx_data_file) = flags.embedding_onnx_data_file.as_ref() {
+        model.onnx_data_file = Some(onnx_data_file.clone());
+    }
+    if let Some(tokenizer_file) = flags.embedding_tokenizer_file.as_ref() {
+        model.tokenizer_file = tokenizer_file.clone();
+    }
+    if let Some(dim) = flags.embedding_dim {
+        model.embedding_dim = dim;
+    }
+    if let Some(pooling) = flags.embedding_pooling.as_deref() {
+        model.pooling = pooling
+            .parse::<LocalEmbeddingPooling>()
+            .map_err(anyhow::Error::msg)?;
+    }
+    if let Some(max_length) = flags.embedding_max_length {
+        model.max_length = max_length;
+    }
+    if let Some(query_prefix) = flags.embedding_query_prefix.as_ref() {
+        model.query_prefix =
+            Some(query_prefix.trim().to_string()).filter(|value| !value.is_empty());
+    }
+
+    Ok(model)
+}
+
+fn confirm(
+    backend: &InferenceBackend,
+    local_embedding_model: Option<&LocalEmbeddingModelConfig>,
+    index_path: Option<&str>,
+) -> anyhow::Result<bool> {
     println!("This will configure Vera for {backend} mode.");
+    if let Some(model) = local_embedding_model {
+        println!("Local embedding model: {}", model.display_name());
+    }
     if let Some(path) = index_path {
         println!("It will also index: {path}");
     }

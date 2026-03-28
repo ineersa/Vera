@@ -70,6 +70,12 @@ pub fn run(json_output: bool, probe: bool) -> anyhow::Result<()> {
         let ep = backend
             .execution_provider()
             .expect("local backend must include an execution provider");
+        let embedding_model = vera_core::local_models::LocalEmbeddingModelConfig::from_env()?;
+        checks.push(DoctorCheck {
+            name: "local-embedding-model",
+            status: CheckStatus::Ok,
+            detail: embedding_model.display_name(),
+        });
         let runtime_path = vera_core::local_models::ort_library_path_for_ep(ep)?;
         let runtime_check = vera_core::local_models::ensure_ort_runtime(Some(&runtime_path));
         let runtime_detail = match &runtime_check {
@@ -86,7 +92,8 @@ pub fn run(json_output: bool, probe: bool) -> anyhow::Result<()> {
             detail: runtime_detail,
         });
 
-        let model_assets = vera_core::local_models::inspect_default_local_model_files_for_ep(ep)?;
+        let model_assets =
+            vera_core::local_models::inspect_local_model_files_for_ep(ep, &embedding_model)?;
         let present = model_assets.iter().filter(|asset| asset.exists).count();
         checks.push(DoctorCheck {
             name: "local-models",
@@ -95,10 +102,7 @@ pub fn run(json_output: bool, probe: bool) -> anyhow::Result<()> {
             } else {
                 CheckStatus::Warn
             },
-            detail: format!(
-                "{present}/{} default local assets present",
-                model_assets.len()
-            ),
+            detail: format!("{present}/{} local assets present", model_assets.len()),
         });
         if probe {
             checks.extend(probe_local_backend(ep, &runtime_path, &model_assets)?);

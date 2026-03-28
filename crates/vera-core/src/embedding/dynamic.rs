@@ -3,6 +3,7 @@ use crate::embedding::local_provider::LocalEmbeddingProvider;
 use crate::embedding::provider::{
     EmbeddingError, EmbeddingProvider, EmbeddingProviderConfig, OpenAiProvider,
 };
+use crate::local_models::configured_local_model_name;
 use std::time::Duration;
 
 pub enum DynamicProvider {
@@ -24,6 +25,13 @@ impl EmbeddingProvider for DynamicProvider {
             Self::Local(p) => p.expected_dim(),
         }
     }
+
+    fn prepare_query_text(&self, query: &str) -> String {
+        match self {
+            Self::Api(p) => p.prepare_query_text(query),
+            Self::Local(p) => p.prepare_query_text(query),
+        }
+    }
 }
 
 pub async fn create_dynamic_provider(
@@ -36,10 +44,7 @@ pub async fn create_dynamic_provider(
             let p = LocalEmbeddingProvider::new_with_ep_and_mem_limit(ep, gpu_mem_limit_mb).await.map_err(|e| {
                 anyhow::anyhow!("Failed to initialize local embedding provider: {e}\nHint: check network connection or manually place model at ~/.vera/models/")
             })?;
-            Ok((
-                DynamicProvider::Local(p),
-                "jina-embeddings-v5-text-nano-retrieval".to_string(),
-            ))
+            Ok((DynamicProvider::Local(p), configured_local_model_name()))
         }
         InferenceBackend::Api => {
             let provider_config = EmbeddingProviderConfig::from_env()

@@ -155,7 +155,7 @@ impl fmt::Display for OnnxExecutionProvider {
 pub enum InferenceBackend {
     /// Use external OpenAI-compatible API for embeddings/reranking.
     Api,
-    /// Use local Jina ONNX models with the specified execution provider.
+    /// Use local ONNX models with the specified execution provider.
     OnnxJina(OnnxExecutionProvider),
 }
 

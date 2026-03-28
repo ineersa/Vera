@@ -134,18 +134,24 @@ enum Commands {
         long_about = "Persist a preferred model backend and bootstrap first-run state.\n\n\
                       Running `vera setup` with no flags shows an interactive backend menu \
                       with auto-detected GPU as the default. Pass a --onnx-jina-* flag or \
-                      --api to skip the menu.\n\n\
+                      --api to skip the menu. Add `--code-rank-embed` to use the optional \
+                      CodeRankEmbed local embedding model, or `--embedding-repo/--embedding-dir` \
+                      for a custom ONNX embedding model.\n\n\
                       Vera always keeps the index local in `.vera/`. The choice here only \
                       changes where embeddings and reranking are computed.\n\n\
                       Examples:\n  \
                       vera setup                       # Interactive backend selection\n  \
                       vera setup --onnx-jina-cuda      # NVIDIA GPU (skip menu)\n  \
+                      vera setup --code-rank-embed     # Switch local embeddings to CodeRankEmbed\n  \
+                      vera setup --embedding-repo <repo-or-url> --embedding-pooling cls\n  \
                       vera setup --api                 # Persist API credentials from env\n  \
                       vera setup --yes                 # Auto-detect GPU, no prompts"
     )]
     Setup {
         #[command(flatten)]
         backend: helpers::LocalBackendFlags,
+        #[command(flatten)]
+        embedding: helpers::LocalEmbeddingModelFlags,
         /// Configure Vera for API-backed mode using current env vars.
         #[arg(long, group = "backend")]
         api: bool,
@@ -493,12 +499,20 @@ fn main() {
         }
         Commands::Setup {
             backend,
+            embedding,
             api,
             index,
             yes,
         } => {
             tracing::info!("setup command");
-            commands::setup::run(backend.explicit_backend(), api, index, cli.json, yes)
+            commands::setup::run(
+                backend.explicit_backend(),
+                api,
+                index,
+                cli.json,
+                yes,
+                embedding,
+            )
         }
         Commands::Uninstall => {
             tracing::info!("uninstall command");
@@ -645,11 +659,13 @@ mod tests {
         match cli.command {
             Commands::Setup {
                 backend,
+                embedding,
                 api,
                 index,
                 ..
             } => {
                 assert!(backend.local);
+                assert!(!embedding.code_rank_embed);
                 assert!(!api);
                 assert_eq!(index, Some(".".to_string()));
             }
@@ -711,6 +727,20 @@ mod tests {
         match cli.command {
             Commands::Repair { backend, .. } => assert!(backend.onnx_jina_cuda),
             _ => panic!("expected Repair command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_setup_code_rank_embed_flag() {
+        let cli = Cli::parse_from(["vera", "setup", "--code-rank-embed", "--onnx-jina-cuda"]);
+        match cli.command {
+            Commands::Setup {
+                backend, embedding, ..
+            } => {
+                assert!(backend.onnx_jina_cuda);
+                assert!(embedding.code_rank_embed);
+            }
+            _ => panic!("expected Setup command"),
         }
     }
 

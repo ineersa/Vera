@@ -4,7 +4,7 @@
 
 # Vera
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/lemon07r/Vera/blob/master/Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/lemon07r/Vera/blob/master/LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![GitHub release](https://img.shields.io/github/v/release/lemon07r/Vera?include_prereleases&sort=semver)](https://github.com/lemon07r/Vera/releases)
 [![Languages](https://img.shields.io/badge/languages-63%2B-green.svg)](docs/supported-languages.md)
@@ -16,6 +16,8 @@
 [How It Works](docs/how-it-works.md)
 ·
 [Models](docs/models.md)
+·
+[Manual Install](docs/manual-install.md)
 ·
 [Docker](docs/docker.md)
 ·
@@ -75,9 +77,11 @@ vera search "query" # search (each project gets its own index)
 vera update .       # after code changes
 ```
 
-`vera setup` with no flags shows a backend picker and auto-detects your GPU. You can also skip the menu: `vera setup --onnx-jina-cuda` (NVIDIA), `--onnx-jina-coreml` (Apple Silicon), `--api` (remote endpoints), etc. Run `vera setup --help` for all options.
+`vera setup` with no flags shows a backend picker and auto-detects your GPU. You can also skip the menu: `vera setup --onnx-jina-cuda` (NVIDIA), `--onnx-jina-coreml` (Apple Silicon), `--api` (remote endpoints), etc. Add `--code-rank-embed` if you want the optional CodeRankEmbed local embedding preset. Run `vera setup --help` for all options.
 
 Use `vera doctor` if anything goes wrong. It reports the saved and active backend, installed Vera version, and checks GitHub for newer releases. Add `--probe` for a deeper read-only ONNX session check that does not download or repair missing assets. Use `vera repair` to re-fetch missing local assets or re-save API config from the current environment. Use `vera upgrade` to inspect or apply the binary update plan.
+
+If your network blocks CLI downloads and only allows browser downloads, use the short [manual install guide](docs/manual-install.md).
 
 <details>
 <summary>MCP server (JSON-RPC over stdio)</summary>
@@ -155,12 +159,13 @@ Vera itself is always local: the index lives in `.vera/`, config in `~/.vera/`. 
 
 `vera setup` downloads quantized ONNX models into `~/.vera/models/` and the ONNX Runtime library into `~/.vera/lib/`. No manual install required.
 
-| Model | Size | Role |
-|-------|------|------|
-| [`jina-embeddings-v5-text-nano-retrieval`](https://huggingface.co/jinaai/jina-embeddings-v5-text-nano-retrieval) | 239M | Embedding (retrieval LoRA, asymmetric search) |
-| [`jina-reranker-v2-base-multilingual`](https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual) | 278M | Cross-encoder reranker (15x faster than bge-reranker-v2-m3) |
+| Model | Size | Role | Notes |
+|-------|------|------|-------|
+| [`jina-embeddings-v5-text-nano-retrieval`](https://huggingface.co/jinaai/jina-embeddings-v5-text-nano-retrieval) | 239M | Default embedding model | Best default choice. Faster indexing, strong end-to-end results with Vera's reranker. |
+| [`Zenabius/CodeRankEmbed-onnx`](https://huggingface.co/Zenabius/CodeRankEmbed-onnx) | 137M | Optional embedding preset | Use `vera setup --code-rank-embed` for embedding-heavy or no-rerank experiments. In Vera's short 6-task no-rerank check it improved Recall@1 from `0.56` to `0.72`, but indexing was much slower. |
+| [`jina-reranker-v2-base-multilingual`](https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual) | 278M | Cross-encoder reranker | Curated local reranker for all local presets. |
 
-With both models cached, the full pipeline (BM25 + vector search + rerank) runs without external calls. For detailed specs, see [docs/models.md](docs/models.md).
+With the embedding model and reranker cached, the full pipeline (BM25 + vector search + rerank) runs without external calls. For detailed specs, custom model setup, and the CodeRankEmbed comparison, see [docs/models.md](docs/models.md) and [docs/benchmarks.md](docs/benchmarks.md).
 
 ### GPU Acceleration
 
@@ -177,6 +182,31 @@ With both models cached, the full pipeline (BM25 + vector search + rerank) runs 
 Vera downloads the matching ONNX Runtime build automatically. For OpenVINO and ROCm (no pre-built binaries on GitHub), Vera installs via pip into a managed venv at `~/.vera/venv/`, falling back to direct PyPI wheel download if pip is unavailable. The same flag works on `vera index` and `vera search` to override the configured backend per-command.
 
 Vera auto-detects available VRAM and scales batch size accordingly. On GPUs with less than 8 GB VRAM, it also caps the ONNX Runtime memory arena to 80% of free VRAM. For very constrained GPUs (4 GB or less), pass `--low-vram` to `vera index` to force batch size 1 and a 1 GB memory limit.
+
+### Custom Local Embeddings
+
+You can swap the local embedding model without changing the rest of the local pipeline.
+
+```bash
+# Optional curated preset
+vera setup --onnx-jina-cuda --code-rank-embed
+
+# Custom Hugging Face model (repo id or full URL)
+vera setup --onnx-jina-cuda \
+  --embedding-repo https://huggingface.co/Zenabius/CodeRankEmbed-onnx \
+  --embedding-pooling cls \
+  --embedding-no-onnx-data \
+  --embedding-query-prefix "Represent this query for searching relevant code:"
+
+# Local directory you already populated yourself
+vera setup --onnx-jina-cuda \
+  --embedding-dir /path/to/model-dir \
+  --embedding-onnx-file onnx/model_quantized.onnx \
+  --embedding-tokenizer-file tokenizer.json \
+  --embedding-dim 768
+```
+
+Custom local model support currently applies to embeddings. The local reranker stays on the curated Jina reranker. Full details: [docs/models.md](docs/models.md).
 
 ### Inference Speed
 

@@ -21,6 +21,8 @@ pub struct StoredConfig {
     pub reranker_api: Option<ApiEndpointConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub core_config: Option<vera_core::config::VeraConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_embedding_model: Option<vera_core::local_models::LocalEmbeddingModelConfig>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -71,6 +73,19 @@ pub fn save_backend(backend: vera_core::config::InferenceBackend) -> Result<()> 
     config.backend = Some(backend);
     config.local_mode = Some(backend.is_local());
     save_config(&config)
+}
+
+pub fn save_local_embedding_model(
+    model: &vera_core::local_models::LocalEmbeddingModelConfig,
+) -> Result<()> {
+    let mut config = load_saved_config()?;
+    config.local_embedding_model = Some(model.clone());
+    save_config(&config)
+}
+
+pub fn saved_local_embedding_model()
+-> Result<Option<vera_core::local_models::LocalEmbeddingModelConfig>> {
+    Ok(load_saved_config()?.local_embedding_model)
 }
 
 pub fn saved_backend() -> Result<Option<vera_core::config::InferenceBackend>> {
@@ -185,6 +200,8 @@ fn apply_saved_env_impl(force: bool) -> Result<()> {
         set_env_value("RERANKER_MODEL_API_KEY", api_key, force);
     }
 
+    apply_local_embedding_env(config.local_embedding_model.as_ref(), force);
+
     Ok(())
 }
 
@@ -273,6 +290,82 @@ fn set_env_value(key: &str, value: &str, force: bool) {
     }
 }
 
+fn set_optional_env_value(key: &str, value: Option<&str>, force: bool) {
+    match value {
+        Some(value) => set_env_value(key, value, force),
+        None if force => clear_process_env(key),
+        None => {}
+    }
+}
+
+fn apply_local_embedding_env(
+    model: Option<&vera_core::local_models::LocalEmbeddingModelConfig>,
+    force: bool,
+) {
+    let env_override_present = LOCAL_EMBEDDING_SOURCE_ENV_KEYS
+        .iter()
+        .any(|key| std::env::var_os(key).is_some());
+    if !force && env_override_present {
+        return;
+    }
+
+    let repo = model.and_then(|model| match &model.source {
+        vera_core::local_models::LocalEmbeddingSource::HuggingFace { repo } => Some(repo.as_str()),
+        vera_core::local_models::LocalEmbeddingSource::Directory { .. } => None,
+    });
+    let dir = model.and_then(|model| match &model.source {
+        vera_core::local_models::LocalEmbeddingSource::Directory { path } => path.to_str(),
+        vera_core::local_models::LocalEmbeddingSource::HuggingFace { .. } => None,
+    });
+
+    set_optional_env_value(
+        vera_core::local_models::LOCAL_EMBEDDING_REPO_ENV,
+        repo,
+        force,
+    );
+    set_optional_env_value(vera_core::local_models::LOCAL_EMBEDDING_DIR_ENV, dir, force);
+    set_optional_env_value(
+        vera_core::local_models::LOCAL_EMBEDDING_ONNX_FILE_ENV,
+        model.map(|value| value.onnx_file.as_str()),
+        force,
+    );
+    set_optional_env_value(
+        vera_core::local_models::LOCAL_EMBEDDING_ONNX_DATA_FILE_ENV,
+        model.and_then(|value| value.onnx_data_file.as_deref()),
+        force,
+    );
+    set_optional_env_value(
+        vera_core::local_models::LOCAL_EMBEDDING_TOKENIZER_FILE_ENV,
+        model.map(|value| value.tokenizer_file.as_str()),
+        force,
+    );
+    set_optional_env_value(
+        vera_core::local_models::LOCAL_EMBEDDING_DIM_ENV,
+        model
+            .map(|value| value.embedding_dim.to_string())
+            .as_deref(),
+        force,
+    );
+    set_optional_env_value(
+        vera_core::local_models::LOCAL_EMBEDDING_POOLING_ENV,
+        model.map(|value| value.pooling.to_string()).as_deref(),
+        force,
+    );
+    set_optional_env_value(
+        vera_core::local_models::LOCAL_EMBEDDING_MAX_LENGTH_ENV,
+        model.map(|value| value.max_length.to_string()).as_deref(),
+        force,
+    );
+    set_optional_env_value(
+        vera_core::local_models::LOCAL_EMBEDDING_QUERY_PREFIX_ENV,
+        model.and_then(|value| value.query_prefix.as_deref()),
+        force,
+    );
+    if force {
+        clear_process_env(vera_core::local_models::LEGACY_EMBEDDING_QUERY_PREFIX_ENV);
+    }
+}
+
 fn set_process_env(key: &str, value: &str) {
     // Safe because Vera only mutates process environment during single-threaded
     // CLI startup, before any background work or runtime threads are created.
@@ -280,6 +373,17 @@ fn set_process_env(key: &str, value: &str) {
         std::env::set_var(key, value);
     }
 }
+
+fn clear_process_env(key: &str) {
+    unsafe {
+        std::env::remove_var(key);
+    }
+}
+
+const LOCAL_EMBEDDING_SOURCE_ENV_KEYS: &[&str] = &[
+    vera_core::local_models::LOCAL_EMBEDDING_REPO_ENV,
+    vera_core::local_models::LOCAL_EMBEDDING_DIR_ENV,
+];
 
 #[cfg(test)]
 mod tests {
@@ -294,6 +398,7 @@ mod tests {
         assert!(config.embedding_api.is_none());
         assert!(config.reranker_api.is_none());
         assert!(config.core_config.is_none());
+        assert!(config.local_embedding_model.is_none());
     }
 
     #[test]

@@ -52,7 +52,7 @@ All stored in `.vera/` at the project root.
 
 - `types.rs`: `Language` enum (60+ variants), `SearchResult`, `CodeChunk`, `SymbolType`
 - `config.rs`: `RetrievalConfig`, `IndexConfig` defaults
-- `local_models.rs`: Downloads ONNX models and ORT runtime to `~/.vera/`
+- `local_models.rs`: Manages local embedding presets, custom ONNX embedding configs, and ORT/model assets under `~/.vera/`
 - `discovery/`: File discovery with gitignore support, binary/size filtering
 
 ## vera-cli

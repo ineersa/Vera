@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use reqwest::Client;
-use serde::Serialize;
-use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tokio::fs::{self, File};
 use tokio::io::AsyncWriteExt;
@@ -12,6 +13,23 @@ const EMBEDDING_REPO: &str = "jinaai/jina-embeddings-v5-text-nano-retrieval";
 const EMBEDDING_ONNX_FILE: &str = "onnx/model_quantized.onnx";
 const EMBEDDING_ONNX_DATA_FILE: &str = "onnx/model_quantized.onnx_data";
 const EMBEDDING_TOKENIZER_FILE: &str = "tokenizer.json";
+const EMBEDDING_DIM: usize = 768;
+const EMBEDDING_MAX_LENGTH: usize = 512;
+
+const CODERANK_EMBEDDING_REPO: &str = "Zenabius/CodeRankEmbed-onnx";
+const CODERANK_QUERY_PREFIX: &str = "Represent this query for searching relevant code:";
+
+pub const LOCAL_EMBEDDING_REPO_ENV: &str = "VERA_LOCAL_EMBEDDING_REPO";
+pub const LOCAL_EMBEDDING_DIR_ENV: &str = "VERA_LOCAL_EMBEDDING_DIR";
+pub const LOCAL_EMBEDDING_ONNX_FILE_ENV: &str = "VERA_LOCAL_EMBEDDING_ONNX_FILE";
+pub const LOCAL_EMBEDDING_ONNX_DATA_FILE_ENV: &str = "VERA_LOCAL_EMBEDDING_ONNX_DATA_FILE";
+pub const LOCAL_EMBEDDING_TOKENIZER_FILE_ENV: &str = "VERA_LOCAL_EMBEDDING_TOKENIZER_FILE";
+pub const LOCAL_EMBEDDING_DIM_ENV: &str = "VERA_LOCAL_EMBEDDING_DIM";
+pub const LOCAL_EMBEDDING_POOLING_ENV: &str = "VERA_LOCAL_EMBEDDING_POOLING";
+pub const LOCAL_EMBEDDING_MAX_LENGTH_ENV: &str = "VERA_LOCAL_EMBEDDING_MAX_LENGTH";
+pub const LOCAL_EMBEDDING_QUERY_PREFIX_ENV: &str = "VERA_LOCAL_EMBEDDING_QUERY_PREFIX";
+pub const LEGACY_EMBEDDING_QUERY_PREFIX_ENV: &str = "VERA_EMBEDDING_QUERY_PREFIX";
+
 const RERANKER_REPO: &str = "jinaai/jina-reranker-v2-base-multilingual";
 const RERANKER_ONNX_FILE: &str = "onnx/model_quantized.onnx";
 const RERANKER_TOKENIZER_FILE: &str = "tokenizer.json";
@@ -21,6 +39,219 @@ const RERANKER_TOKENIZER_FILE: &str = "tokenizer.json";
 const ORT_VERSION: &str = "1.24.4";
 
 static ORT_INIT_RESULT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LocalEmbeddingPooling {
+    Mean,
+    Cls,
+}
+
+impl fmt::Display for LocalEmbeddingPooling {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Mean => write!(f, "mean"),
+            Self::Cls => write!(f, "cls"),
+        }
+    }
+}
+
+impl std::str::FromStr for LocalEmbeddingPooling {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "mean" => Ok(Self::Mean),
+            "cls" => Ok(Self::Cls),
+            other => Err(format!(
+                "invalid pooling mode: {other} (expected `mean` or `cls`)"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "kebab-case")]
+pub enum LocalEmbeddingSource {
+    HuggingFace { repo: String },
+    Directory { path: PathBuf },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalEmbeddingModelConfig {
+    pub source: LocalEmbeddingSource,
+    pub onnx_file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub onnx_data_file: Option<String>,
+    pub tokenizer_file: String,
+    pub embedding_dim: usize,
+    pub pooling: LocalEmbeddingPooling,
+    #[serde(default = "default_embedding_max_length")]
+    pub max_length: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_prefix: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalEmbeddingAssetPaths {
+    pub onnx_path: PathBuf,
+    pub onnx_data_path: Option<PathBuf>,
+    pub tokenizer_path: PathBuf,
+}
+
+impl Default for LocalEmbeddingModelConfig {
+    fn default() -> Self {
+        Self::jina()
+    }
+}
+
+impl LocalEmbeddingModelConfig {
+    pub fn jina() -> Self {
+        Self {
+            source: LocalEmbeddingSource::HuggingFace {
+                repo: EMBEDDING_REPO.to_string(),
+            },
+            onnx_file: EMBEDDING_ONNX_FILE.to_string(),
+            onnx_data_file: Some(EMBEDDING_ONNX_DATA_FILE.to_string()),
+            tokenizer_file: EMBEDDING_TOKENIZER_FILE.to_string(),
+            embedding_dim: EMBEDDING_DIM,
+            pooling: LocalEmbeddingPooling::Mean,
+            max_length: EMBEDDING_MAX_LENGTH,
+            query_prefix: None,
+        }
+    }
+
+    pub fn coderankembed() -> Self {
+        Self {
+            source: LocalEmbeddingSource::HuggingFace {
+                repo: CODERANK_EMBEDDING_REPO.to_string(),
+            },
+            onnx_file: EMBEDDING_ONNX_FILE.to_string(),
+            onnx_data_file: None,
+            tokenizer_file: EMBEDDING_TOKENIZER_FILE.to_string(),
+            embedding_dim: EMBEDDING_DIM,
+            pooling: LocalEmbeddingPooling::Cls,
+            max_length: EMBEDDING_MAX_LENGTH,
+            query_prefix: Some(CODERANK_QUERY_PREFIX.to_string()),
+        }
+    }
+
+    pub fn from_huggingface_repo(repo: impl Into<String>) -> Self {
+        let source = LocalEmbeddingSource::HuggingFace { repo: repo.into() };
+        let mut defaults = Self::defaults_for_source(&source);
+        defaults.source = source;
+        defaults
+    }
+
+    pub fn from_directory(path: PathBuf) -> Self {
+        Self {
+            source: LocalEmbeddingSource::Directory { path },
+            ..Self::default()
+        }
+    }
+
+    pub fn from_env() -> Result<Self> {
+        let repo = env_override(LOCAL_EMBEDDING_REPO_ENV);
+        let dir = env_override(LOCAL_EMBEDDING_DIR_ENV);
+
+        let source = match (repo, dir) {
+            (Some(repo), None) => {
+                return Self::apply_env_overrides(Self::from_huggingface_repo(
+                    normalize_huggingface_repo(&repo)?,
+                ));
+            }
+            (None, Some(path)) => {
+                return Self::apply_env_overrides(Self::from_directory(PathBuf::from(path)));
+            }
+            (None, None) => Self::default().source,
+            (Some(_), Some(_)) => anyhow::bail!(
+                "{LOCAL_EMBEDDING_REPO_ENV} and {LOCAL_EMBEDDING_DIR_ENV} cannot both be set"
+            ),
+        };
+        Self::apply_env_overrides(Self::defaults_for_source(&source))
+    }
+
+    pub fn display_name(&self) -> String {
+        match &self.source {
+            LocalEmbeddingSource::HuggingFace { repo } => repo.clone(),
+            LocalEmbeddingSource::Directory { path } => path.display().to_string(),
+        }
+    }
+
+    pub fn model_identity(&self) -> String {
+        if self == &Self::jina() || self == &Self::coderankembed() {
+            return self.display_name();
+        }
+
+        let source = match &self.source {
+            LocalEmbeddingSource::HuggingFace { repo } => format!("hf:{repo}"),
+            LocalEmbeddingSource::Directory { path } => format!("dir:{}", path.display()),
+        };
+        let onnx_data = self.onnx_data_file.as_deref().unwrap_or("-");
+        format!(
+            "{source}|onnx={}|onnx_data={onnx_data}|tokenizer={}|pooling={}|dim={}|max_length={}",
+            self.onnx_file, self.tokenizer_file, self.pooling, self.embedding_dim, self.max_length
+        )
+    }
+
+    pub fn query_text(&self, query: &str) -> String {
+        let Some(prefix) = self
+            .query_prefix
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return query.to_string();
+        };
+
+        if prefix.chars().last().is_some_and(char::is_whitespace) {
+            format!("{prefix}{query}")
+        } else {
+            format!("{prefix} {query}")
+        }
+    }
+
+    pub fn cached_asset_paths(&self) -> Result<LocalEmbeddingAssetPaths> {
+        let base_dir = match &self.source {
+            LocalEmbeddingSource::HuggingFace { repo } => {
+                vera_home_dir()?.join("models").join(repo)
+            }
+            LocalEmbeddingSource::Directory { path } => path.clone(),
+        };
+        Ok(LocalEmbeddingAssetPaths {
+            onnx_path: base_dir.join(&self.onnx_file),
+            onnx_data_path: self.onnx_data_file.as_ref().map(|path| base_dir.join(path)),
+            tokenizer_path: base_dir.join(&self.tokenizer_file),
+        })
+    }
+
+    fn defaults_for_source(source: &LocalEmbeddingSource) -> Self {
+        match source {
+            LocalEmbeddingSource::HuggingFace { repo } if repo == CODERANK_EMBEDDING_REPO => {
+                Self::coderankembed()
+            }
+            _ => Self::default(),
+        }
+    }
+
+    fn apply_env_overrides(defaults: Self) -> Result<Self> {
+        Ok(Self {
+            source: defaults.source,
+            onnx_file: env_override(LOCAL_EMBEDDING_ONNX_FILE_ENV)
+                .unwrap_or_else(|| defaults.onnx_file.clone()),
+            onnx_data_file: env_optional_override(
+                LOCAL_EMBEDDING_ONNX_DATA_FILE_ENV,
+                defaults.onnx_data_file.clone(),
+            ),
+            tokenizer_file: env_override(LOCAL_EMBEDDING_TOKENIZER_FILE_ENV)
+                .unwrap_or_else(|| defaults.tokenizer_file.clone()),
+            embedding_dim: parse_env_usize(LOCAL_EMBEDDING_DIM_ENV, defaults.embedding_dim)?,
+            pooling: parse_pooling_env(LOCAL_EMBEDDING_POOLING_ENV, defaults.pooling)?,
+            max_length: parse_env_usize(LOCAL_EMBEDDING_MAX_LENGTH_ENV, defaults.max_length)?,
+            query_prefix: parse_query_prefix_from_env().or_else(|| defaults.query_prefix.clone()),
+        })
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LocalModelAssetStatus {
@@ -34,6 +265,75 @@ pub struct SharedLibraryDependencyStatus {
     pub inspected_files: Vec<PathBuf>,
     pub missing_details: Vec<String>,
     pub missing_libraries: Vec<String>,
+}
+
+fn default_embedding_max_length() -> usize {
+    EMBEDDING_MAX_LENGTH
+}
+
+fn env_override(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn env_optional_override(key: &str, default: Option<String>) -> Option<String> {
+    match std::env::var(key) {
+        Ok(value) if value.trim().is_empty() => None,
+        Ok(value) => Some(value.trim().to_string()),
+        Err(_) => default,
+    }
+}
+
+fn parse_env_usize(key: &str, default: usize) -> Result<usize> {
+    match env_override(key) {
+        Some(value) => value
+            .parse::<usize>()
+            .with_context(|| format!("invalid {key}: {value}")),
+        None => Ok(default),
+    }
+}
+
+fn parse_pooling_env(key: &str, default: LocalEmbeddingPooling) -> Result<LocalEmbeddingPooling> {
+    match env_override(key) {
+        Some(value) => value
+            .parse::<LocalEmbeddingPooling>()
+            .map_err(anyhow::Error::msg),
+        None => Ok(default),
+    }
+}
+
+fn parse_query_prefix_from_env() -> Option<String> {
+    env_override(LOCAL_EMBEDDING_QUERY_PREFIX_ENV)
+        .or_else(|| env_override(LEGACY_EMBEDDING_QUERY_PREFIX_ENV))
+}
+
+pub fn normalize_huggingface_repo(value: &str) -> Result<String> {
+    let trimmed = value.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        anyhow::bail!("embedding repo cannot be empty");
+    }
+
+    if let Some(rest) = trimmed
+        .strip_prefix("https://huggingface.co/")
+        .or_else(|| trimmed.strip_prefix("http://huggingface.co/"))
+    {
+        let mut parts = rest.split('/').filter(|part| !part.is_empty());
+        let owner = parts
+            .next()
+            .context("invalid Hugging Face URL: missing owner")?;
+        let repo = parts
+            .next()
+            .context("invalid Hugging Face URL: missing repo")?;
+        return Ok(format!("{owner}/{repo}"));
+    }
+
+    if trimmed.starts_with("https://") || trimmed.starts_with("http://") {
+        anyhow::bail!("unsupported embedding repo URL: {trimmed}");
+    }
+
+    Ok(trimmed.to_string())
 }
 
 /// Ensure the ONNX Runtime shared library is loaded and initialized.
@@ -55,7 +355,7 @@ pub fn ensure_ort_runtime(lib_path: Option<&std::path::Path>) -> Result<()> {
             }
             Err(e) => Err(format!(
                 "ONNX Runtime shared library not found.\n\
-                 Run `vera setup --local` to auto-download it, or use API mode instead.\n\
+                 Run `vera setup` to auto-download it, or use API mode instead.\n\
                  Original error: {e}"
             )),
         }
@@ -234,11 +534,19 @@ fn ort_platform_info(
         ) {
             anyhow::bail!("ROCm and OpenVINO are only supported on Linux x86_64");
         }
-        let base = format!("onnxruntime-win-x64{gpu_suffix}-{ORT_VERSION}");
+        let archive_gpu_suffix = if matches!(ep, OnnxExecutionProvider::Cuda)
+            && detect_cuda_major_version().unwrap_or(12) >= 13
+        {
+            "-gpu_cuda13"
+        } else {
+            gpu_suffix
+        };
+        let archive_base = format!("onnxruntime-win-x64{archive_gpu_suffix}-{ORT_VERSION}");
+        let internal_base = format!("onnxruntime-win-x64{gpu_suffix}-{ORT_VERSION}");
         Ok((
             "zip",
-            base.clone(),
-            format!("{base}/lib/onnxruntime.dll"),
+            archive_base,
+            format!("{internal_base}/lib/onnxruntime.dll"),
             "onnxruntime.dll",
         ))
     }
@@ -677,7 +985,22 @@ pub fn ensure_provider_dependencies(
         return Ok(());
     };
 
-    if status.missing_libraries.is_empty() {
+    let mut missing_details = status.missing_details;
+    if matches!(ep, OnnxExecutionProvider::Cuda) {
+        // CUDA builds ship optional TensorRT provider libraries alongside the
+        // CUDA provider. Missing TensorRT does not block plain CUDA execution.
+        missing_details.retain(|detail| !detail.starts_with("libonnxruntime_providers_tensorrt"));
+    }
+
+    let mut missing_libraries: Vec<String> = missing_details
+        .iter()
+        .filter_map(|detail| detail.split(": ").nth(1))
+        .map(str::to_string)
+        .collect();
+    missing_libraries.sort();
+    missing_libraries.dedup();
+
+    if missing_libraries.is_empty() {
         return Ok(());
     }
 
@@ -692,7 +1015,7 @@ pub fn ensure_provider_dependencies(
 
     let mut message =
         format!("{backend_name} backend selected, but required libraries are missing:\n");
-    for library in &status.missing_libraries {
+    for library in &missing_libraries {
         message.push_str(&format!("  {library}\n"));
     }
     if let Some(hint) = dependency_hint(ep) {
@@ -1180,7 +1503,7 @@ pub fn wrap_ort_error(e: impl std::fmt::Display) -> String {
     {
         format!(
             "ONNX Runtime shared library not found.\n\
-             Run `vera setup --local` to auto-download it, or use API mode instead.\n\
+             Run `vera setup` to auto-download it, or use API mode instead.\n\
              Original error: {err_msg}"
         )
     } else {
@@ -1193,23 +1516,78 @@ pub async fn ensure_model_file(repo_id: &str, file_path: &str) -> Result<PathBuf
     ensure_model_file_impl(repo_id, file_path, HUB_URL, None).await
 }
 
+pub fn configured_local_model_name() -> String {
+    LocalEmbeddingModelConfig::from_env()
+        .map(|config| config.model_identity())
+        .unwrap_or_else(|_| EMBEDDING_REPO.to_string())
+}
+
+pub async fn ensure_local_embedding_assets(
+    config: &LocalEmbeddingModelConfig,
+) -> Result<LocalEmbeddingAssetPaths> {
+    match &config.source {
+        LocalEmbeddingSource::HuggingFace { repo } => Ok(LocalEmbeddingAssetPaths {
+            onnx_path: ensure_model_file(repo, &config.onnx_file).await?,
+            onnx_data_path: match config.onnx_data_file.as_deref() {
+                Some(path) => Some(ensure_model_file(repo, path).await?),
+                None => None,
+            },
+            tokenizer_path: ensure_model_file(repo, &config.tokenizer_file).await?,
+        }),
+        LocalEmbeddingSource::Directory { .. } => verify_local_embedding_assets(config),
+    }
+}
+
+fn verify_local_embedding_assets(
+    config: &LocalEmbeddingModelConfig,
+) -> Result<LocalEmbeddingAssetPaths> {
+    let paths = config.cached_asset_paths()?;
+    require_existing_file(&paths.onnx_path, "embedding ONNX model")?;
+    if let Some(path) = paths.onnx_data_path.as_ref() {
+        require_existing_file(path, "embedding ONNX external data")?;
+    }
+    require_existing_file(&paths.tokenizer_path, "embedding tokenizer")?;
+    Ok(paths)
+}
+
+fn require_existing_file(path: &Path, label: &str) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "{label} not found at {}.\nHint: place the file there, or point `vera setup` at a Hugging Face repo instead.",
+        path.display()
+    );
+}
+
 /// CPU-only convenience wrapper (backwards compat).
 pub async fn ensure_ort_library() -> Result<PathBuf> {
     ensure_ort_library_for_ep(OnnxExecutionProvider::Cpu).await
+}
+
+/// Download or validate the local embedding model, the curated local reranker, and the ORT library.
+pub async fn prepare_local_models_for_ep(
+    ep: OnnxExecutionProvider,
+    embedding_model: &LocalEmbeddingModelConfig,
+) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    paths.push(ensure_ort_library_for_ep(ep).await?);
+    let embedding_paths = ensure_local_embedding_assets(embedding_model).await?;
+    paths.push(embedding_paths.onnx_path);
+    if let Some(path) = embedding_paths.onnx_data_path {
+        paths.push(path);
+    }
+    paths.push(embedding_paths.tokenizer_path);
+    paths.push(ensure_model_file(RERANKER_REPO, RERANKER_ONNX_FILE).await?);
+    paths.push(ensure_model_file(RERANKER_REPO, RERANKER_TOKENIZER_FILE).await?);
+    Ok(paths)
 }
 
 /// Download the default local embedding and reranker assets, plus the ORT library.
 pub async fn prefetch_default_local_models_for_ep(
     ep: OnnxExecutionProvider,
 ) -> Result<Vec<PathBuf>> {
-    let mut paths = Vec::new();
-    paths.push(ensure_ort_library_for_ep(ep).await?);
-    paths.push(ensure_model_file(EMBEDDING_REPO, EMBEDDING_ONNX_FILE).await?);
-    paths.push(ensure_model_file(EMBEDDING_REPO, EMBEDDING_ONNX_DATA_FILE).await?);
-    paths.push(ensure_model_file(EMBEDDING_REPO, EMBEDDING_TOKENIZER_FILE).await?);
-    paths.push(ensure_model_file(RERANKER_REPO, RERANKER_ONNX_FILE).await?);
-    paths.push(ensure_model_file(RERANKER_REPO, RERANKER_TOKENIZER_FILE).await?);
-    Ok(paths)
+    prepare_local_models_for_ep(ep, &LocalEmbeddingModelConfig::default()).await
 }
 
 /// CPU-only convenience wrapper (backwards compat).
@@ -1226,55 +1604,64 @@ pub fn inspect_default_local_model_files() -> Result<Vec<LocalModelAssetStatus>>
 pub fn inspect_default_local_model_files_for_ep(
     ep: OnnxExecutionProvider,
 ) -> Result<Vec<LocalModelAssetStatus>> {
-    let vera_home = vera_home_dir()?;
+    inspect_local_model_files_for_ep(ep, &LocalEmbeddingModelConfig::default())
+}
 
-    let assets = [
-        ("onnx-runtime", ort_library_path_for_ep(ep)?),
-        (
-            "embedding-onnx",
-            vera_home
-                .join("models")
-                .join(EMBEDDING_REPO)
-                .join(EMBEDDING_ONNX_FILE),
-        ),
-        (
-            "embedding-onnx-data",
-            vera_home
-                .join("models")
-                .join(EMBEDDING_REPO)
-                .join(EMBEDDING_ONNX_DATA_FILE),
-        ),
-        (
-            "embedding-tokenizer",
-            vera_home
-                .join("models")
-                .join(EMBEDDING_REPO)
-                .join(EMBEDDING_TOKENIZER_FILE),
-        ),
-        (
-            "reranker-onnx",
-            vera_home
-                .join("models")
-                .join(RERANKER_REPO)
-                .join(RERANKER_ONNX_FILE),
-        ),
-        (
-            "reranker-tokenizer",
-            vera_home
-                .join("models")
-                .join(RERANKER_REPO)
-                .join(RERANKER_TOKENIZER_FILE),
-        ),
+pub fn inspect_local_model_files_for_ep(
+    ep: OnnxExecutionProvider,
+    embedding_model: &LocalEmbeddingModelConfig,
+) -> Result<Vec<LocalModelAssetStatus>> {
+    let embedding_paths = embedding_model.cached_asset_paths()?;
+    let ort_path = ort_library_path_for_ep(ep)?;
+    let vera_home = vera_home_dir()?;
+    let reranker_onnx = vera_home
+        .join("models")
+        .join(RERANKER_REPO)
+        .join(RERANKER_ONNX_FILE);
+    let reranker_tokenizer = vera_home
+        .join("models")
+        .join(RERANKER_REPO)
+        .join(RERANKER_TOKENIZER_FILE);
+    let mut assets = vec![
+        LocalModelAssetStatus {
+            name: "onnx-runtime",
+            exists: ort_path.exists(),
+            path: ort_path,
+        },
+        LocalModelAssetStatus {
+            name: "embedding-onnx",
+            exists: embedding_paths.onnx_path.exists(),
+            path: embedding_paths.onnx_path,
+        },
+        LocalModelAssetStatus {
+            name: "embedding-tokenizer",
+            exists: embedding_paths.tokenizer_path.exists(),
+            path: embedding_paths.tokenizer_path,
+        },
+        LocalModelAssetStatus {
+            name: "reranker-onnx",
+            exists: reranker_onnx.exists(),
+            path: reranker_onnx,
+        },
+        LocalModelAssetStatus {
+            name: "reranker-tokenizer",
+            exists: reranker_tokenizer.exists(),
+            path: reranker_tokenizer,
+        },
     ];
 
-    Ok(assets
-        .into_iter()
-        .map(|(name, path)| LocalModelAssetStatus {
-            name,
-            exists: path.exists(),
-            path,
-        })
-        .collect())
+    if let Some(path) = embedding_paths.onnx_data_path {
+        assets.insert(
+            2,
+            LocalModelAssetStatus {
+                name: "embedding-onnx-data",
+                exists: path.exists(),
+                path,
+            },
+        );
+    }
+
+    Ok(assets)
 }
 
 async fn ensure_model_file_impl(
@@ -1360,6 +1747,36 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::net::TcpListener;
+
+    #[test]
+    fn normalize_huggingface_repo_accepts_repo_ids_and_urls() {
+        assert_eq!(
+            normalize_huggingface_repo("Zenabius/CodeRankEmbed-onnx").unwrap(),
+            "Zenabius/CodeRankEmbed-onnx"
+        );
+        assert_eq!(
+            normalize_huggingface_repo("https://huggingface.co/Zenabius/CodeRankEmbed-onnx")
+                .unwrap(),
+            "Zenabius/CodeRankEmbed-onnx"
+        );
+    }
+
+    #[test]
+    fn coderankembed_preset_sets_required_query_prefix() {
+        let config = LocalEmbeddingModelConfig::coderankembed();
+        assert_eq!(
+            config.query_text("find router code"),
+            "Represent this query for searching relevant code: find router code"
+        );
+    }
+
+    #[test]
+    fn coderankembed_repo_uses_coderank_defaults() {
+        let config =
+            LocalEmbeddingModelConfig::from_huggingface_repo("Zenabius/CodeRankEmbed-onnx");
+        assert_eq!(config.pooling, LocalEmbeddingPooling::Cls);
+        assert!(config.onnx_data_file.is_none());
+    }
 
     #[tokio::test]
     async fn test_download_failure_cleanup() {

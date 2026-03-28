@@ -1,22 +1,17 @@
 use crate::config::OnnxExecutionProvider;
 use crate::embedding::provider::{EmbeddingError, EmbeddingProvider};
-use crate::local_models::ensure_model_file;
+use crate::local_models::{LocalEmbeddingModelConfig, LocalEmbeddingPooling};
 use anyhow::{Context, Result};
 use ort::session::{Session, builder::GraphOptimizationLevel};
 use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
 use tokio::task;
 
-const EMBEDDING_REPO: &str = "jinaai/jina-embeddings-v5-text-nano-retrieval";
-const ONNX_FILE: &str = "onnx/model_quantized.onnx";
-const ONNX_DATA_FILE: &str = "onnx/model_quantized.onnx_data";
-const TOKENIZER_FILE: &str = "tokenizer.json";
-const EMBEDDING_DIM: usize = 768;
-
 #[derive(Clone)]
 pub struct LocalEmbeddingProvider {
     session: Arc<Mutex<Session>>,
     tokenizer: Arc<Tokenizer>,
+    config: Arc<LocalEmbeddingModelConfig>,
 }
 
 impl LocalEmbeddingProvider {
@@ -28,6 +23,11 @@ impl LocalEmbeddingProvider {
         ep: OnnxExecutionProvider,
         gpu_mem_limit_mb: u64,
     ) -> Result<Self, EmbeddingError> {
+        let config =
+            LocalEmbeddingModelConfig::from_env().map_err(|e| EmbeddingError::ApiError {
+                status: 500,
+                message: e.to_string(),
+            })?;
         let ort_path = crate::local_models::ensure_ort_library_for_ep(ep)
             .await
             .map_err(|e| EmbeddingError::ApiError {
@@ -46,38 +46,27 @@ impl LocalEmbeddingProvider {
                 message: e.to_string(),
             }
         })?;
-
-        let onnx_path = ensure_model_file(EMBEDDING_REPO, ONNX_FILE)
-            .await
-            .map_err(|e| EmbeddingError::ApiError {
-                status: 500,
-                message: format!("Failed to download ONNX model: {}", e),
-            })?;
-
-        let _ = ensure_model_file(EMBEDDING_REPO, ONNX_DATA_FILE)
-            .await
-            .map_err(|e| EmbeddingError::ApiError {
-                status: 500,
-                message: format!("Failed to download ONNX data: {}", e),
-            })?;
-
-        let tokenizer_path = ensure_model_file(EMBEDDING_REPO, TOKENIZER_FILE)
-            .await
-            .map_err(|e| EmbeddingError::ApiError {
-                status: 500,
-                message: format!("Failed to download tokenizer: {}", e),
-            })?;
-
-        let tokenizer = task::spawn_blocking(move || load_tokenizer(tokenizer_path))
+        let asset_paths = crate::local_models::ensure_local_embedding_assets(&config)
             .await
             .map_err(|e| EmbeddingError::ApiError {
                 status: 500,
                 message: e.to_string(),
-            })?
-            .map_err(|e| EmbeddingError::ApiError {
-                status: 500,
-                message: e.to_string(),
             })?;
+        let onnx_path = asset_paths.onnx_path;
+        let tokenizer_path = asset_paths.tokenizer_path;
+
+        let tokenizer_max_length = config.max_length;
+        let tokenizer =
+            task::spawn_blocking(move || load_tokenizer(tokenizer_path, tokenizer_max_length))
+                .await
+                .map_err(|e| EmbeddingError::ApiError {
+                    status: 500,
+                    message: e.to_string(),
+                })?
+                .map_err(|e| EmbeddingError::ApiError {
+                    status: 500,
+                    message: e.to_string(),
+                })?;
 
         let session = task::spawn_blocking(move || build_session(ep, onnx_path, gpu_mem_limit_mb))
             .await
@@ -93,6 +82,7 @@ impl LocalEmbeddingProvider {
         Ok(Self {
             session: Arc::new(Mutex::new(session)),
             tokenizer: Arc::new(tokenizer),
+            config: Arc::new(config),
         })
     }
 
@@ -105,19 +95,21 @@ impl LocalEmbeddingProvider {
     }
 
     pub fn probe_session(ep: OnnxExecutionProvider) -> Result<()> {
+        let config = LocalEmbeddingModelConfig::from_env()?;
         let ort_path = crate::local_models::ort_library_path_for_ep(ep)?;
         crate::local_models::ensure_ort_runtime(Some(&ort_path))?;
-        let (onnx_path, _, _) = default_asset_paths()?;
-        let _ = build_session(ep, onnx_path, 0)?;
+        let asset_paths = config.cached_asset_paths()?;
+        let _ = build_session(ep, asset_paths.onnx_path, 0)?;
         Ok(())
     }
 
     pub fn probe_inference(ep: OnnxExecutionProvider) -> Result<()> {
+        let config = LocalEmbeddingModelConfig::from_env()?;
         let ort_path = crate::local_models::ort_library_path_for_ep(ep)?;
         crate::local_models::ensure_ort_runtime(Some(&ort_path))?;
-        let (onnx_path, _, tokenizer_path) = default_asset_paths()?;
-        let mut session = build_session(ep, onnx_path, 0)?;
-        let tokenizer = load_tokenizer(tokenizer_path)?;
+        let asset_paths = config.cached_asset_paths()?;
+        let mut session = build_session(ep, asset_paths.onnx_path, 0)?;
+        let tokenizer = load_tokenizer(asset_paths.tokenizer_path, config.max_length)?;
         run_probe_inference(&mut session, &tokenizer)
     }
 
@@ -179,40 +171,38 @@ impl LocalEmbeddingProvider {
             for i in 0..batch_size {
                 let start = i * dim;
                 let mut emb = data[start..start + dim].to_vec();
-                let norm: f32 = emb.iter().map(|v| v * v).sum::<f32>().sqrt();
-                if norm > 1e-6 {
-                    for d in 0..EMBEDDING_DIM {
-                        emb[d] /= norm;
-                    }
-                }
+                normalize_embedding(&mut emb);
                 result.push(emb);
             }
         } else if ndim == 3 {
             let seq_len = shape[1] as usize;
             let dim = shape[2] as usize;
             for i in 0..batch_size {
-                let mut emb = vec![0.0; dim];
-                let mut valid_tokens = 0.0;
-                for j in 0..max_len {
-                    if attention_mask[[i, j]] == 1 {
-                        valid_tokens += 1.0;
-                        for d in 0..dim {
-                            emb[d] += data[i * seq_len * dim + j * dim + d];
+                let emb = match self.config.pooling {
+                    LocalEmbeddingPooling::Cls => {
+                        data[i * seq_len * dim..(i * seq_len + 1) * dim].to_vec()
+                    }
+                    LocalEmbeddingPooling::Mean => {
+                        let mut emb = vec![0.0; dim];
+                        let mut valid_tokens = 0.0;
+                        for j in 0..max_len {
+                            if attention_mask[[i, j]] == 1 {
+                                valid_tokens += 1.0;
+                                for d in 0..dim {
+                                    emb[d] += data[i * seq_len * dim + j * dim + d];
+                                }
+                            }
                         }
+                        if valid_tokens > 0.0 {
+                            for value in &mut emb {
+                                *value /= valid_tokens;
+                            }
+                        }
+                        emb
                     }
-                }
-                if valid_tokens > 0.0 {
-                    for d in 0..dim {
-                        emb[d] /= valid_tokens;
-                    }
-                }
-
-                let norm: f32 = emb.iter().map(|v| v * v).sum::<f32>().sqrt();
-                if norm > 1e-6 {
-                    for d in 0..EMBEDDING_DIM {
-                        emb[d] /= norm;
-                    }
-                }
+                };
+                let mut emb = emb;
+                normalize_embedding(&mut emb);
                 result.push(emb);
             }
         } else {
@@ -223,28 +213,30 @@ impl LocalEmbeddingProvider {
     }
 }
 
-fn default_asset_paths() -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)> {
-    let model_dir = crate::local_models::vera_home_dir()?
-        .join("models")
-        .join(EMBEDDING_REPO);
-    Ok((
-        model_dir.join(ONNX_FILE),
-        model_dir.join(ONNX_DATA_FILE),
-        model_dir.join(TOKENIZER_FILE),
-    ))
-}
-
-fn load_tokenizer(tokenizer_path: std::path::PathBuf) -> Result<Tokenizer> {
+fn load_tokenizer(tokenizer_path: std::path::PathBuf, max_length: usize) -> Result<Tokenizer> {
     let mut tokenizer = Tokenizer::from_file(&tokenizer_path)
         .map_err(|e| anyhow::anyhow!("Tokenizer init failed: {}", e))?;
     tokenizer
         .with_truncation(Some(tokenizers::TruncationParams {
-            max_length: 512,
+            max_length,
             strategy: tokenizers::TruncationStrategy::LongestFirst,
             ..Default::default()
         }))
         .map_err(|e| anyhow::anyhow!("Tokenizer truncation init failed: {}", e))?;
     Ok(tokenizer)
+}
+
+fn normalize_embedding(embedding: &mut [f32]) {
+    let norm: f32 = embedding
+        .iter()
+        .map(|value| value * value)
+        .sum::<f32>()
+        .sqrt();
+    if norm > 1e-6 {
+        for value in embedding {
+            *value /= norm;
+        }
+    }
 }
 
 fn build_session(
@@ -312,7 +304,11 @@ fn run_probe_inference(session: &mut Session, tokenizer: &Tokenizer) -> Result<(
 
 impl EmbeddingProvider for LocalEmbeddingProvider {
     fn expected_dim(&self) -> Option<usize> {
-        Some(EMBEDDING_DIM)
+        Some(self.config.embedding_dim)
+    }
+
+    fn prepare_query_text(&self, query: &str) -> String {
+        self.config.query_text(query)
     }
 
     async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
@@ -419,7 +415,7 @@ mod tests {
         let texts = vec!["Hello world".to_string(), "Another test".to_string()];
         let embeddings = provider.embed_batch(&texts).await.unwrap();
         assert_eq!(embeddings.len(), 2);
-        assert_eq!(embeddings[0].len(), EMBEDDING_DIM);
+        assert_eq!(embeddings[0].len(), provider.expected_dim().unwrap());
 
         assert!(embeddings[0].iter().all(|x| x.is_finite()));
         let sum_abs: f32 = embeddings[0].iter().map(|x| x.abs()).sum();

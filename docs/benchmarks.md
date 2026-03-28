@@ -47,6 +47,22 @@ Committed artifacts:
 | Search latency p50 | `3716 ms` |
 | Search latency p95 | `4185 ms` |
 
+### Optional CodeRankEmbed Preset
+
+Vera now ships CodeRankEmbed as an optional local embedding preset. This is the short no-rerank sanity check used to decide whether it was worth exposing as a first-class option:
+
+- 6 tasks
+- 2 repos: `flask`, `ripgrep`
+- local CUDA ONNX backend
+- reranking disabled on purpose to expose embedding differences directly
+
+| Model | Recall@1 | Recall@5 | Recall@10 | MRR | nDCG | Search p50 | Flask index | Ripgrep index |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Jina preset | 0.5556 | 0.5556 | 0.5556 | 0.8462 | 0.6442 | 761.9 ms | 5.8 s | 11.9 s |
+| CodeRankEmbed preset | 0.7222 | 0.7222 | 0.7222 | 1.0000 | 0.8108 | 611.4 ms | 14.7 s | 29.1 s |
+
+Takeaway: CodeRankEmbed was clearly stronger on this small no-rerank slice, but it indexed much slower. The default local benchmark and docs still center Jina because Vera's full reranked pipeline is already very strong and the shorter indexing time matters in practice.
+
 ## Vera vs ColGREP
 
 These ColGREP numbers are the earlier reference results recorded on the same 21-task, 4-repo suite. They remain useful as a retrieval quality reference because they show how the current Vera pipeline compares with a late-interaction code search system on the same workload.

@@ -163,7 +163,7 @@ async fn generate_query_embedding(
     query: &str,
     stored_dim: usize,
 ) -> Result<Vec<f32>, EmbeddingError> {
-    let texts = vec![query.to_string()];
+    let texts = vec![provider.prepare_query_text(query)];
     let mut vectors = provider.embed_batch(&texts).await?;
 
     if vectors.is_empty() {
@@ -192,7 +192,6 @@ async fn generate_query_embedding(
 
     Ok(vector)
 }
-
 /// Convert a distance score to a similarity score.
 ///
 /// sqlite-vec returns L2 (Euclidean) distances where lower is better.

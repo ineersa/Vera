@@ -25,6 +25,9 @@ vera search "authentication middleware"
 vera index . --onnx-jina-cpu
 vera search "error handling" --onnx-jina-cpu
 
+# Optional local CodeRankEmbed preset
+vera setup --code-rank-embed --onnx-jina-cuda
+
 # GPU acceleration (NVIDIA/AMD/DirectML/CoreML/OpenVINO)
 vera index . --onnx-jina-cuda
 
@@ -44,4 +47,4 @@ vera upgrade
 - **Cross-encoder reranking** for precision
 - **Markdown codeblock output** by default with file paths, line ranges, and optional symbol info (use `--json` for compact JSON, `--raw` for verbose output, `--timing` for step durations)
 
-For full documentation, see the [GitHub repo](https://github.com/lemon07r/Vera).
+For full documentation, including custom local ONNX embedding models and manual install steps, see the [GitHub repo](https://github.com/lemon07r/Vera).
