@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use tracing::{debug, info, warn};
@@ -60,20 +61,21 @@ fn compute_bm25_candidates(query: &str, limit: usize) -> usize {
     limit.saturating_mul(3).max(limit + 20)
 }
 
+/// Per-stage timing data from hybrid search.
+#[derive(Debug, Default)]
+pub struct HybridTimings {
+    pub embedding: Option<Duration>,
+    pub bm25: Option<Duration>,
+    pub vector: Option<Duration>,
+    pub fusion: Option<Duration>,
+    pub reranking: Option<Duration>,
+}
+
 /// Perform hybrid search combining BM25 and vector retrieval via RRF fusion.
 ///
 /// Runs BM25 and vector search, merges results using Reciprocal Rank Fusion,
 /// and returns the top results. If vector search fails (e.g., embedding API
 /// unavailable), falls back to BM25-only results with a warning.
-///
-/// # Arguments
-/// - `index_dir` — Path to the `.vera` index directory
-/// - `provider` — Embedding provider for vector search query embedding
-/// - `query` — The search query text
-/// - `limit` — Maximum number of results to return
-/// - `rrf_k` — RRF constant (typically 60.0)
-/// - `stored_dim` — Dimensionality of stored vectors
-/// - `vector_candidates` — Number of vector candidates to fetch (query-type-aware)
 pub async fn search_hybrid(
     index_dir: &Path,
     provider: &impl EmbeddingProvider,
@@ -82,17 +84,21 @@ pub async fn search_hybrid(
     rrf_k: f64,
     stored_dim: usize,
     vector_candidates: usize,
-) -> Result<Vec<SearchResult>, HybridSearchError> {
+) -> Result<(Vec<SearchResult>, HybridTimings), HybridSearchError> {
     let bm25_candidates = compute_bm25_candidates(query, limit);
+    let mut timings = HybridTimings::default();
 
-    // Run BM25 search.
+    let bm25_start = Instant::now();
     let bm25_results = search_bm25(index_dir, query, bm25_candidates);
+    timings.bm25 = Some(bm25_start.elapsed());
 
-    // Run vector search with query-type-aware candidate count.
+    let embed_start = Instant::now();
     let vector_results =
         search_vector(index_dir, provider, query, vector_candidates, stored_dim).await;
+    let vector_elapsed = embed_start.elapsed();
+    timings.embedding = Some(vector_elapsed);
+    timings.vector = Some(vector_elapsed);
 
-    // Handle failure modes with graceful degradation.
     match (bm25_results, vector_results) {
         (Ok(bm25), Ok(vector)) => {
             debug!(
@@ -100,7 +106,10 @@ pub async fn search_hybrid(
                 vector_count = vector.len(),
                 "merging BM25 and vector results via RRF"
             );
-            Ok(fuse_rrf(&bm25, &vector, rrf_k, limit))
+            let fusion_start = Instant::now();
+            let fused = fuse_rrf(&bm25, &vector, rrf_k, limit);
+            timings.fusion = Some(fusion_start.elapsed());
+            Ok((fused, timings))
         }
         (Ok(bm25), Err(vec_err)) => {
             warn!(
@@ -109,7 +118,7 @@ pub async fn search_hybrid(
             );
             let mut results = bm25;
             results.truncate(limit);
-            Ok(results)
+            Ok((results, timings))
         }
         (Err(bm25_err), Ok(vector)) => {
             warn!(
@@ -118,7 +127,7 @@ pub async fn search_hybrid(
             );
             let mut results = vector;
             results.truncate(limit);
-            Ok(results)
+            Ok((results, timings))
         }
         (Err(bm25_err), Err(vec_err)) => Err(HybridSearchError::BothFailed {
             bm25_error: format!("{bm25_err:#}"),
@@ -160,11 +169,10 @@ pub async fn search_hybrid_reranked(
     stored_dim: usize,
     rerank_candidates: usize,
     vector_candidates: usize,
-) -> Result<Vec<SearchResult>, HybridSearchError> {
-    // Run base hybrid search, fetching enough candidates for reranking.
+) -> Result<(Vec<SearchResult>, HybridTimings), HybridSearchError> {
     let fetch_limit = rerank_candidates.max(limit);
 
-    let hybrid_results = search_hybrid(
+    let (hybrid_results, mut timings) = search_hybrid(
         index_dir,
         provider,
         query,
@@ -176,12 +184,13 @@ pub async fn search_hybrid_reranked(
     .await?;
 
     if hybrid_results.is_empty() {
-        return Ok(hybrid_results);
+        return Ok((hybrid_results, timings));
     }
 
-    // Attempt reranking with graceful degradation.
+    let rerank_start = Instant::now();
     match rerank_results(reranker, query, &hybrid_results, rerank_candidates).await {
         Ok(mut reranked) => {
+            timings.reranking = Some(rerank_start.elapsed());
             info!(
                 query = query,
                 candidates = hybrid_results.len(),
@@ -189,10 +198,10 @@ pub async fn search_hybrid_reranked(
                 "reranking complete"
             );
             reranked.truncate(limit);
-            Ok(reranked)
+            Ok((reranked, timings))
         }
         Err(rerank_err) => {
-            // Graceful degradation: return unreranked results with warning.
+            timings.reranking = Some(rerank_start.elapsed());
             warn!(
                 error = %rerank_err,
                 "reranker unavailable, returning unreranked results"
@@ -202,7 +211,7 @@ pub async fn search_hybrid_reranked(
             );
             let mut results = hybrid_results;
             results.truncate(limit);
-            Ok(results)
+            Ok((results, timings))
         }
     }
 }
@@ -699,7 +708,7 @@ mod tests {
         let provider = MockProvider::new(dim);
         let reranker = MockReranker::new();
 
-        let results = search_hybrid_reranked(
+        let (results, _timings) = search_hybrid_reranked(
             &index_dir,
             &provider,
             &reranker,
@@ -744,7 +753,7 @@ mod tests {
         });
 
         // Should NOT return an error — graceful degradation returns unreranked results.
-        let results = search_hybrid_reranked(
+        let (results, _timings) = search_hybrid_reranked(
             &index_dir,
             &provider,
             &reranker,
@@ -780,7 +789,7 @@ mod tests {
         let reranker = MockReranker::new();
 
         // Should fall back to BM25-only results (not crash/hang).
-        let results = search_hybrid_reranked(
+        let (results, _timings) = search_hybrid_reranked(
             &index_dir,
             &provider,
             &reranker,
@@ -812,7 +821,7 @@ mod tests {
         let provider = MockProvider::new(dim);
         let reranker = MockReranker::new();
 
-        let results = search_hybrid_reranked(
+        let (results, _timings) = search_hybrid_reranked(
             &index_dir, &provider, &reranker, "function", 2, 60.0, dim, 10, 50,
         )
         .await
@@ -889,7 +898,7 @@ mod tests {
         assert_eq!(id_type, QueryType::Identifier);
         let id_params = params_for_query_type(id_type);
 
-        let id_results = search_hybrid_reranked(
+        let (id_results, _) = search_hybrid_reranked(
             &index_dir,
             &provider,
             &reranker,
@@ -909,7 +918,7 @@ mod tests {
         assert_eq!(nl_type, QueryType::NaturalLanguage);
         let nl_params = params_for_query_type(nl_type);
 
-        let nl_results = search_hybrid_reranked(
+        let (nl_results, _) = search_hybrid_reranked(
             &index_dir,
             &provider,
             &reranker,

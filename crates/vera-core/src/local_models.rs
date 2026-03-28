@@ -1560,11 +1560,6 @@ fn require_existing_file(path: &Path, label: &str) -> Result<()> {
     );
 }
 
-/// CPU-only convenience wrapper (backwards compat).
-pub async fn ensure_ort_library() -> Result<PathBuf> {
-    ensure_ort_library_for_ep(OnnxExecutionProvider::Cpu).await
-}
-
 /// Download or validate the local embedding model, the curated local reranker, and the ORT library.
 pub async fn prepare_local_models_for_ep(
     ep: OnnxExecutionProvider,
@@ -1581,30 +1576,6 @@ pub async fn prepare_local_models_for_ep(
     paths.push(ensure_model_file(RERANKER_REPO, RERANKER_ONNX_FILE).await?);
     paths.push(ensure_model_file(RERANKER_REPO, RERANKER_TOKENIZER_FILE).await?);
     Ok(paths)
-}
-
-/// Download the default local embedding and reranker assets, plus the ORT library.
-pub async fn prefetch_default_local_models_for_ep(
-    ep: OnnxExecutionProvider,
-) -> Result<Vec<PathBuf>> {
-    prepare_local_models_for_ep(ep, &LocalEmbeddingModelConfig::default()).await
-}
-
-/// CPU-only convenience wrapper (backwards compat).
-pub async fn prefetch_default_local_models() -> Result<Vec<PathBuf>> {
-    prefetch_default_local_models_for_ep(OnnxExecutionProvider::Cpu).await
-}
-
-/// Inspect the default local assets without downloading anything.
-pub fn inspect_default_local_model_files() -> Result<Vec<LocalModelAssetStatus>> {
-    inspect_default_local_model_files_for_ep(OnnxExecutionProvider::Cpu)
-}
-
-/// Inspect the default local assets for a specific execution provider.
-pub fn inspect_default_local_model_files_for_ep(
-    ep: OnnxExecutionProvider,
-) -> Result<Vec<LocalModelAssetStatus>> {
-    inspect_local_model_files_for_ep(ep, &LocalEmbeddingModelConfig::default())
 }
 
 pub fn inspect_local_model_files_for_ep(

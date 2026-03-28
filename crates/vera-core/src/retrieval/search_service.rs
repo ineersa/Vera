@@ -132,10 +132,7 @@ pub fn execute_search(
         RankingStage::Initial
     };
 
-    let mut timings = SearchTimings::default();
-
-    let search_start = Instant::now();
-    let results = if let Some(ref reranker) = reranker {
+    let (results, hybrid_timings) = if let Some(ref reranker) = reranker {
         rt.block_on(search_hybrid_reranked(
             index_dir,
             &provider,
@@ -158,7 +155,15 @@ pub fn execute_search(
             vector_candidates,
         ))?
     };
-    timings.reranking = Some(search_start.elapsed());
+
+    let mut timings = SearchTimings {
+        embedding: hybrid_timings.embedding,
+        bm25: hybrid_timings.bm25,
+        vector: hybrid_timings.vector,
+        fusion: hybrid_timings.fusion,
+        reranking: hybrid_timings.reranking,
+        ..Default::default()
+    };
 
     let aug_start = Instant::now();
     let results = augment_exact_match_candidates(index_dir, query, results, ranking_stage)?;
