@@ -163,14 +163,8 @@ pub async fn index_repository<P: EmbeddingProvider>(
     }
 
     // ── 4. Generate embeddings (concurrent batches) ──────────────
-    let (batch_size, max_concurrent_requests) = if crate::config::is_local_mode() {
-        (16, 1)
-    } else {
-        (
-            config.embedding.batch_size,
-            config.embedding.max_concurrent_requests,
-        )
-    };
+    let batch_size = config.embedding.batch_size;
+    let max_concurrent_requests = config.embedding.max_concurrent_requests;
 
     let mut embeddings =
         embed_chunks_concurrent(provider, &all_chunks, batch_size, max_concurrent_requests)

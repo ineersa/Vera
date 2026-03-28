@@ -222,13 +222,11 @@ impl VeraConfig {
     pub fn adjust_for_backend(&mut self, backend: InferenceBackend) {
         match backend {
             InferenceBackend::OnnxJina(OnnxExecutionProvider::Cpu) => {
-                self.embedding.batch_size = self.embedding.batch_size.min(4);
-                self.embedding.max_concurrent_requests =
-                    self.embedding.max_concurrent_requests.min(1);
+                self.embedding.batch_size = 4;
+                self.embedding.max_concurrent_requests = 1;
             }
             InferenceBackend::OnnxJina(ep) => {
-                self.embedding.max_concurrent_requests =
-                    self.embedding.max_concurrent_requests.min(1);
+                self.embedding.max_concurrent_requests = 1;
 
                 if self.embedding.low_vram {
                     self.embedding.batch_size = 1;
@@ -248,17 +246,17 @@ impl VeraConfig {
                     // Auto-scale batch_size based on VRAM.
                     // Prioritize speed: use large batches when VRAM allows.
                     let auto_batch = if vram < 3072 {
-                        2
-                    } else if vram < 5120 {
                         4
-                    } else if vram < 8192 {
-                        8
-                    } else if vram < 12288 {
+                    } else if vram < 5120 {
                         16
-                    } else {
+                    } else if vram < 8192 {
                         32
+                    } else if vram < 12288 {
+                        64
+                    } else {
+                        128
                     };
-                    self.embedding.batch_size = self.embedding.batch_size.min(auto_batch);
+                    self.embedding.batch_size = auto_batch;
 
                     // Set a conservative memory limit only for low-VRAM GPUs
                     // to prevent ORT from grabbing all VRAM. For >=8GB, no limit.
@@ -272,7 +270,7 @@ impl VeraConfig {
                     }
                 } else {
                     // Could not detect VRAM; use safe defaults.
-                    self.embedding.batch_size = self.embedding.batch_size.min(32);
+                    self.embedding.batch_size = 32;
                 }
             }
             InferenceBackend::Api => {}
@@ -293,7 +291,7 @@ fn detect_gpu_vram_mb(ep: OnnxExecutionProvider) -> Option<u64> {
     }
 }
 
-/// Query total VRAM via `nvidia-smi`.
+/// Query free VRAM via `nvidia-smi`.
 fn detect_nvidia_vram_mb() -> Option<u64> {
     let output = std::process::Command::new("nvidia-smi")
         .args(["--query-gpu=memory.free", "--format=csv,noheader,nounits"])

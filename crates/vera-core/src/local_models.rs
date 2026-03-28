@@ -541,14 +541,9 @@ fn ort_platform_info(
         } else {
             gpu_suffix
         };
-        let archive_base = format!("onnxruntime-win-x64{archive_gpu_suffix}-{ORT_VERSION}");
-        let internal_base = format!("onnxruntime-win-x64{gpu_suffix}-{ORT_VERSION}");
-        Ok((
-            "zip",
-            archive_base,
-            format!("{internal_base}/lib/onnxruntime.dll"),
-            "onnxruntime.dll",
-        ))
+        let base = format!("onnxruntime-win-x64{archive_gpu_suffix}-{ORT_VERSION}");
+        let entry = format!("{base}/lib/onnxruntime.dll");
+        Ok(("zip", base, entry, "onnxruntime.dll"))
     }
     #[cfg(not(any(
         all(target_os = "linux", target_arch = "x86_64"),
@@ -887,6 +882,8 @@ pub async fn ensure_ort_library_for_ep(ep: OnnxExecutionProvider) -> Result<Path
                     &lib_dir_clone.join(local_lib_name),
                 )
             }
+        } else if is_gpu {
+            extract_zip_all_libs(&bytes, &archive_name, &lib_dir_clone)
         } else {
             extract_zip(
                 &bytes,
@@ -1126,7 +1123,88 @@ fn inspect_shared_library_deps_impl(
     }))
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(target_os = "windows")]
+fn inspect_shared_library_deps_impl(
+    runtime_path: &std::path::Path,
+) -> Result<Option<SharedLibraryDependencyStatus>> {
+    if !runtime_path.exists() {
+        return Ok(None);
+    }
+
+    let inspected_files = collect_runtime_libraries(runtime_path, ".dll");
+
+    // Use dumpbin if available (Visual Studio), otherwise fall back to a
+    // known-list check for CUDA provider DLLs alongside onnxruntime.dll.
+    let mut missing_details = Vec::new();
+    let mut missing_libraries = Vec::new();
+
+    if command_exists("dumpbin", &["/?"]) {
+        for inspected in &inspected_files {
+            let output = std::process::Command::new("dumpbin")
+                .args(["/dependents", inspected.to_string_lossy().as_ref()])
+                .output();
+            let Ok(output) = output else { continue };
+            let text = String::from_utf8_lossy(&output.stdout);
+            let file_name = inspected
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("unknown");
+            for line in text.lines() {
+                let dep = line.trim();
+                if dep.ends_with(".dll") && !dep.contains(' ') {
+                    // Check if the DLL can be found by the loader: same dir or system PATH.
+                    let in_same_dir = inspected
+                        .parent()
+                        .map(|dir| dir.join(dep).exists())
+                        .unwrap_or(false);
+                    if !in_same_dir && which_dll(dep).is_none() {
+                        missing_details.push(format!("{file_name}: {dep}"));
+                        missing_libraries.push(dep.to_string());
+                    }
+                }
+            }
+        }
+    } else {
+        // No dumpbin: check that expected CUDA provider DLLs exist alongside the runtime.
+        if let Some(dir) = runtime_path.parent() {
+            let expected_cuda_libs = [
+                "onnxruntime_providers_shared.dll",
+                "onnxruntime_providers_cuda.dll",
+            ];
+            for lib in &expected_cuda_libs {
+                if !dir.join(lib).exists() {
+                    missing_details.push(format!("onnxruntime.dll: {lib}"));
+                    missing_libraries.push(lib.to_string());
+                }
+            }
+        }
+    }
+
+    missing_details.sort();
+    missing_details.dedup();
+    missing_libraries.sort();
+    missing_libraries.dedup();
+
+    Ok(Some(SharedLibraryDependencyStatus {
+        inspected_files,
+        missing_details,
+        missing_libraries,
+    }))
+}
+
+#[cfg(target_os = "windows")]
+fn which_dll(name: &str) -> Option<std::path::PathBuf> {
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    for dir in path_var.split(';') {
+        let candidate = std::path::Path::new(dir).join(name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn inspect_shared_library_deps_impl(
     _: &std::path::Path,
 ) -> Result<Option<SharedLibraryDependencyStatus>> {
@@ -1142,7 +1220,7 @@ fn collect_runtime_libraries(runtime_path: &std::path::Path, suffix: &str) -> Ve
                 let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                     continue;
                 };
-                if name.starts_with("libonnxruntime")
+                if (name.starts_with("libonnxruntime") || name.starts_with("onnxruntime"))
                     && name.contains(suffix)
                     && path != runtime_path
                 {
@@ -1487,6 +1565,53 @@ fn extract_zip(data: &[u8], entry_path: &str, dest: &std::path::Path) -> Result<
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (data, entry_path, dest);
+        anyhow::bail!("ZIP extraction not expected on this platform")
+    }
+}
+
+/// Extract all DLL files from a zip archive's lib/ directory (GPU builds need provider libs).
+fn extract_zip_all_libs(data: &[u8], archive_name: &str, dest_dir: &std::path::Path) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let temp_zip = dest_dir.join("_ort_download.zip");
+        std::fs::write(&temp_zip, data)?;
+        // Extract all .dll files from the lib/ subdirectory inside the archive.
+        let script = format!(
+            "Add-Type -AssemblyName System.IO.Compression.FileSystem; \
+             $zip = [System.IO.Compression.ZipFile]::OpenRead('{zip}'); \
+             $count = 0; \
+             foreach ($entry in $zip.Entries) {{ \
+                 if ($entry.FullName -match '^{prefix}/lib/.*\\.dll$' -and $entry.Length -gt 0) {{ \
+                     $name = $entry.Name; \
+                     $dest = Join-Path '{dest}' $name; \
+                     $stream = $entry.Open(); \
+                     $file = [System.IO.File]::Create($dest); \
+                     $stream.CopyTo($file); \
+                     $file.Close(); $stream.Close(); \
+                     $count++; \
+                 }} \
+             }}; \
+             $zip.Dispose(); \
+             if ($count -eq 0) {{ exit 1 }}",
+            zip = temp_zip.display(),
+            prefix = archive_name.replace('-', "\\-"),
+            dest = dest_dir.display(),
+        );
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &script])
+            .output()?;
+        let _ = std::fs::remove_file(&temp_zip);
+        if !output.status.success() {
+            anyhow::bail!(
+                "Failed to extract DLLs from ORT zip: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (data, archive_name, dest_dir);
         anyhow::bail!("ZIP extraction not expected on this platform")
     }
 }
