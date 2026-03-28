@@ -28,12 +28,13 @@ use clap::{Parser, Subcommand};
                   results for direct CLI use and installable agent skills. Vera always keeps \
                   the index local in `.vera/`; `vera setup` only chooses the model backend.\n\n\
                   Quick start:\n  \
-                  vera setup            # Download built-in local models\n  \
-                  vera index .          # Index current directory\n  \
-                  vera search \"auth\"    # Search for authentication code\n  \
-                  vera doctor           # Check local setup and index health\n  \
-                  vera repair           # Re-fetch missing backend assets\n  \
-                  vera upgrade          # Show the binary update plan",
+                  vera agent install --scope project  # Optional: repo-local skill files\n  \
+                  vera setup                          # Download built-in local models\n  \
+                  vera index .                        # Index current directory\n  \
+                  vera search \"auth\"                  # Search for authentication code\n  \
+                  vera doctor                         # Check local setup and index health\n  \
+                  vera repair                         # Re-fetch missing backend assets\n  \
+                  vera upgrade                        # Show the binary update plan",
     version
 )]
 struct Cli {
@@ -65,7 +66,8 @@ enum Commands {
     /// Start the MCP (Model Context Protocol) server.
     ///
     /// Runs a JSON-RPC 2.0 server over stdio for tool integration.
-    /// The server exposes tools: search_code, index_project, update_project, get_stats.
+    /// The server exposes tools: search_code, index_project, update_project, get_stats,
+    /// get_overview, watch_project, find_references, find_dead_code, and regex_search.
     ///
     /// Examples:
     ///   vera mcp
@@ -75,10 +77,15 @@ enum Commands {
                       The server reads JSON-RPC messages from stdin and writes responses \
                       to stdout. Logs go to stderr.\n\n\
                       Exposed tools:\n  \
-                      search_code     — Hybrid search with filters\n  \
-                      index_project   — Index a project directory\n  \
-                      update_project  — Incremental index update\n  \
-                      get_stats       — Index statistics\n\n\
+                      search_code      — Hybrid search with filters\n  \
+                      index_project    — Index a project directory\n  \
+                      update_project   — Incremental index update\n  \
+                      get_stats        — Index statistics\n  \
+                      get_overview     — Project summary for onboarding\n  \
+                      watch_project    — Watch files and auto-update the index\n  \
+                      find_references  — Find callers or callees of a symbol\n  \
+                      find_dead_code   — Find functions with no callers\n  \
+                      regex_search     — Regex search over indexed files\n\n\
                       Examples:\n  \
                       vera mcp                       # Start MCP server on stdio")]
     Mcp,
@@ -98,6 +105,7 @@ enum Commands {
                       existing skill install.\n\n\
                       Examples:\n  \
                       vera agent install                       # Install globally for all supported clients\n  \
+                      vera agent install --scope project      # Install in the current repo only\n  \
                       vera agent status --scope all           # Show project and global installs\n  \
                       vera agent remove --client codex        # Remove the global Codex install"
     )]

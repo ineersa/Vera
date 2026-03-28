@@ -6,6 +6,11 @@
 //! - `index_project` — trigger indexing of a project
 //! - `update_project` — trigger incremental index update
 //! - `get_stats` — retrieve index statistics
+//! - `get_overview` — summarize project structure
+//! - `watch_project` — watch files and auto-update the index
+//! - `find_references` — find callers or callees of a symbol
+//! - `find_dead_code` — list functions with no callers
+//! - `regex_search` — regex search over indexed files
 //!
 //! # Usage
 //!

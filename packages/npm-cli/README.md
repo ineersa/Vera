@@ -12,9 +12,14 @@ Current benchmark snapshot: on Vera's local 21-task, 4-repo release benchmark, `
 npm install -g @vera-ai/cli
 ```
 
+`vera setup` only configures the backend. Run `vera agent install --scope project` inside a repo if you want repo-local skill files for your agent.
+
 ## Usage
 
 ```bash
+# Optional: write repo-local skill files for your agent
+vera agent install --scope project
+
 # Index a project
 vera index .
 

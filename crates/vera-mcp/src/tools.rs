@@ -6,6 +6,10 @@
 //! - `update_project` — trigger incremental update
 //! - `get_stats` — retrieve index statistics
 //! - `get_overview` — architecture overview for agent onboarding
+//! - `watch_project` — watch files and auto-update the index
+//! - `find_references` — find callers or callees of a symbol
+//! - `find_dead_code` — find functions with no callers
+//! - `regex_search` — regex search over indexed files
 
 use std::path::Path;
 use std::sync::Mutex;

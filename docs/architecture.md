@@ -57,11 +57,11 @@ All stored in `.vera/` at the project root.
 
 ## vera-cli
 
-`main.rs` parses args via clap, `commands/` has one file per subcommand: `index`, `search`, `update`, `stats`, `config`, `setup`, `doctor`, `mcp`.
+`main.rs` parses args via clap. `commands/` contains the CLI subcommand implementations and helpers: `agent`, `config`, `doctor`, `grep`, `index`, `mcp`, `overview`, `references` (also used by `dead-code`), `repair`, `search`, `setup`, `stats`, `uninstall`, `update`, and `upgrade`.
 
 ## vera-mcp
 
-`server.rs` routes JSON-RPC requests. `tools.rs` implements four MCP tools: `search_code`, `index_project`, `update_project`, `get_stats`.
+`server.rs` routes JSON-RPC requests. `tools.rs` implements nine MCP tools: `search_code`, `index_project`, `update_project`, `get_stats`, `get_overview`, `watch_project`, `find_references`, `find_dead_code`, and `regex_search`.
 
 ## Adding a new language
 

@@ -68,16 +68,17 @@ vera search "authentication logic"
 bunx @vera-ai/cli install   # or: npx -y @vera-ai/cli install / uvx vera-ai install
 ```
 
-This downloads the `vera` binary, adds it to your PATH, and installs agent skill files. After this, `vera` is a standalone command. You don't need `bunx`/`npx`/`uvx` again.
+This downloads the `vera` binary, writes a `vera` shim into a user bin directory, and installs the global agent skill files. If that bin directory is not already on `PATH`, Vera tells you what to add. After that, `vera` is a standalone command. You don't need `bunx`/`npx`/`uvx` again.
 
 ```bash
-vera setup          # interactive backend menu (auto-detects your GPU)
-vera index .        # index the current project (creates .vera/ in project root)
-vera search "query" # search (each project gets its own index)
-vera update .       # after code changes
+vera agent install --scope project  # optional: write repo-local skill files for your agent
+vera setup                          # interactive backend menu (auto-detects your GPU)
+vera index .                        # index the current project (creates .vera/ in project root)
+vera search "query"                 # search (each project gets its own index)
+vera update .                       # after code changes
 ```
 
-`vera setup` with no flags shows a backend picker and auto-detects your GPU. You can also skip the menu: `vera setup --onnx-jina-cuda` (NVIDIA), `--onnx-jina-coreml` (Apple Silicon), `--api` (remote endpoints), etc. Add `--code-rank-embed` if you want the optional CodeRankEmbed local embedding preset. Run `vera setup --help` for all options.
+`vera setup` with no flags shows a backend picker and auto-detects your GPU. You can also skip the menu: `vera setup --onnx-jina-cuda` (NVIDIA), `--onnx-jina-coreml` (Apple Silicon), `--api` (remote endpoints), etc. Add `--code-rank-embed` if you want the optional CodeRankEmbed local embedding preset. `vera setup` does not install skill files; use `vera agent install` for that. Run `vera setup --help` for all options.
 
 Use `vera doctor` if anything goes wrong. It reports the saved and active backend, installed Vera version, and checks GitHub for newer releases. Add `--probe` for a deeper read-only ONNX session check that does not download or repair missing assets. Use `vera repair` to re-fetch missing local assets or re-save API config from the current environment. Use `vera upgrade` to inspect or apply the binary update plan.
 
