@@ -12,6 +12,10 @@ const HUB_URL: &str = "https://huggingface.co";
 const EMBEDDING_REPO: &str = "jinaai/jina-embeddings-v5-text-nano-retrieval";
 const EMBEDDING_ONNX_FILE: &str = "onnx/model_quantized.onnx";
 const EMBEDDING_ONNX_DATA_FILE: &str = "onnx/model_quantized.onnx_data";
+/// FP16 model for GPU backends (quantized INT8 ops lack CUDA kernels,
+/// causing ORT to silently fall back to CPU).
+const EMBEDDING_ONNX_GPU_FILE: &str = "onnx/model_fp16.onnx";
+const EMBEDDING_ONNX_GPU_DATA_FILE: &str = "onnx/model_fp16.onnx_data";
 const EMBEDDING_TOKENIZER_FILE: &str = "tokenizer.json";
 const EMBEDDING_DIM: usize = 768;
 const EMBEDDING_MAX_LENGTH: usize = 512;
@@ -147,6 +151,33 @@ impl LocalEmbeddingModelConfig {
         Self {
             source: LocalEmbeddingSource::Directory { path },
             ..Self::default()
+        }
+    }
+
+    /// Switch to the FP16 ONNX model when running on a GPU execution provider.
+    ///
+    /// Quantized INT8 models use operators (QLinearMatMul, MatMulInteger) that
+    /// lack CUDA/ROCm/DirectML kernels, so ORT silently falls back to CPU for
+    /// those nodes. FP16 runs natively on GPU and is much faster.
+    ///
+    /// Only applies to the default Jina model; custom user overrides are left
+    /// untouched.
+    pub fn adjust_for_gpu(&mut self, ep: crate::config::OnnxExecutionProvider) {
+        if ep == crate::config::OnnxExecutionProvider::Cpu {
+            return;
+        }
+        // Only swap if the user hasn't overridden the ONNX file via env vars
+        // and we're using the default quantized model.
+        let user_overrode_onnx = env_override(LOCAL_EMBEDDING_ONNX_FILE_ENV).is_some();
+        if user_overrode_onnx {
+            return;
+        }
+        if self.onnx_file == EMBEDDING_ONNX_FILE {
+            tracing::info!(
+                "GPU backend: switching from quantized to fp16 model (INT8 ops lack GPU kernels)"
+            );
+            self.onnx_file = EMBEDDING_ONNX_GPU_FILE.to_string();
+            self.onnx_data_file = Some(EMBEDDING_ONNX_GPU_DATA_FILE.to_string());
         }
     }
 
@@ -1690,9 +1721,11 @@ pub async fn prepare_local_models_for_ep(
     ep: OnnxExecutionProvider,
     embedding_model: &LocalEmbeddingModelConfig,
 ) -> Result<Vec<PathBuf>> {
+    let mut model = embedding_model.clone();
+    model.adjust_for_gpu(ep);
     let mut paths = Vec::new();
     paths.push(ensure_ort_library_for_ep(ep).await?);
-    let embedding_paths = ensure_local_embedding_assets(embedding_model).await?;
+    let embedding_paths = ensure_local_embedding_assets(&model).await?;
     paths.push(embedding_paths.onnx_path);
     if let Some(path) = embedding_paths.onnx_data_path {
         paths.push(path);
@@ -1707,7 +1740,9 @@ pub fn inspect_local_model_files_for_ep(
     ep: OnnxExecutionProvider,
     embedding_model: &LocalEmbeddingModelConfig,
 ) -> Result<Vec<LocalModelAssetStatus>> {
-    let embedding_paths = embedding_model.cached_asset_paths()?;
+    let mut model = embedding_model.clone();
+    model.adjust_for_gpu(ep);
+    let embedding_paths = model.cached_asset_paths()?;
     let ort_path = ort_library_path_for_ep(ep)?;
     let vera_home = vera_home_dir()?;
     let reranker_onnx = vera_home

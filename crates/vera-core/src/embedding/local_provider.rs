@@ -23,11 +23,12 @@ impl LocalEmbeddingProvider {
         ep: OnnxExecutionProvider,
         gpu_mem_limit_mb: u64,
     ) -> Result<Self, EmbeddingError> {
-        let config =
+        let mut config =
             LocalEmbeddingModelConfig::from_env().map_err(|e| EmbeddingError::ApiError {
                 status: 500,
                 message: e.to_string(),
             })?;
+        config.adjust_for_gpu(ep);
         let ort_path = crate::local_models::ensure_ort_library_for_ep(ep)
             .await
             .map_err(|e| EmbeddingError::ApiError {
@@ -95,7 +96,8 @@ impl LocalEmbeddingProvider {
     }
 
     pub fn probe_session(ep: OnnxExecutionProvider) -> Result<()> {
-        let config = LocalEmbeddingModelConfig::from_env()?;
+        let mut config = LocalEmbeddingModelConfig::from_env()?;
+        config.adjust_for_gpu(ep);
         let ort_path = crate::local_models::ort_library_path_for_ep(ep)?;
         crate::local_models::ensure_ort_runtime(Some(&ort_path))?;
         let asset_paths = config.cached_asset_paths()?;
@@ -104,7 +106,8 @@ impl LocalEmbeddingProvider {
     }
 
     pub fn probe_inference(ep: OnnxExecutionProvider) -> Result<()> {
-        let config = LocalEmbeddingModelConfig::from_env()?;
+        let mut config = LocalEmbeddingModelConfig::from_env()?;
+        config.adjust_for_gpu(ep);
         let ort_path = crate::local_models::ort_library_path_for_ep(ep)?;
         crate::local_models::ensure_ort_runtime(Some(&ort_path))?;
         let asset_paths = config.cached_asset_paths()?;
@@ -158,7 +161,14 @@ impl LocalEmbeddingProvider {
         ];
 
         let mut session = self.session.lock().unwrap();
+        let t0 = std::time::Instant::now();
         let outputs = session.run(inputs)?;
+        tracing::debug!(
+            batch_size,
+            seq_len = max_len,
+            elapsed_ms = t0.elapsed().as_millis(),
+            "ort session.run"
+        );
 
         let output_value = outputs.values().next().unwrap();
         let (shape, data) = output_value.try_extract_tensor::<f32>()?;
@@ -254,7 +264,12 @@ fn build_session(
     } else {
         available.min(4)
     };
-    tracing::info!("ONNX session: {threads} intra-op threads (available: {available})");
+    tracing::info!(
+        threads,
+        available,
+        model = %onnx_path.display(),
+        "building ONNX session"
+    );
     let builder = ort::session::builder::SessionBuilder::new()?
         .with_optimization_level(GraphOptimizationLevel::Level3)?
         .with_intra_threads(threads)?;
