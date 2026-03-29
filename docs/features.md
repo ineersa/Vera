@@ -223,13 +223,13 @@ Single static binary for Linux (x86_64, aarch64), macOS (x86_64, aarch64), and W
 
 ## Benchmarks
 
-On a 21-task benchmark across `ripgrep`, `flask`, `fastify`, and `turborepo`:
+21-task benchmark across `ripgrep`, `flask`, `fastify`, and `turborepo`:
 
-| Metric | v0.4.0 | v0.7.0+ |
-|--------|--------|---------|
-| Recall@1 | 0.24 | **0.72** |
-| Recall@5 | 0.50 | **0.78** |
-| MRR@10 | 0.50 | **0.91** |
-| nDCG@10 | 0.46 | **0.84** |
+| Metric | ripgrep | cocoindex | ColGREP (149M) | Vera |
+|--------|---------|-----------|----------------|------|
+| Recall@1 | 0.15 | 0.16 | 0.57 | **0.72** |
+| Recall@5 | 0.28 | 0.37 | 0.67 | **0.78** |
+| MRR@10 | 0.26 | 0.35 | 0.62 | **0.91** |
+| nDCG@10 | 0.29 | 0.52 | 0.56 | **0.84** |
 
-Comparison against other tools on the same workload: [benchmarks.md](benchmarks.md).
+Full methodology and additional comparisons: [benchmarks.md](benchmarks.md).
