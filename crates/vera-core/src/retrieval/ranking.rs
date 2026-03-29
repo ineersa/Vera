@@ -10,6 +10,9 @@ use std::collections::HashSet;
 use crate::chunk_text::file_name;
 use crate::corpus::{ContentClass, classify_content, classify_path, content_class_label};
 use crate::retrieval::query_classifier::{QueryType, classify_query};
+use crate::retrieval::query_utils::{
+    looks_like_compound_identifier, looks_like_filename, path_depth, trim_query_token,
+};
 use crate::types::{Language, SearchFilters, SearchResult, SymbolType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -488,29 +491,13 @@ fn stamp_rank_scores(mut results: Vec<SearchResult>) -> Vec<SearchResult> {
     results
 }
 
-fn looks_like_filename(token: &str) -> bool {
-    matches!(
-        token,
-        "dockerfile" | "makefile" | "cmakelists.txt" | "nginx.conf"
-    ) || token.contains('.')
-}
 
 fn looks_like_path_fragment(token: &str) -> bool {
     token.contains('/') || token.contains('\\')
 }
 
-fn looks_like_compound_identifier(token: &str) -> bool {
-    token.contains('_') || token.contains("::") || token.chars().any(|ch| ch.is_ascii_uppercase())
-}
-
 fn clean_query_token(token: &str) -> String {
     trim_query_token(token).to_ascii_lowercase()
-}
-
-fn trim_query_token(token: &str) -> &str {
-    token.trim_matches(|ch: char| {
-        !ch.is_ascii_alphanumeric() && !matches!(ch, '.' | '_' | '-' | '/')
-    })
 }
 
 fn mentions_any(query: &str, needles: &[&str]) -> bool {
@@ -566,10 +553,6 @@ fn is_internal_definition_path(path: &str) -> bool {
 
 fn path_matches_fragment(path: &str, fragment: &str) -> bool {
     path == fragment || path.ends_with(fragment) || path.contains(fragment)
-}
-
-fn path_depth(path: &str) -> usize {
-    path.matches('/').count() + path.matches('\\').count()
 }
 
 fn file_stem(filename: &str) -> &str {

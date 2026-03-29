@@ -19,6 +19,8 @@ crates/tree-sitter-astro/
 # Development files
 .factory/
 .agents/
+.claude/
+.zed/
 .firecrawl/
 .dev/
 .tmp/

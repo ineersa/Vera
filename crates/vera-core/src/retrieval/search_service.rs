@@ -14,6 +14,9 @@ use crate::chunk_text::file_name;
 use crate::config::{InferenceBackend, VeraConfig};
 use crate::retrieval::hybrid::compute_vector_candidates;
 use crate::retrieval::query_classifier::{QueryType, classify_query, params_for_query_type};
+use crate::retrieval::query_utils::{
+    looks_like_compound_identifier, looks_like_filename, path_depth, trim_query_token,
+};
 use crate::retrieval::ranking::{
     RankingStage, apply_query_ranking_with_filters, is_path_weighted_query,
 };
@@ -131,7 +134,7 @@ pub fn execute_search(
     let query_type = classify_query(query);
     let query_params = params_for_query_type(query_type);
     let rrf_k = query_params.rrf_k;
-    let vector_candidates = effective_vector_candidates(fetch_limit, query_params, query);
+    let vector_candidates = effective_vector_candidates(fetch_limit, query_params);
     let rerank_candidates = effective_rerank_candidates(
         config.retrieval.rerank_candidates,
         fetch_limit,
@@ -222,7 +225,6 @@ fn needs_structural_overfetch(query: &str, filters: &SearchFilters) -> bool {
 fn effective_vector_candidates(
     fetch_limit: usize,
     query_params: crate::retrieval::query_classifier::QueryParams,
-    _query: &str,
 ) -> usize {
     compute_vector_candidates(fetch_limit, query_params.vector_candidate_multiplier)
 }
@@ -371,22 +373,6 @@ fn extract_exact_identifier_case(query: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn trim_query_token(token: &str) -> &str {
-    token.trim_matches(|ch: char| {
-        !ch.is_ascii_alphanumeric() && !matches!(ch, '.' | '_' | '-' | '/')
-    })
-}
-
-fn looks_like_filename(token: &str) -> bool {
-    matches!(
-        token.to_ascii_lowercase().as_str(),
-        "dockerfile" | "makefile" | "cmakelists.txt" | "nginx.conf"
-    ) || token.contains('.')
-}
-
-fn looks_like_compound_identifier(token: &str) -> bool {
-    token.contains('_') || token.contains("::") || token.chars().any(|ch| ch.is_ascii_uppercase())
-}
 
 fn query_mentions_implementation(query: &str) -> bool {
     let lower = query.to_ascii_lowercase();
@@ -463,9 +449,6 @@ fn uppercase_identifier_query(identifier: &str) -> bool {
         .is_some_and(|ch| ch.is_ascii_uppercase())
 }
 
-fn path_depth(path: &str) -> usize {
-    path.matches('/').count() + path.matches('\\').count()
-}
 
 fn result_key(result: &SearchResult) -> String {
     format!(
@@ -582,7 +565,7 @@ mod tests {
         // Vector candidates use query_params multiplier without inflation
         let nl_params =
             params_for_query_type(crate::retrieval::query_classifier::QueryType::NaturalLanguage);
-        let vc = effective_vector_candidates(10, nl_params, "some query");
+        let vc = effective_vector_candidates(10, nl_params);
         assert!(vc >= 50); // at least the minimum from compute_vector_candidates
     }
 

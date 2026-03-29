@@ -10,7 +10,8 @@ use std::path::Path;
 use anyhow::Result;
 use regex::{Match, RegexBuilder};
 
-use crate::corpus::{ContentClass, classify_content, classify_path, is_minified_content};
+use crate::corpus::{ContentClass, classify_content, classify_path};
+use crate::retrieval::query_utils::path_depth;
 use crate::retrieval::ranking::{RankingStage, apply_query_ranking_with_filters};
 use crate::types::{Language, SearchFilters, SearchResult};
 
@@ -79,7 +80,7 @@ pub fn search_regex(
             continue;
         }
 
-        if is_minified_content(&content) || matches!(class, ContentClass::Generated) {
+        if matches!(class, ContentClass::Generated) {
             collect_minified_matches(&mut results, &regex, file_rel, &content, language, limit);
             continue;
         }
@@ -229,10 +230,6 @@ fn language_for_path(file_path: &str) -> Language {
                 .map(Language::from_extension)
         })
         .unwrap_or(Language::Unknown)
-}
-
-fn path_depth(path: &str) -> usize {
-    path.matches('/').count() + path.matches('\\').count()
 }
 
 #[cfg(test)]

@@ -29,6 +29,7 @@ pub use dynamic_reranker::{DynamicReranker, create_dynamic_reranker};
 
 pub mod iterative_search;
 pub mod local_reranker;
+pub(crate) mod query_utils;
 pub mod regex_search;
 
 pub use local_reranker::LocalReranker;

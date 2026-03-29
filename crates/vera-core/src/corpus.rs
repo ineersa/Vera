@@ -158,22 +158,8 @@ pub fn content_class_label(class: ContentClass) -> &'static str {
 }
 
 pub fn is_generated_like(file_path: &str, content: &str) -> bool {
-    let path = normalize_path(file_path);
-    let tokens = tokenize_path(&path);
-    contains_token(
-        &tokens,
-        &[
-            "generated",
-            "dist",
-            "build",
-            "coverage",
-            "vendor",
-            "node_modules",
-            "target",
-            "out",
-            "min",
-        ],
-    ) || is_minified_content(content)
+    classify_path(file_path, Language::Unknown) == ContentClass::Generated
+        || is_minified_content(content)
 }
 
 pub fn is_minified_content(content: &str) -> bool {
@@ -181,12 +167,9 @@ pub fn is_minified_content(content: &str) -> bool {
     if line_count <= 1 {
         return content.len() >= 1_200;
     }
-    if line_count == 0 {
-        return false;
-    }
 
     let long_lines = content.lines().filter(|line| line.len() >= 240).count();
-    let avg_line_len = content.len() / line_count.max(1);
+    let avg_line_len = content.len() / line_count;
 
     long_lines * 3 >= line_count
         || (avg_line_len >= 180 && long_lines * 2 >= line_count)
