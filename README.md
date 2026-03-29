@@ -23,7 +23,7 @@
 
 **V**ector **E**nhanced **R**eranking **A**gent
 
-Code search that combines BM25 keyword matching, vector similarity, and cross-encoder reranking. Parses 63 languages with tree-sitter, runs locally, returns structured results with file paths, line ranges, symbol metadata, and relevance scores.
+Code search that combines BM25 keyword matching, vector similarity, and cross-encoder reranking. Supports 63 languages (58 with tree-sitter parsing), runs locally, returns structured results with file paths, line ranges, symbol metadata, and relevance scores.
 
 </div>
 
@@ -41,7 +41,7 @@ vera search "authentication logic"
 | | |
 |---|---|
 | **Cross-encoder reranking** | Most tools retrieve candidates and stop. Vera adds a reranking stage that scores query-candidate pairs jointly: 0.60 MRR@10 vs. 0.28 with vector retrieval alone. |
-| **Single binary, zero dependencies** | One static binary with 63 tree-sitter grammars compiled in. No Python, no language servers, no per-language toolchains. |
+| **Single binary, zero dependencies** | One static binary with 58 tree-sitter grammars compiled in, 63 languages total. No Python, no language servers, no per-language toolchains. |
 | **Proven accuracy** | 0.84 nDCG@10 and 0.78 Recall@5 on a 21-task benchmark across real codebases. See [benchmarks](#benchmarks). |
 | **Token-efficient output** | Returns relevant chunks, not entire files. Averages 67% fewer tokens than loading full files; most queries see 75-95% reduction. |
 
