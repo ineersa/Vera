@@ -1395,14 +1395,16 @@ fn macos_dependency_exists(
 
 #[cfg(target_os = "macos")]
 fn resolve_macos_rpath(rpath: &str, inspected: &std::path::Path) -> PathBuf {
-    if let Some(rest) = rpath.strip_prefix("@loader_path/") {
+    if rpath == "@loader_path" || rpath.starts_with("@loader_path/") {
+        let rest = rpath.strip_prefix("@loader_path/").unwrap_or("");
         return inspected
             .parent()
             .unwrap_or_else(|| std::path::Path::new(""))
             .join(rest);
     }
 
-    if let Some(rest) = rpath.strip_prefix("@executable_path/") {
+    if rpath == "@executable_path" || rpath.starts_with("@executable_path/") {
+        let rest = rpath.strip_prefix("@executable_path/").unwrap_or("");
         if let Ok(exe) = std::env::current_exe() {
             if let Some(parent) = exe.parent() {
                 return parent.join(rest);
@@ -1962,6 +1964,51 @@ mod tests {
         assert!(
             !part_file.exists(),
             "Partial file should be cleaned up on failure"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resolve_macos_rpath_loader_path_without_slash() {
+        let inspected = std::path::Path::new("/tmp/vera/lib/libonnxruntime.dylib");
+        assert_eq!(
+            resolve_macos_rpath("@loader_path", inspected),
+            std::path::Path::new("/tmp/vera/lib")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resolve_macos_rpath_loader_path_with_slash() {
+        let inspected = std::path::Path::new("/tmp/vera/lib/libonnxruntime.dylib");
+        assert_eq!(
+            resolve_macos_rpath("@loader_path/subdir", inspected),
+            std::path::Path::new("/tmp/vera/lib/subdir")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resolve_macos_rpath_executable_path_without_slash() {
+        let inspected = std::path::Path::new("/tmp/vera/lib/libonnxruntime.dylib");
+        let expected = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
+            .unwrap_or_else(|| std::path::PathBuf::from("@executable_path"));
+        assert_eq!(resolve_macos_rpath("@executable_path", inspected), expected);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resolve_macos_rpath_executable_path_with_slash() {
+        let inspected = std::path::Path::new("/tmp/vera/lib/libonnxruntime.dylib");
+        let expected = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|p| p.join("subdir")))
+            .unwrap_or_else(|| std::path::PathBuf::from("@executable_path/subdir"));
+        assert_eq!(
+            resolve_macos_rpath("@executable_path/subdir", inspected),
+            expected
         );
     }
 }
