@@ -58,11 +58,19 @@ vera search "authentication logic"
 
 ## Features
 
-**Model-agnostic, local-first.** Point Vera at any OpenAI-compatible embedding or reranker endpoint, remote or local. Indexing, storage, and search logic always stay on your machine. Run `vera setup` to download two curated ONNX models and run the full pipeline offline. Details: [Model Backend](#model-backend).
+**Model-agnostic, local-first.** Point Vera at any OpenAI-compatible embedding or reranker endpoint, remote or local. Run `vera setup` to download two curated ONNX models and run the full pipeline offline.
 
-**Tree-sitter structural parsing.** 60+ language grammars extract functions, classes, methods, and structs as discrete chunks. Results map to actual symbol boundaries, not arbitrary line ranges. Filter with `--type function` or `--type class`.
+**Tree-sitter structural parsing.** 63 language grammars extract functions, classes, methods, and structs as discrete chunks. Results map to actual symbol boundaries, not arbitrary line ranges.
 
-**Structured, code-aware results.** Every result includes file path, line range, source content, symbol name, and type. Agents and scripts consume this directly without parsing. See [AGENT-USAGE.md](AGENT-USAGE.md) for AI agent integration.
+**Structured, code-aware results.** Every result includes file path, line range, source content, symbol name, and type. Agents and scripts consume this directly without parsing.
+
+**Multi-query, intent-aware search.** Send multiple queries in one call, add an intent parameter for reranking, follow symbol chains with `--deep`, and filter by language, path, type, or corpus scope.
+
+**Code intelligence.** Call graph traversal (`vera references`), dead code detection (`vera dead-code`), project overview with convention detection (`vera overview`), and regex search (`vera grep`).
+
+**31 agent clients.** Skill files for Junie, Claude Code, Cursor, Windsurf, Copilot, Cline, Roo Code, and more. Interactive install, auto-sync on upgrade.
+
+Full feature list: [docs/features.md](docs/features.md).
 
 ## Installation
 
@@ -157,64 +165,13 @@ Set `VERA_NO_UPDATE_CHECK=1` to disable the automatic check.
 
 ## Model Backend
 
-Vera itself is always local: the index lives in `.vera/`, config in `~/.vera/`. The backend choice only affects where embeddings and reranking run.
+Vera itself is always local: the index lives in `.vera/`, config in `~/.vera/`. The backend choice only affects where embeddings and reranking run. Full details on models, GPU backends, custom embeddings, and adaptive batching: [docs/features.md](docs/features.md#model-backend) and [docs/models.md](docs/models.md).
 
-### Curated Local Models
-
-`vera setup` downloads quantized ONNX models into `~/.vera/models/` and the ONNX Runtime library into `~/.vera/lib/`. No manual install required.
-
-| Model | Size | Role | Notes |
-|-------|------|------|-------|
-| [`jina-embeddings-v5-text-nano-retrieval`](https://huggingface.co/jinaai/jina-embeddings-v5-text-nano-retrieval) | 239M | Default embedding model | Best default choice. Faster indexing, strong end-to-end results with Vera's reranker. |
-| [`Zenabius/CodeRankEmbed-onnx`](https://huggingface.co/Zenabius/CodeRankEmbed-onnx) | 137M | Optional embedding preset | Use `vera setup --code-rank-embed` for embedding-heavy or no-rerank experiments. In Vera's short 6-task no-rerank check it improved Recall@1 from `0.56` to `0.72`, but indexing was much slower. |
-| [`jina-reranker-v2-base-multilingual`](https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual) | 278M | Cross-encoder reranker | Curated local reranker for all local presets. |
-
-With the embedding model and reranker cached, the full pipeline (BM25 + vector search + rerank) runs without external calls. For detailed specs, custom model setup, and the CodeRankEmbed comparison, see [docs/models.md](docs/models.md) and [docs/benchmarks.md](docs/benchmarks.md).
-
-### GPU Acceleration
-
-`vera setup` and `vera backend` auto-detect your GPU. You can also specify a backend directly:
-
-| Flag | Hardware |
-|------|----------|
-| `--onnx-jina-cuda` | NVIDIA (CUDA 12+) |
-| `--onnx-jina-rocm` | AMD (Linux, ROCm) |
-| `--onnx-jina-directml` | Any DirectX 12 GPU (Windows) |
-| `--onnx-jina-coreml` | Apple Silicon (macOS) |
-| `--onnx-jina-openvino` | Intel GPU/iGPU (Linux) |
-
-Vera downloads the matching ONNX Runtime build automatically. For OpenVINO and ROCm (no pre-built binaries on GitHub), Vera installs via pip into a managed venv at `~/.vera/venv/`, falling back to direct PyPI wheel download if pip is unavailable. The same flag works on `vera index` and `vera search` to override the configured backend per-command.
-
-Vera uses free VRAM to choose a coarse batch ceiling, then shapes local GPU micro-batches from actual token lengths. Long batches shrink roughly with the square of sequence length, and Vera learns safer limits per length bucket from real successes and allocation failures. Those learned limits persist under `~/.vera/adaptive-batch-scaler.json`, keyed by backend, device fingerprint, and model, so later runs can warm-start instead of relearning from scratch. On GPUs with less than 8 GB free VRAM, it also caps the ONNX Runtime memory arena to 80% of free VRAM. For very constrained GPUs (4 GB or less), pass `--low-vram` to `vera index` to force batch size 1 and a 1 GB memory limit.
-
-### Custom Local Embeddings
-
-You can swap the local embedding model without changing the rest of the local pipeline. Use `vera backend` (or `vera setup`) with the relevant flags:
-
-```bash
-# Optional curated preset
-vera backend --onnx-jina-cuda --code-rank-embed
-
-# Custom Hugging Face model (repo id or full URL)
-vera backend --onnx-jina-cuda \
-  --embedding-repo https://huggingface.co/Zenabius/CodeRankEmbed-onnx \
-  --embedding-pooling cls \
-  --embedding-no-onnx-data \
-  --embedding-query-prefix "Represent this query for searching relevant code:"
-
-# Local directory you already populated yourself
-vera setup --onnx-jina-cuda \
-  --embedding-dir /path/to/model-dir \
-  --embedding-onnx-file onnx/model_quantized.onnx \
-  --embedding-tokenizer-file tokenizer.json \
-  --embedding-dim 768
-```
-
-Custom local model support currently applies to embeddings. The local reranker stays on the curated Jina reranker. Full details: [docs/models.md](docs/models.md).
+`vera setup` downloads two curated ONNX models and auto-detects your GPU. You can also specify a backend directly: `--onnx-jina-cuda` (NVIDIA), `--onnx-jina-rocm` (AMD), `--onnx-jina-directml` (Windows), `--onnx-jina-coreml` (Apple Silicon), `--onnx-jina-openvino` (Intel). Use `vera setup --api` to point at any OpenAI-compatible endpoint instead.
 
 ### Inference Speed
 
-Local mode runs neural networks on your machine. GPU is recommended; CPU works but is slow for initial indexing. After the first index, `vera update .` only re-embeds changed files, so updates are fast even on CPU.
+GPU is recommended; CPU works but is slow for initial indexing. After the first index, `vera update .` only re-embeds changed files, so updates are fast even on CPU.
 
 | Backend | Hardware | Time | Notes |
 |---------|----------|------|-------|
@@ -223,8 +180,6 @@ Local mode runs neural networks on your machine. GPU is recommended; CPU works b
 | CPU | Ryzen 5 7600X3D (6c/12t) | ~6 min | Use GPU or API mode if this is too slow |
 
 ### API Mode
-
-Use `vera setup --api` to point Vera at any OpenAI-compatible endpoint (remote APIs or local servers like `llama.cpp`).
 
 ```bash
 export EMBEDDING_MODEL_BASE_URL=https://your-embedding-api/v1
@@ -265,18 +220,7 @@ This watches for file changes and triggers incremental index updates (debounced 
 
 ### Excluding Files
 
-Vera respects `.gitignore` by default. For more control, create a `.veraignore` file in your project root (gitignore syntax). When present, `.veraignore` completely replaces `.gitignore` rules, giving you full control over what gets indexed.
-
-To keep `.gitignore` rules and add extra exclusions on top, put `#include .gitignore` at the top of `.veraignore`.
-
-One-off exclusions:
-
-```bash
-vera index . --exclude "tests/**" --exclude "*.generated.ts"
-vera update . --exclude "vendor/**"
-```
-
-`--no-ignore` disables all ignore file parsing. `--no-default-excludes` disables built-in exclusions (node_modules, .git, target, etc.).
+Vera respects `.gitignore` by default. Create a `.veraignore` file (gitignore syntax) for more control, or use `--exclude` flags for one-off exclusions. Details: [docs/features.md](docs/features.md#flexible-exclusions).
 
 ### Output Format
 

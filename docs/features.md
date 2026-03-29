@@ -33,13 +33,34 @@ An optional `intent` parameter lets you describe your higher-level goal separate
 
 A deterministic ranking stage between fusion and reranking handles cases that dense retrieval alone is bad at: exact filename queries, path-heavy config lookups, noisy test/docs matches, and broad natural-language queries that need structural results. It also pulls in related implementation blocks or same-file context when the initial hit is too narrow.
 
+### Corpus-Aware Search Scopes
+
+Filter results by corpus category with `--scope`:
+
+| Scope | What it includes |
+|-------|-----------------|
+| `source` | Application source code (default bias) |
+| `docs` | Markdown, READMEs, ADRs, guides |
+| `runtime` | Extracted runtime trees, bundled app code |
+| `all` | Everything, no filtering |
+
+Vera favors source files by default. Docs, runtime extracts, and generated/minified files are still indexed but deprioritized unless you explicitly request them. Add `--include-generated` to include dist/minified/generated artifacts.
+
+### Search Filters
+
+Narrow results by language (`--lang rust`), file path glob (`--path "src/**/*.rs"`), symbol type (`--type function`), corpus scope (`--scope source`), and result count (`--limit 5`). Filters combine with AND semantics.
+
 ## Parsing and Indexing
 
 ### Tree-Sitter Structural Parsing
 
 63 languages parsed with tree-sitter grammars compiled into the binary. Functions, classes, structs, traits, interfaces, methods, and `impl` blocks are extracted as discrete chunks. Results map to actual symbol boundaries, not arbitrary line ranges.
 
-Symbol-aware chunking scores 2.3x higher MRR on symbol lookup than sliding-window chunking (0.55 vs 0.24), while using 14% fewer tokens. Large symbols (>150 lines) are split at logical boundaries. Full list: [supported-languages.md](supported-languages.md).
+Symbol-aware chunking scores 2.3x higher MRR on symbol lookup than sliding-window chunking (0.55 vs 0.24), while using 14% fewer tokens. Full list: [supported-languages.md](supported-languages.md).
+
+### Adaptive Chunking
+
+Large symbols (>150 lines) are split at logical boundaries: closing braces, semicolons, blank lines. This preserves readability instead of cutting at arbitrary line counts. Languages without a tree-sitter grammar fall back to sliding-window chunking. Module-level gaps between symbols are kept as chunks when they carry useful retrieval context.
 
 ### Incremental Updates
 
@@ -51,7 +72,11 @@ Symbol-aware chunking scores 2.3x higher MRR on symbol lookup than sliding-windo
 
 ### Flexible Exclusions
 
-Vera respects `.gitignore` by default. For more control, `.veraignore` (gitignore syntax) gives full control over what gets indexed. Use `#include .gitignore` at the top to layer extra exclusions on top of gitignore rules. One-off `--exclude` flags work too.
+Vera respects `.gitignore` by default. For more control, `.veraignore` (gitignore syntax) gives full control over what gets indexed. Use `#include .gitignore` at the top to layer extra exclusions on top of gitignore rules. One-off `--exclude` flags, `--no-ignore`, and `--no-default-excludes` are also available.
+
+### Verbose Indexing
+
+`vera index . --verbose` shows skipped file details alongside indexed file counts, useful for debugging exclusion rules.
 
 ## Code Intelligence
 
@@ -132,10 +157,6 @@ Large chunks are automatically truncated at 8K characters with a `[...truncated]
 | `--raw` | Verbose human-readable output |
 | `--timing` | Per-stage pipeline durations to stderr |
 
-### Search Filters
-
-Narrow results by language (`--lang rust`), file path glob (`--path "src/**/*.rs"`), symbol type (`--type function`), corpus scope (`--scope source`), and result count (`--limit 5`). Filters combine, so `--lang rust --type function --path "src/**"` returns only Rust functions under `src/`.
-
 ## MCP Server
 
 `vera mcp` exposes all capabilities over JSON-RPC (stdio), compatible with any MCP client:
@@ -158,9 +179,9 @@ Docker images available for CPU, CUDA, ROCm, and OpenVINO. Details: [docker.md](
 
 ## Agent Integration
 
-### Skill Files
+### Skill Files for 31 Agent Clients
 
-`vera agent install` installs skill files that teach AI agents how to write effective queries, when to use semantic search vs regex, and how to interpret results. Supports Junie, Claude Code, Cursor, Windsurf, Copilot, Cline, and Roo Code. Skills install globally or per-project.
+`vera agent install` installs skill files that teach AI agents how to write effective queries, when to use semantic search vs regex, and how to interpret results. Supports Junie, Claude Code, Cursor, Windsurf, Copilot, Cline, Roo Code, and 24 more agent clients. Skills install globally or per-project.
 
 ### Agent Config Snippets
 
@@ -176,13 +197,25 @@ During setup, Vera offers to add a usage snippet to your project's agent config 
 
 `vera setup` walks through backend selection, agent skill installation, and optional project indexing in one command. Skip the wizard with flags for non-interactive use.
 
+### Backend Management
+
+`vera backend` manages the ONNX runtime and model backend separately from the full setup wizard. Switch GPU backends, swap embedding models, or reconfigure API endpoints without re-running setup.
+
 ### Diagnostics
 
-`vera doctor` reports the saved and active backend, installed version, and checks GitHub for newer releases. `--probe` adds a deeper read-only ONNX session check. `vera repair` re-fetches missing local assets.
+`vera doctor` reports the saved and active backend, installed version, and checks GitHub for newer releases. `--probe` adds a deeper read-only ONNX session check. `--json` outputs machine-readable diagnostics. `vera repair` re-fetches missing local assets.
 
 ### Self-Updating
 
 `vera upgrade` inspects the current update plan and shows the exact command it would run. `--apply` executes it. Vera checks for new releases once per day and prints a hint when a newer version is available.
+
+### Configuration and Stats
+
+`vera config` shows the current configuration. `vera stats` shows index statistics (file count, chunk count, index size, language breakdown).
+
+### Uninstalling
+
+`vera uninstall` removes `~/.vera/` (binary, models, ONNX Runtime libs, config), agent skill files, and the PATH shim. Per-project indexes (`.vera/` in each project) are left in place.
 
 ### Cross-Platform
 
