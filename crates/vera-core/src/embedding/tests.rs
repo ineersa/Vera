@@ -554,3 +554,72 @@ async fn cached_provider_expected_dim_delegates() {
     let cached = CachedEmbeddingProvider::new(inner, 128);
     assert_eq!(cached.expected_dim(), Some(64));
 }
+
+// ── API provider query prefix tests ──────────────────────────────────
+
+#[test]
+fn api_provider_no_query_prefix_by_default() {
+    use crate::embedding::EmbeddingProviderConfig;
+
+    let config = EmbeddingProviderConfig::new(
+        "https://api.example.com/v1".to_string(),
+        "model-123".to_string(),
+        "test-key".to_string(),
+    );
+    assert!(
+        config.query_prefix.is_none(),
+        "query_prefix should be None by default"
+    );
+}
+
+#[test]
+fn api_provider_with_query_prefix() {
+    use crate::embedding::EmbeddingProviderConfig;
+
+    let config = EmbeddingProviderConfig::new(
+        "https://api.example.com/v1".to_string(),
+        "model-123".to_string(),
+        "test-key".to_string(),
+    )
+    .with_query_prefix("Represent this query for searching relevant code:");
+
+    assert_eq!(
+        config.query_prefix.as_deref(),
+        Some("Represent this query for searching relevant code:")
+    );
+}
+
+#[tokio::test]
+async fn api_provider_prepare_query_text_with_prefix() {
+    use crate::embedding::{EmbeddingProvider, EmbeddingProviderConfig, OpenAiProvider};
+
+    let config = EmbeddingProviderConfig::new(
+        "http://127.0.0.1:19999".to_string(),
+        "test-model".to_string(),
+        "test-key".to_string(),
+    )
+    .with_query_prefix("Represent this query for searching relevant code:");
+
+    let provider = OpenAiProvider::new(config).unwrap();
+    assert_eq!(
+        provider.prepare_query_text("find router code"),
+        "Represent this query for searching relevant code: find router code"
+    );
+}
+
+#[tokio::test]
+async fn api_provider_prepare_query_text_without_prefix() {
+    use crate::embedding::{EmbeddingProvider, EmbeddingProviderConfig, OpenAiProvider};
+
+    let config = EmbeddingProviderConfig::new(
+        "http://127.0.0.1:19999".to_string(),
+        "test-model".to_string(),
+        "test-key".to_string(),
+    );
+
+    let provider = OpenAiProvider::new(config).unwrap();
+    assert_eq!(
+        provider.prepare_query_text("find router code"),
+        "find router code"
+    );
+}

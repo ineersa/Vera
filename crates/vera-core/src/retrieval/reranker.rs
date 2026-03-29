@@ -454,6 +454,7 @@ struct RerankResponse {
 #[derive(Deserialize)]
 struct RerankResult {
     index: usize,
+    #[serde(alias = "score")]
     relevance_score: f64,
 }
 
