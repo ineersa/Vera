@@ -98,7 +98,22 @@ vera upgrade              # dry run: shows what would happen
 vera upgrade --apply      # applies the update
 ```
 
-After an upgrade, Vera automatically syncs stale agent skill installs. You can also re-run the installer: `bunx @vera-ai/cli install`. Set `VERA_NO_UPDATE_CHECK=1` to disable the automatic check.
+After an upgrade, Vera automatically syncs stale agent skill installs. Set `VERA_NO_UPDATE_CHECK=1` to disable the automatic check.
+
+If you are having trouble updating try one of these, using the package manager you initially installed Vera with:
+
+Bun: 
+```bash
+bun install -g @vera-ai/cli && bunx @vera-ai/cli install
+```
+npm: 
+```bash
+npm install -g @vera-ai/cli && npx @vera-ai/cli install
+```
+uvx: 
+```bash
+uvx vera-ai install 
+```
 
 </details>
 
