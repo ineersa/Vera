@@ -179,12 +179,20 @@ enum SelectionPreset {
     None,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstallWorkflowChoice {
+    RefreshStale,
+    Manage,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SkillLocationReport {
     client: AgentClient,
     scope: AgentScope,
     path: String,
     installed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    up_to_date: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,6 +213,12 @@ impl ClientInstallStatus {
         self.scopes.iter().any(|scope| scope.installed)
     }
 
+    fn is_stale(&self) -> bool {
+        self.scopes
+            .iter()
+            .any(|scope| scope.installed && !scope.up_to_date)
+    }
+
     fn install_scopes(&self) -> impl Iterator<Item = AgentScope> + '_ {
         self.scopes
             .iter()
@@ -216,6 +230,13 @@ impl ClientInstallStatus {
         self.scopes
             .iter()
             .filter(|scope| !scope.up_to_date)
+            .map(|scope| scope.scope)
+    }
+
+    fn stale_scopes(&self) -> impl Iterator<Item = AgentScope> + '_ {
+        self.scopes
+            .iter()
+            .filter(|scope| scope.installed && !scope.up_to_date)
             .map(|scope| scope.scope)
     }
 
@@ -312,6 +333,34 @@ fn install_interactive() -> anyhow::Result<()> {
         .filter(|status| status.is_installed())
         .map(|status| status.client)
         .collect();
+    let stale_locations = stale_locations_from_statuses(&statuses, &cwd, &home)?;
+
+    if !stale_locations.is_empty() {
+        let stale_install_count = statuses.iter().filter(|status| status.is_stale()).count();
+        let choice = cliclack::select(format!(
+            "Detected {} stale Vera skill install(s) across {} agent(s)",
+            stale_locations.len(),
+            stale_install_count,
+        ))
+        .item(
+            InstallWorkflowChoice::RefreshStale,
+            "Refresh stale installs now",
+            "update every stale Vera skill install in one step",
+        )
+        .item(
+            InstallWorkflowChoice::Manage,
+            "Manage installs manually",
+            "open the full install/remove selector",
+        )
+        .initial_value(InstallWorkflowChoice::RefreshStale)
+        .interact()?;
+
+        if choice == InstallWorkflowChoice::RefreshStale {
+            do_install(&stale_locations, false)?;
+            cliclack::outro("Done!")?;
+            return Ok(());
+        }
+    }
 
     let preset = cliclack::select("Starting selection")
         .item(
@@ -417,6 +466,7 @@ fn do_install(locations: &[SkillLocation], json_output: bool) -> anyhow::Result<
             scope: location.scope,
             path: location.path.display().to_string(),
             installed: true,
+            up_to_date: Some(true),
         })
         .collect();
 
@@ -532,6 +582,7 @@ fn do_remove(locations: &[SkillLocation], json_output: bool) -> anyhow::Result<(
             scope: location.scope,
             path: location.path.display().to_string(),
             installed: false,
+            up_to_date: None,
         });
     }
 
@@ -558,13 +609,27 @@ fn do_remove(locations: &[SkillLocation], json_output: bool) -> anyhow::Result<(
 }
 
 fn status(client: AgentClient, scope: AgentScope, json_output: bool) -> anyhow::Result<()> {
-    let reports = resolve_locations(client, scope)?
+    let cwd = std::env::current_dir().context("failed to resolve current directory")?;
+    let home = state::user_home_dir()?;
+    let statuses = collect_client_install_statuses(scope, &cwd, &home)?;
+
+    let reports = statuses
         .into_iter()
-        .map(|location| SkillLocationReport {
-            client: location.client,
-            scope: location.scope,
-            path: location.path.display().to_string(),
-            installed: location.path.join("SKILL.md").exists(),
+        .filter(|status| client == AgentClient::All || status.client == client)
+        .flat_map(|status| {
+            let cwd = cwd.clone();
+            let home = home.clone();
+            status.scopes.into_iter().map(move |scope_status| {
+                let path = skill_path_for(status.client, scope_status.scope, &cwd, &home)
+                    .expect("status paths should always resolve");
+                SkillLocationReport {
+                    client: status.client,
+                    scope: scope_status.scope,
+                    path: path.display().to_string(),
+                    installed: scope_status.installed,
+                    up_to_date: scope_status.installed.then_some(scope_status.up_to_date),
+                }
+            })
         })
         .collect::<Vec<_>>();
 
@@ -574,10 +639,15 @@ fn status(client: AgentClient, scope: AgentScope, json_output: bool) -> anyhow::
         let style = console::Style::new();
         let bold = style.clone().bold();
         let green = style.clone().green();
+        let yellow = style.clone().yellow();
         let dim = style.clone().dim();
 
         let installed: Vec<_> = reports.iter().filter(|r| r.installed).collect();
         let missing: Vec<_> = reports.iter().filter(|r| !r.installed).collect();
+        let stale: Vec<_> = installed
+            .iter()
+            .filter(|report| report.up_to_date == Some(false))
+            .collect();
 
         if installed.is_empty() {
             println!("{}", dim.apply_to("No Vera skills installed."));
@@ -587,13 +657,28 @@ fn status(client: AgentClient, scope: AgentScope, json_output: bool) -> anyhow::
             for report in &installed {
                 let name = format!("{:?}", report.client).to_lowercase();
                 let scope = format!("{:?}", report.scope).to_lowercase();
+                let marker = if report.up_to_date == Some(false) {
+                    yellow.apply_to("stale")
+                } else {
+                    green.apply_to("current")
+                };
                 println!(
-                    "  {} {:<7} {}",
+                    "  {} {:<7} {:<7} {}",
                     green.apply_to(format!("{:<14}", name)),
                     scope,
+                    marker,
                     dim.apply_to(&report.path)
                 );
             }
+        }
+
+        if !stale.is_empty() {
+            println!();
+            println!(
+                "{} {}",
+                bold.apply_to("Refresh:"),
+                dim.apply_to("Run `vera agent sync` to update all stale installs.")
+            );
         }
 
         if !missing.is_empty() {
@@ -711,6 +796,26 @@ fn collect_client_install_statuses(
             Ok(ClientInstallStatus { client, scopes })
         })
         .collect()
+}
+
+fn stale_locations_from_statuses(
+    statuses: &[ClientInstallStatus],
+    cwd: &Path,
+    home: &Path,
+) -> anyhow::Result<Vec<SkillLocation>> {
+    let mut locations = Vec::new();
+
+    for status in statuses {
+        for scope in status.stale_scopes() {
+            locations.push(SkillLocation {
+                client: status.client,
+                scope,
+                path: skill_path_for(status.client, scope, cwd, home)?,
+            });
+        }
+    }
+
+    Ok(locations)
 }
 
 fn resolve_locations_with_roots(
@@ -843,23 +948,20 @@ fn skill_path_for(
 fn sync(json_output: bool) -> anyhow::Result<()> {
     let home = state::user_home_dir()?;
     let cwd = std::env::current_dir().ok();
-    let skill_dirs = all_skill_paths(cwd.as_deref(), &home)?;
     let current_version = env!("CARGO_PKG_VERSION");
+    let scan_scope = if cwd.is_some() {
+        AgentScope::All
+    } else {
+        AgentScope::Global
+    };
+    let cwd = cwd.unwrap_or_else(|| home.clone());
+    let statuses = collect_client_install_statuses(scan_scope, &cwd, &home)?;
+    let stale_locations = stale_locations_from_statuses(&statuses, &cwd, &home)?;
 
     let mut updated = Vec::new();
-    for dir in &skill_dirs {
-        if !dir.join("SKILL.md").exists() {
-            continue;
-        }
-        let version = fs::read_to_string(dir.join(".version"))
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        if version == current_version {
-            continue;
-        }
-        install_skill_to(dir)?;
-        updated.push(dir.clone());
+    for location in &stale_locations {
+        install_skill_to(&location.path)?;
+        updated.push(location.path.clone());
     }
 
     if json_output {
@@ -894,12 +996,13 @@ fn sync(json_output: bool) -> anyhow::Result<()> {
 /// The snippet Vera offers to inject into agent config files.
 const AGENTS_MD_SNIPPET: &str = r#"## Code Search
 
-Use Vera before broad text search when you need to find where logic lives or how a feature works.
+Use Vera before opening many files or running broad text search when you need to find where logic lives or how a feature works.
 
 - `vera search "query"` for semantic code search
 - `vera grep "pattern"` for exact text or regex
 - `vera references <symbol>` for callers and callees when you know a symbol name
 - `vera update .` after code changes (`vera index .` if `.vera/` is missing)
+- If Vera is unavailable, tell the user to run `vera agent install` instead of silently falling back to broad file scanning
 "#;
 
 #[derive(Debug, Clone, Copy)]
@@ -917,10 +1020,6 @@ struct DetectedAgentConfig {
 
 /// Known agent config filenames to check.
 const AGENT_CONFIG_FILES: &[AgentConfigFile] = &[
-    AgentConfigFile {
-        name: "GEMINI.md",
-        description: "Gemini CLI default project context file",
-    },
     AgentConfigFile {
         name: "AGENTS.md",
         description: "shared agent instructions used by many tools",
@@ -957,7 +1056,6 @@ fn preferred_config_filename(selected_clients: &[AgentClient]) -> &'static str {
         AgentClient::Copilot => "COPILOT.md",
         AgentClient::Cursor => ".cursorrules",
         AgentClient::Cline => ".clinerules",
-        AgentClient::Gemini => "GEMINI.md",
         AgentClient::Windsurf => ".windsurfrules",
         _ => "AGENTS.md",
     }
@@ -1218,10 +1316,10 @@ mod tests {
     }
 
     #[test]
-    fn preferred_config_filename_uses_native_gemini_file() {
+    fn preferred_config_filename_uses_agents_for_gemini() {
         assert_eq!(
             preferred_config_filename(&[AgentClient::Gemini]),
-            "GEMINI.md"
+            "AGENTS.md"
         );
         assert_eq!(
             preferred_config_filename(&[AgentClient::Claude]),
@@ -1284,5 +1382,35 @@ mod tests {
             claude.scopes_needing_install().collect::<Vec<_>>(),
             vec![AgentScope::Global]
         );
+    }
+
+    #[test]
+    fn stale_locations_only_include_installed_stale_scopes() {
+        let temp = tempdir().unwrap();
+        let home = temp.path().join("home");
+        let cwd = temp.path().join("project");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+
+        let stale = skill_path_for(AgentClient::Claude, AgentScope::Global, &cwd, &home).unwrap();
+        fs::create_dir_all(&stale).unwrap();
+        fs::write(stale.join("SKILL.md"), "test").unwrap();
+        fs::write(stale.join(".version"), "0.0.0").unwrap();
+
+        let fresh = skill_path_for(AgentClient::Claude, AgentScope::Project, &cwd, &home).unwrap();
+        fs::create_dir_all(&fresh).unwrap();
+        fs::write(fresh.join("SKILL.md"), "test").unwrap();
+        fs::write(fresh.join(".version"), env!("CARGO_PKG_VERSION")).unwrap();
+
+        let missing_skill_dir =
+            skill_path_for(AgentClient::Gemini, AgentScope::Global, &cwd, &home).unwrap();
+        fs::create_dir_all(missing_skill_dir.parent().unwrap()).unwrap();
+
+        let statuses = collect_client_install_statuses(AgentScope::All, &cwd, &home).unwrap();
+        let stale_locations = stale_locations_from_statuses(&statuses, &cwd, &home).unwrap();
+
+        assert_eq!(stale_locations.len(), 1);
+        assert_eq!(stale_locations[0].client, AgentClient::Claude);
+        assert_eq!(stale_locations[0].scope, AgentScope::Global);
     }
 }

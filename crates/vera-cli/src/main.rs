@@ -103,7 +103,9 @@ enum Commands {
                       `vera stats` directly.\n\n\
                       `vera agent install` detects existing installs and lets you \
                       add or remove agents in one step. Deselecting an installed \
-                      agent removes it.\n\n\
+                      agent removes it. If stale installs are detected, the \
+                      interactive flow can refresh them in one step before \
+                      opening the full selector.\n\n\
                       `vera agent sync` refreshes all stale skill installs to match \
                       the current binary version, no prompts needed.\n\n\
                       Examples:\n  \

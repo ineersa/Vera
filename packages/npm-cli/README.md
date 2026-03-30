@@ -12,7 +12,7 @@ Current benchmark snapshot: on Vera's local 21-task, 4-repo release benchmark, `
 npm install -g @vera-ai/cli
 ```
 
-`vera setup` with no flags runs an interactive wizard (backend + agent skills + optional indexing). For focused changes: `vera backend` manages the ONNX runtime, `vera agent install` manages skill files and can update `GEMINI.md` / `AGENTS.md` / `CLAUDE.md` style project instructions, and `vera agent sync` refreshes stale skills after upgrades.
+`vera setup` with no flags runs an interactive wizard (backend + agent skills + optional indexing). For focused changes: `vera backend` manages the ONNX runtime, `vera agent install` manages skill files and can update `AGENTS.md` / `CLAUDE.md` style project instructions, and `vera agent sync` refreshes stale skills after upgrades.
 
 ## Usage
 
