@@ -139,8 +139,12 @@ pub async fn index_repository<P: EmbeddingProvider>(
     );
 
     // ── 3. Parse and chunk each file (parallelized with rayon) ──
-    let (all_chunks, parse_errors, file_hashes, all_refs) =
+    let (mut all_chunks, parse_errors, file_hashes, all_refs) =
         parse_discovered_files_parallel(&discovery, config);
+
+    // Split chunks that would exceed the embedding model's context window.
+    let max_chars = config.indexing.max_embedding_chars;
+    all_chunks = parsing::chunker::split_oversized_chunks(all_chunks, max_chars);
 
     info!(
         chunks = all_chunks.len(),

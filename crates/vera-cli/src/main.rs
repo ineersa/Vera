@@ -573,8 +573,9 @@ enum Commands {
                       Use `get <key>` to read a specific value, or `set <key> <value>` \
                       to update it.\n\n\
                       Configuration keys use dot notation:\n  \
-                      indexing.max_chunk_lines       Max lines per chunk (default: 200)\n  \
-                      indexing.max_file_size_bytes   Max file size to index (default: 1000000)\n  \
+                       indexing.max_chunk_lines       Max lines per chunk (default: 200)\n  \
+                       indexing.max_embedding_chars   Max embedding text chars, splits oversized (default: 3000)\n  \
+                       indexing.max_file_size_bytes   Max file size to index (default: 1000000)\n  \
                       retrieval.default_limit        Default result count (default: 10)\n  \
                       retrieval.rrf_k                RRF fusion constant (default: 60)\n  \
                       retrieval.rerank_candidates    Reranker candidate count (default: 50)\n  \

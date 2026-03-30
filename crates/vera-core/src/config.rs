@@ -33,6 +33,15 @@ pub struct IndexingConfig {
     /// Disable smart default exclusions.
     #[serde(default)]
     pub no_default_excludes: bool,
+    /// Maximum character length for the embedding text (metadata + content).
+    /// Chunks exceeding this are split into overlapping sub-chunks before
+    /// embedding. Default 3000 chars.
+    #[serde(default = "default_max_embedding_chars")]
+    pub max_embedding_chars: usize,
+}
+
+fn default_max_embedding_chars() -> usize {
+    3000
 }
 
 impl Default for IndexingConfig {
@@ -53,6 +62,7 @@ impl Default for IndexingConfig {
             extra_excludes: Vec::new(),
             no_ignore: false,
             no_default_excludes: false,
+            max_embedding_chars: default_max_embedding_chars(),
         }
     }
 }
@@ -502,11 +512,9 @@ mod tests {
     fn default_excludes_contains_common_dirs() {
         let config = IndexingConfig::default();
         assert!(config.default_excludes.contains(&".git".to_string()));
-        assert!(
-            config
-                .default_excludes
-                .contains(&"node_modules".to_string())
-        );
+        assert!(config
+            .default_excludes
+            .contains(&"node_modules".to_string()));
         assert!(config.default_excludes.contains(&"target".to_string()));
     }
 

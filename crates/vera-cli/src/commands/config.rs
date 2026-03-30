@@ -1,6 +1,6 @@
 //! `vera config` — Show or set configuration values.
 
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 
 use crate::helpers::load_runtime_config;
 use crate::state;
@@ -94,6 +94,10 @@ fn print_human_config(config: &vera_core::config::VeraConfig) {
         config.indexing.max_file_size_bytes
     );
     println!(
+        "    max_embedding_chars       {}",
+        config.indexing.max_embedding_chars
+    );
+    println!(
         "    default_excludes          {:?}",
         config.indexing.default_excludes
     );
@@ -148,6 +152,9 @@ pub fn get_config_value(
         "indexing.max_file_size_bytes" => Some(serde_json::Value::Number(
             config.indexing.max_file_size_bytes.into(),
         )),
+        "indexing.max_embedding_chars" => Some(serde_json::Value::Number(
+            config.indexing.max_embedding_chars.into(),
+        )),
         "indexing.default_excludes" => serde_json::to_value(&config.indexing.default_excludes).ok(),
         "retrieval.default_limit" => Some(serde_json::Value::Number(
             config.retrieval.default_limit.into(),
@@ -189,6 +196,9 @@ fn set_config_value(
         }
         "indexing.max_file_size_bytes" => {
             config.indexing.max_file_size_bytes = parse_value(key, value)?;
+        }
+        "indexing.max_embedding_chars" => {
+            config.indexing.max_embedding_chars = parse_value(key, value)?;
         }
         "indexing.default_excludes" => {
             config.indexing.default_excludes = serde_json::from_str(value).with_context(|| {
