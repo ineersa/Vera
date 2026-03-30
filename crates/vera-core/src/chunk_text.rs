@@ -8,6 +8,9 @@ use std::collections::BTreeSet;
 
 use crate::types::{Chunk, SymbolType};
 
+const MAX_METADATA_VALUE_CHARS: usize = 240;
+const MAX_METADATA_TOKEN_CHARS: usize = 80;
+
 /// Build the structured text used for semantic embeddings.
 pub fn build_embedding_text(chunk: &Chunk) -> String {
     build_structured_text(chunk)
@@ -160,6 +163,7 @@ fn extract_signature(chunk: &Chunk) -> Option<String> {
     }
 
     let signature = signature.split_whitespace().collect::<Vec<_>>().join(" ");
+    let signature = abbreviate_middle(&signature, MAX_METADATA_VALUE_CHARS);
     (!signature.is_empty()).then_some(signature)
 }
 
@@ -177,7 +181,8 @@ fn extract_summary(chunk: &Chunk) -> Option<String> {
                 .trim()
                 .to_string(),
         )
-        .filter(|line| !line.is_empty());
+        .filter(|line| !line.is_empty())
+        .map(|line| abbreviate_middle(&line, MAX_METADATA_VALUE_CHARS));
     }
 
     let lines: Vec<&str> = chunk.content.lines().collect();
@@ -219,7 +224,8 @@ fn extract_summary(chunk: &Chunk) -> Option<String> {
         break;
     }
 
-    (!summary_lines.is_empty()).then(|| summary_lines.join(" "))
+    (!summary_lines.is_empty())
+        .then(|| abbreviate_middle(&summary_lines.join(" "), MAX_METADATA_VALUE_CHARS))
 }
 
 fn extract_parameters(chunk: &Chunk) -> Vec<String> {
@@ -238,6 +244,7 @@ fn extract_parameters(chunk: &Chunk) -> Vec<String> {
         .map(str::trim)
         .filter(|part| !part.is_empty())
         .map(clean_parameter_name)
+        .map(|part| abbreviate_middle(&part, MAX_METADATA_TOKEN_CHARS))
         .filter(|part| !part.is_empty())
         .collect()
 }
@@ -273,7 +280,8 @@ fn extract_return_type(chunk: &Chunk) -> Option<String> {
                 .trim()
                 .to_string(),
         )
-        .filter(|rt| !rt.is_empty());
+        .filter(|rt| !rt.is_empty())
+        .map(|rt| abbreviate_middle(&rt, MAX_METADATA_TOKEN_CHARS));
     }
     None
 }
@@ -307,6 +315,7 @@ fn extract_imports(chunk: &Chunk) -> Vec<String> {
                 .take(8)
                 .collect::<Vec<_>>()
                 .join(" ");
+            let normalized = abbreviate_middle(&normalized, MAX_METADATA_TOKEN_CHARS);
             if !normalized.is_empty() {
                 imports.insert(normalized);
             }
@@ -363,11 +372,37 @@ fn extract_calls(chunk: &Chunk) -> Vec<String> {
             } else {
                 candidate.trim_end_matches('!').to_string()
             };
-            calls.insert(normalized);
+            let normalized = abbreviate_middle(&normalized, MAX_METADATA_TOKEN_CHARS);
+            if !normalized.is_empty() {
+                calls.insert(normalized);
+            }
         }
     }
 
     calls.into_iter().take(10).collect()
+}
+
+fn abbreviate_middle(value: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() <= max_chars {
+        return value.to_string();
+    }
+
+    if max_chars <= 3 {
+        return chars.into_iter().take(max_chars).collect();
+    }
+
+    let head_len = (max_chars - 3) / 2;
+    let tail_len = max_chars - 3 - head_len;
+    let head: String = chars.iter().take(head_len).collect();
+    let tail: String = chars[chars.len().saturating_sub(tail_len)..]
+        .iter()
+        .collect();
+    format!("{head}...{tail}")
 }
 
 fn extract_flow_hints(chunk: &Chunk) -> Vec<&'static str> {
@@ -572,5 +607,26 @@ pub fn authenticate(user: &str, password: &str) -> Result<Token> {\n\
         assert!(text.contains("Filename: Cargo.toml"));
         assert!(text.contains("Path: cargo toml Cargo.toml"));
         assert!(text.contains("Document:\n[workspace]"));
+    }
+
+    #[test]
+    fn abbreviate_middle_keeps_prefix_and_suffix() {
+        let shortened = abbreviate_middle("very_long_generated_identifier_name_for_testing", 16);
+        assert_eq!(shortened.len(), 16);
+        assert!(shortened.starts_with("very_l"));
+        assert!(shortened.ends_with("testing"));
+    }
+
+    #[test]
+    fn embedding_text_truncates_pathological_call_metadata() {
+        let mut chunk = rust_chunk();
+        chunk.content = format!("pub fn authenticate() {{\n    {}();\n}}", "a".repeat(200));
+
+        let text = build_embedding_text(&chunk);
+        let calls_line = text
+            .lines()
+            .find(|line| line.starts_with("Calls:"))
+            .expect("Calls metadata should be present");
+        assert!(!calls_line.contains(&"a".repeat(120)));
     }
 }

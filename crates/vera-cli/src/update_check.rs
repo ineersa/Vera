@@ -348,7 +348,9 @@ pub fn binary_version_status(force_refresh: bool) -> BinaryVersionStatus {
 pub fn suggested_update_command(install_method: Option<&str>) -> String {
     match install_method {
         Some("npm") => "npm install -g @vera-ai/cli@latest && npx @vera-ai/cli install".to_string(),
-        Some("bun") => "bun install -g @vera-ai/cli@latest && bunx @vera-ai/cli install".to_string(),
+        Some("bun") => {
+            "bun install -g @vera-ai/cli@latest && bunx @vera-ai/cli install".to_string()
+        }
         Some("pip") => "pip install --upgrade vera-ai && vera-ai install".to_string(),
         Some("uv") => "uvx vera-ai install".to_string(),
         _ => "vera upgrade".to_string(),

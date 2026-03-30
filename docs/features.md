@@ -185,7 +185,7 @@ Docker images available for CPU, CUDA, ROCm, and OpenVINO. Details: [docker.md](
 
 ### Agent Config Snippets
 
-During setup, Vera offers to add a usage snippet to your project's agent config file (`AGENTS.md`, `CLAUDE.md`, `.cursorrules`, etc.) so agents discover Vera automatically.
+During setup, Vera offers to add a usage snippet to your project's agent config file (`GEMINI.md`, `AGENTS.md`, `CLAUDE.md`, `COPILOT.md`, `.cursorrules`, `.clinerules`, `.windsurfrules`) so agents discover Vera automatically.
 
 ### Auto-Sync on Upgrade
 

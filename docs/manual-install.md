@@ -59,3 +59,4 @@ vera doctor --probe
 - Set `VERA_HOME` if you want Vera to use a different base directory than `~/.vera`.
 - Set `ORT_DYLIB_PATH` if you installed ONNX Runtime somewhere else and want Vera to use that exact shared library.
 - On Windows CUDA 13, the ONNX Runtime archive name and the folder inside the archive do not match. Current Vera releases handle that layout correctly.
+- On Windows CUDA, `vera setup --onnx-jina-cuda` and `vera repair --onnx-jina-cuda` refresh the downloaded runtime using the installed toolkit version from `CUDA_PATH` or `nvcc --version`. If you switch between CUDA 12 and CUDA 13 toolkits, rerun one of those commands.

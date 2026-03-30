@@ -172,12 +172,86 @@ pub enum AgentScope {
     All,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectionPreset {
+    Installed,
+    All,
+    None,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SkillLocationReport {
     client: AgentClient,
     scope: AgentScope,
     path: String,
     installed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScopeInstallStatus {
+    scope: AgentScope,
+    installed: bool,
+    up_to_date: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ClientInstallStatus {
+    client: AgentClient,
+    scopes: Vec<ScopeInstallStatus>,
+}
+
+impl ClientInstallStatus {
+    fn is_installed(&self) -> bool {
+        self.scopes.iter().any(|scope| scope.installed)
+    }
+
+    fn install_scopes(&self) -> impl Iterator<Item = AgentScope> + '_ {
+        self.scopes
+            .iter()
+            .filter(|scope| scope.installed)
+            .map(|scope| scope.scope)
+    }
+
+    fn scopes_needing_install(&self) -> impl Iterator<Item = AgentScope> + '_ {
+        self.scopes
+            .iter()
+            .filter(|scope| !scope.up_to_date)
+            .map(|scope| scope.scope)
+    }
+
+    fn hint(&self) -> String {
+        let installed_scopes: Vec<&'static str> = self
+            .scopes
+            .iter()
+            .filter(|scope| scope.installed)
+            .map(|scope| scope.scope.label())
+            .collect();
+
+        if installed_scopes.is_empty() {
+            return String::new();
+        }
+
+        let stale = self
+            .scopes
+            .iter()
+            .any(|scope| scope.installed && !scope.up_to_date);
+        let installed_label = format!("installed ({})", installed_scopes.join(" + "));
+        if stale {
+            format!("{installed_label}, needs sync")
+        } else {
+            format!("{installed_label}, up to date")
+        }
+    }
+}
+
+impl AgentScope {
+    fn label(&self) -> &'static str {
+        match self {
+            AgentScope::Global => "global",
+            AgentScope::Project => "project",
+            AgentScope::All => "both",
+        }
+    }
 }
 
 pub fn run(
@@ -214,7 +288,8 @@ fn install(
     let locations = resolve_locations(resolved_client, resolved_scope)?;
     do_install(&locations, json_output)?;
     if !json_output {
-        offer_agents_md_snippet()?;
+        let selected_clients = selected_clients_for(resolved_client);
+        offer_agents_md_snippet(&selected_clients)?;
     }
     Ok(())
 }
@@ -230,79 +305,70 @@ fn install_interactive() -> anyhow::Result<()> {
 
     let cwd = std::env::current_dir().context("failed to resolve current directory")?;
     let home = state::user_home_dir()?;
-    let current_version = env!("CARGO_PKG_VERSION");
-
+    let statuses = collect_client_install_statuses(scope, &cwd, &home)?;
     let all_clients = AgentClient::all_concrete();
-    let scopes_to_check: Vec<AgentScope> = match scope {
-        AgentScope::All => vec![AgentScope::Global, AgentScope::Project],
-        single => vec![single],
+    let installed_clients: Vec<AgentClient> = statuses
+        .iter()
+        .filter(|status| status.is_installed())
+        .map(|status| status.client)
+        .collect();
+
+    let preset = cliclack::select("Starting selection")
+        .item(
+            SelectionPreset::Installed,
+            "Keep installed",
+            "preselect agents that already have Vera installed",
+        )
+        .item(
+            SelectionPreset::All,
+            "Enable all",
+            "start with every supported agent selected",
+        )
+        .item(
+            SelectionPreset::None,
+            "Disable all",
+            "start with nothing selected",
+        )
+        .initial_value(if installed_clients.is_empty() {
+            SelectionPreset::None
+        } else {
+            SelectionPreset::Installed
+        })
+        .interact()?;
+
+    let initial_selected = match preset {
+        SelectionPreset::Installed => installed_clients.clone(),
+        SelectionPreset::All => all_clients.to_vec(),
+        SelectionPreset::None => Vec::new(),
     };
 
-    // Detect which clients already have an up-to-date install.
-    let mut already_installed = Vec::new();
-    for &client in all_clients {
-        for &s in &scopes_to_check {
-            let path = skill_path_for(client, s, &cwd, &home)?;
-            if path.join(".version").exists() {
-                let version = fs::read_to_string(path.join(".version"))
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string();
-                if version == current_version {
-                    already_installed.push(client);
-                }
-            }
-        }
+    let mut multi = cliclack::multiselect(
+        "Select agents to install (space to toggle, enter applies installs and removals)",
+    )
+    .initial_values(initial_selected);
+    for status in &statuses {
+        multi = multi.item(status.client, status.client.display_name(), status.hint());
     }
-
-    let mut multi = cliclack::multiselect("Select agents to install (space to toggle)");
-    for &client in all_clients {
-        let hint = if already_installed.contains(&client) {
-            "installed, up to date"
-        } else {
-            ""
-        };
-        multi = multi.item(client, client.display_name(), hint);
-    }
-    let selected: Vec<AgentClient> = multi.required(true).interact()?;
-
-    // Determine which currently-installed clients were deselected (to remove).
-    let installed_clients: Vec<AgentClient> = all_clients
-        .iter()
-        .copied()
-        .filter(|c| {
-            scopes_to_check.iter().any(|&s| {
-                skill_path_for(*c, s, &cwd, &home)
-                    .ok()
-                    .is_some_and(|p| p.join("SKILL.md").exists())
-            })
-        })
-        .collect();
-    let to_remove: Vec<AgentClient> = installed_clients
-        .iter()
-        .filter(|c| !selected.contains(c))
-        .copied()
-        .collect();
+    let selected: Vec<AgentClient> = multi.interact()?;
 
     let mut install_locations = Vec::new();
-    for client in &selected {
-        for &s in &scopes_to_check {
-            install_locations.push(SkillLocation {
-                client: *client,
-                scope: s,
-                path: skill_path_for(*client, s, &cwd, &home)?,
-            });
-        }
-    }
-
     let mut remove_locations = Vec::new();
-    for client in &to_remove {
-        for &s in &scopes_to_check {
-            let path = skill_path_for(*client, s, &cwd, &home)?;
-            if path.join("SKILL.md").exists() {
+
+    for status in &statuses {
+        if selected.contains(&status.client) {
+            for scope in status.scopes_needing_install() {
+                install_locations.push(SkillLocation {
+                    client: status.client,
+                    scope,
+                    path: skill_path_for(status.client, scope, &cwd, &home)?,
+                });
+            }
+        } else {
+            for scope in status.install_scopes() {
+                let path = skill_path_for(status.client, scope, &cwd, &home)?;
                 remove_locations.push(SkillLocation {
-                    client: *client,
-                    scope: s,
+                    client: status.client,
+                    scope,
                     path,
                 });
             }
@@ -312,13 +378,26 @@ fn install_interactive() -> anyhow::Result<()> {
     if !remove_locations.is_empty() {
         do_remove(&remove_locations, false)?;
     }
-    do_install(&install_locations, false)?;
-    offer_agents_md_snippet()?;
+    if !install_locations.is_empty() {
+        do_install(&install_locations, false)?;
+    }
+    if selected.is_empty() {
+        cliclack::outro("Done!")?;
+        return Ok(());
+    }
+    if install_locations.is_empty() && remove_locations.is_empty() {
+        cliclack::log::info("No skill changes needed. Installed selections are already current.")?;
+    }
+    offer_agents_md_snippet(&selected)?;
     cliclack::outro("Done!")?;
     Ok(())
 }
 
 fn do_install(locations: &[SkillLocation], json_output: bool) -> anyhow::Result<()> {
+    if locations.is_empty() {
+        return Ok(());
+    }
+
     for location in locations {
         if location.path.exists() {
             fs::remove_dir_all(&location.path).with_context(|| {
@@ -432,6 +511,10 @@ fn remove_interactive() -> anyhow::Result<()> {
 }
 
 fn do_remove(locations: &[SkillLocation], json_output: bool) -> anyhow::Result<()> {
+    if locations.is_empty() {
+        return Ok(());
+    }
+
     let mut reports = Vec::with_capacity(locations.len());
 
     for location in locations {
@@ -565,6 +648,13 @@ fn resolve_locations(client: AgentClient, scope: AgentScope) -> anyhow::Result<V
     resolve_locations_with_roots(client, scope, &cwd, &home)
 }
 
+fn selected_clients_for(client: AgentClient) -> Vec<AgentClient> {
+    match client {
+        AgentClient::All => AgentClient::all_concrete().to_vec(),
+        single => vec![single],
+    }
+}
+
 pub(crate) fn all_skill_paths(cwd: Option<&Path>, home: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let mut paths = BTreeSet::new();
     let cwd_for_globals = cwd.unwrap_or(home);
@@ -583,6 +673,44 @@ pub(crate) fn all_skill_paths(cwd: Option<&Path>, home: &Path) -> anyhow::Result
     }
 
     Ok(paths.into_iter().collect())
+}
+
+fn collect_client_install_statuses(
+    scope: AgentScope,
+    cwd: &Path,
+    home: &Path,
+) -> anyhow::Result<Vec<ClientInstallStatus>> {
+    let current_version = env!("CARGO_PKG_VERSION");
+    let scopes = match scope {
+        AgentScope::All => vec![AgentScope::Global, AgentScope::Project],
+        single => vec![single],
+    };
+
+    AgentClient::all_concrete()
+        .iter()
+        .copied()
+        .map(|client| {
+            let scopes = scopes
+                .iter()
+                .copied()
+                .map(|scope| {
+                    let path = skill_path_for(client, scope, cwd, home)?;
+                    let installed = path.join("SKILL.md").exists();
+                    let up_to_date = installed
+                        && fs::read_to_string(path.join(".version"))
+                            .unwrap_or_default()
+                            .trim()
+                            == current_version;
+                    Ok(ScopeInstallStatus {
+                        scope,
+                        installed,
+                        up_to_date,
+                    })
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            Ok(ClientInstallStatus { client, scopes })
+        })
+        .collect()
 }
 
 fn resolve_locations_with_roots(
@@ -766,80 +894,257 @@ fn sync(json_output: bool) -> anyhow::Result<()> {
 /// The snippet Vera offers to inject into agent config files.
 const AGENTS_MD_SNIPPET: &str = r#"## Code Search
 
-This project is indexed with Vera. Use `vera search "query"` for semantic code search
-and `vera grep "pattern"` for regex search. Run `vera update .` after code changes.
-For query tips and output format details, see the Vera skill in your skills directory.
+Use Vera before broad text search when you need to find where logic lives or how a feature works.
+
+- `vera search "query"` for semantic code search
+- `vera grep "pattern"` for exact text or regex
+- `vera references <symbol>` for callers and callees when you know a symbol name
+- `vera update .` after code changes (`vera index .` if `.vera/` is missing)
 "#;
 
-/// Known agent config filenames to check (in priority order).
-const AGENT_CONFIG_FILES: &[&str] = &[
-    "AGENTS.md",
-    "CLAUDE.md",
-    ".cursorrules",
-    ".windsurfrules",
-    "COPILOT.md",
+#[derive(Debug, Clone, Copy)]
+struct AgentConfigFile {
+    name: &'static str,
+    description: &'static str,
+}
+
+#[derive(Debug, Clone)]
+struct DetectedAgentConfig {
+    file: AgentConfigFile,
+    path: PathBuf,
+    mentions_vera: bool,
+}
+
+/// Known agent config filenames to check.
+const AGENT_CONFIG_FILES: &[AgentConfigFile] = &[
+    AgentConfigFile {
+        name: "GEMINI.md",
+        description: "Gemini CLI default project context file",
+    },
+    AgentConfigFile {
+        name: "AGENTS.md",
+        description: "shared agent instructions used by many tools",
+    },
+    AgentConfigFile {
+        name: "CLAUDE.md",
+        description: "Claude Code project instructions",
+    },
+    AgentConfigFile {
+        name: "COPILOT.md",
+        description: "GitHub Copilot coding agent instructions",
+    },
+    AgentConfigFile {
+        name: ".cursorrules",
+        description: "Cursor project rules",
+    },
+    AgentConfigFile {
+        name: ".clinerules",
+        description: "Cline project rules",
+    },
+    AgentConfigFile {
+        name: ".windsurfrules",
+        description: "Windsurf project rules",
+    },
 ];
 
-/// Check if any agent config file in the current directory already mentions Vera.
-/// Returns the path of the first config file found (if any) and whether it mentions Vera.
-fn find_agent_config(cwd: &Path) -> (Option<PathBuf>, bool) {
-    for &name in AGENT_CONFIG_FILES {
-        let path = cwd.join(name);
-        if path.is_file() {
+fn preferred_config_filename(selected_clients: &[AgentClient]) -> &'static str {
+    if selected_clients.len() != 1 {
+        return "AGENTS.md";
+    }
+
+    match selected_clients[0] {
+        AgentClient::Claude => "CLAUDE.md",
+        AgentClient::Copilot => "COPILOT.md",
+        AgentClient::Cursor => ".cursorrules",
+        AgentClient::Cline => ".clinerules",
+        AgentClient::Gemini => "GEMINI.md",
+        AgentClient::Windsurf => ".windsurfrules",
+        _ => "AGENTS.md",
+    }
+}
+
+fn find_agent_configs(cwd: &Path) -> Vec<DetectedAgentConfig> {
+    AGENT_CONFIG_FILES
+        .iter()
+        .filter_map(|file| {
+            let path = cwd.join(file.name);
+            if !path.is_file() {
+                return None;
+            }
+
             let mentions_vera = fs::read_to_string(&path)
                 .map(|content| {
                     let lower = content.to_lowercase();
                     lower.contains("vera search")
                         || lower.contains("vera grep")
                         || lower.contains("vera update")
+                        || lower.contains("vera references")
                 })
                 .unwrap_or(false);
-            return (Some(path), mentions_vera);
-        }
-    }
-    (None, false)
+
+            Some(DetectedAgentConfig {
+                file: *file,
+                path,
+                mentions_vera,
+            })
+        })
+        .collect()
 }
 
-/// After skill install, offer to add a Vera snippet to the project's agent config file.
-fn offer_agents_md_snippet() -> anyhow::Result<()> {
-    let cwd = std::env::current_dir().context("failed to resolve current directory")?;
-    let (existing, mentions_vera) = find_agent_config(&cwd);
-
-    if mentions_vera {
-        return Ok(());
+fn insert_vera_snippet(existing: &str, file_name: &str) -> String {
+    if file_name.ends_with(".md") {
+        return insert_vera_snippet_into_markdown(existing);
     }
 
-    let (action, target_path) = if let Some(ref path) = existing {
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let mut content = String::new();
+    content.push_str(AGENTS_MD_SNIPPET.trim_end());
+    content.push_str("\n\n");
+    content.push_str(existing.trim_start_matches('\n'));
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content
+}
+
+fn insert_vera_snippet_into_markdown(existing: &str) -> String {
+    let heading_insert_pos = existing
+        .lines()
+        .next()
+        .filter(|line| line.trim_start().starts_with("# "))
+        .map(|first_line| {
+            let mut insert_pos = first_line.len();
+            if existing.as_bytes().get(insert_pos) == Some(&b'\n') {
+                insert_pos += 1;
+            }
+            while let Some(rest) = existing.get(insert_pos..) {
+                if rest.is_empty() {
+                    break;
+                }
+                let next_newline = rest.find('\n').map(|idx| idx + 1).unwrap_or(rest.len());
+                let line = &rest[..next_newline];
+                if line.trim().is_empty() {
+                    insert_pos += next_newline;
+                    continue;
+                }
+                break;
+            }
+            insert_pos
+        })
+        .unwrap_or(0);
+
+    let (head, tail) = existing.split_at(heading_insert_pos);
+    let mut content = String::new();
+    content.push_str(head);
+    if !content.is_empty() && !content.ends_with("\n\n") {
+        if content.ends_with('\n') {
+            content.push('\n');
+        } else {
+            content.push_str("\n\n");
+        }
+    }
+    content.push_str(AGENTS_MD_SNIPPET.trim_end());
+    if !tail.is_empty() {
+        content.push_str("\n\n");
+        content.push_str(tail.trim_start_matches('\n'));
+    } else {
+        content.push('\n');
+    }
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content
+}
+
+fn choose_existing_agent_config(
+    existing: &[DetectedAgentConfig],
+    preferred_name: &str,
+) -> anyhow::Result<PathBuf> {
+    if existing.len() == 1 {
+        let name = existing[0].file.name;
         let yes: bool = cliclack::confirm(format!("Add Vera usage snippet to {name}?"))
             .initial_value(true)
             .interact()?;
         if !yes {
-            return Ok(());
+            return Ok(PathBuf::new());
         }
-        ("Appended", path.clone())
-    } else {
-        let yes: bool =
-            cliclack::confirm("No AGENTS.md found. Create one with Vera usage instructions?")
-                .initial_value(true)
-                .interact()?;
+        return Ok(existing[0].path.clone());
+    }
+
+    let preferred_idx = existing
+        .iter()
+        .position(|config| config.file.name == preferred_name)
+        .unwrap_or(0);
+    let mut select = cliclack::select("Choose agent config file for the Vera usage snippet")
+        .initial_value(preferred_idx);
+    for (idx, config) in existing.iter().enumerate() {
+        select = select.item(
+            idx,
+            config.file.name,
+            format!("existing file: {}", config.file.description),
+        );
+    }
+    let selected_idx: usize = select.interact()?;
+    Ok(existing[selected_idx].path.clone())
+}
+
+fn choose_new_agent_config_path(cwd: &Path, preferred_name: &str) -> anyhow::Result<PathBuf> {
+    let preferred_idx = AGENT_CONFIG_FILES
+        .iter()
+        .position(|file| file.name == preferred_name)
+        .unwrap_or(0);
+    let mut select = cliclack::select("Choose which agent config file Vera should create")
+        .initial_value(preferred_idx);
+    for (idx, file) in AGENT_CONFIG_FILES.iter().enumerate() {
+        select = select.item(idx, file.name, file.description);
+    }
+    let selected_idx: usize = select.interact()?;
+    Ok(cwd.join(AGENT_CONFIG_FILES[selected_idx].name))
+}
+
+/// After skill install, offer to add a Vera snippet to the project's agent config file.
+fn offer_agents_md_snippet(selected_clients: &[AgentClient]) -> anyhow::Result<()> {
+    let cwd = std::env::current_dir().context("failed to resolve current directory")?;
+    let existing = find_agent_configs(&cwd);
+
+    if existing.iter().any(|config| config.mentions_vera) {
+        return Ok(());
+    }
+
+    let preferred_name = preferred_config_filename(selected_clients);
+    let target_path = if existing.is_empty() {
+        let yes: bool = cliclack::confirm(
+            "No agent config file found. Create one with Vera usage instructions?",
+        )
+        .initial_value(true)
+        .interact()?;
         if !yes {
             return Ok(());
         }
-        ("Created", cwd.join("AGENTS.md"))
-    };
-
-    let mut content = if target_path.is_file() {
-        let mut c = fs::read_to_string(&target_path)?;
-        if !c.ends_with('\n') {
-            c.push('\n');
-        }
-        c.push('\n');
-        c
+        choose_new_agent_config_path(&cwd, preferred_name)?
     } else {
-        String::new()
+        choose_existing_agent_config(&existing, preferred_name)?
     };
-    content.push_str(AGENTS_MD_SNIPPET);
+    if target_path.as_os_str().is_empty() {
+        return Ok(());
+    }
+
+    let action = if target_path.is_file() {
+        "Updated"
+    } else {
+        "Created"
+    };
+    let content = if target_path.is_file() {
+        let existing = fs::read_to_string(&target_path)?;
+        let name = target_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
+        insert_vera_snippet(&existing, &name)
+    } else {
+        let mut content = AGENTS_MD_SNIPPET.trim_end().to_string();
+        content.push('\n');
+        content
+    };
     fs::write(&target_path, &content)?;
 
     let name = target_path
@@ -853,6 +1158,7 @@ fn offer_agents_md_snippet() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn resolve_locations_expands_scope_all() {
@@ -908,6 +1214,75 @@ mod tests {
                 .filter(|path| { **path == PathBuf::from("/tmp/project/.agents/skills/vera") })
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn preferred_config_filename_uses_native_gemini_file() {
+        assert_eq!(
+            preferred_config_filename(&[AgentClient::Gemini]),
+            "GEMINI.md"
+        );
+        assert_eq!(
+            preferred_config_filename(&[AgentClient::Claude]),
+            "CLAUDE.md"
+        );
+        assert_eq!(
+            preferred_config_filename(&[AgentClient::Gemini, AgentClient::Claude]),
+            "AGENTS.md"
+        );
+    }
+
+    #[test]
+    fn insert_vera_snippet_into_markdown_places_section_after_title() {
+        let existing = "# Repository Guidelines\n\n## Build\n\nRun tests.\n";
+        let updated = insert_vera_snippet_into_markdown(existing);
+        let expected_prefix = "# Repository Guidelines\n\n## Code Search\n";
+        assert!(updated.starts_with(expected_prefix), "{updated}");
+        assert!(updated.contains("## Build"));
+    }
+
+    #[test]
+    fn insert_vera_snippet_prepends_rules_files() {
+        let existing = "- prefer concise answers\n- run tests first\n";
+        let updated = insert_vera_snippet(existing, ".cursorrules");
+        assert!(updated.starts_with("## Code Search\n"));
+        assert!(updated.contains("- prefer concise answers"));
+    }
+
+    #[test]
+    fn collect_client_install_statuses_tracks_installed_and_stale_scopes() {
+        let temp = tempdir().unwrap();
+        let home = temp.path().join("home");
+        let cwd = temp.path().join("project");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+
+        let global = skill_path_for(AgentClient::Claude, AgentScope::Global, &cwd, &home).unwrap();
+        fs::create_dir_all(&global).unwrap();
+        fs::write(global.join("SKILL.md"), "test").unwrap();
+        fs::write(global.join(".version"), "0.0.0").unwrap();
+
+        let project =
+            skill_path_for(AgentClient::Claude, AgentScope::Project, &cwd, &home).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("SKILL.md"), "test").unwrap();
+        fs::write(project.join(".version"), env!("CARGO_PKG_VERSION")).unwrap();
+
+        let statuses = collect_client_install_statuses(AgentScope::All, &cwd, &home).unwrap();
+        let claude = statuses
+            .iter()
+            .find(|status| status.client == AgentClient::Claude)
+            .unwrap();
+
+        assert!(claude.is_installed());
+        assert_eq!(
+            claude.install_scopes().collect::<Vec<_>>(),
+            vec![AgentScope::Global, AgentScope::Project]
+        );
+        assert_eq!(
+            claude.scopes_needing_install().collect::<Vec<_>>(),
+            vec![AgentScope::Global]
         );
     }
 }

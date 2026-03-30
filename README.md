@@ -209,16 +209,19 @@ Full methodology and version history: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## Configure Your AI Agent
 
-`vera agent install` installs the Vera skill for your coding agents and offers to add a usage snippet to your project's `AGENTS.md` (or `CLAUDE.md`, `.cursorrules`, etc.).
+`vera agent install` installs the Vera skill for your coding agents and offers to add a usage snippet to your project's `GEMINI.md`, `AGENTS.md`, `CLAUDE.md`, `COPILOT.md`, or editor rules file. Installed agents start preselected in the interactive picker, and deselecting one removes its existing Vera skill install.
 
 If you skipped the prompt or want to add it manually:
 
 ```markdown
 ## Code Search
 
-This project is indexed with Vera. Use `vera search "query"` for semantic code search
-and `vera grep "pattern"` for regex search. Run `vera update .` after code changes.
-For query tips and output format details, see the Vera skill in your skills directory.
+Use Vera before broad text search when you need to find where logic lives or how a feature works.
+
+- `vera search "query"` for semantic code search
+- `vera grep "pattern"` for exact text or regex
+- `vera references <symbol>` for callers and callees when you know a symbol name
+- `vera update .` after code changes (`vera index .` if `.vera/` is missing)
 ```
 
 ## Contributing

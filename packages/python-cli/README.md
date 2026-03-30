@@ -12,7 +12,7 @@ Current benchmark snapshot: on Vera's local 21-task, 4-repo release benchmark, `
 pip install vera-ai
 ```
 
-`vera-ai setup` only configures the backend. Run `vera-ai agent install` to set up skill files for your agents (interactive by default, or pass `--client` and `--scope` for non-interactive use).
+`vera-ai setup` only configures the backend. Run `vera-ai agent install` to set up skill files for your agents (interactive by default, or pass `--client` and `--scope` for non-interactive use). The interactive flow can also update `GEMINI.md` / `AGENTS.md` / `CLAUDE.md` style project instructions for you.
 
 ## Usage
 

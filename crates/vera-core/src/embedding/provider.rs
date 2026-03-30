@@ -1,10 +1,11 @@
 //! Embedding provider abstraction and OpenAI-compatible implementation.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
@@ -437,6 +438,153 @@ impl<P: EmbeddingProvider> EmbeddingProvider for CachedEmbeddingProvider<P> {
 
 // ── Batch embedding orchestrator ─────────────────────────────────────
 
+const CONTEXT_ERROR_CHARS_PER_TOKEN: usize = 2;
+const TRUNCATED_EMBEDDING_MARKER: &str = "\n\n[truncated for embedding]";
+
+#[derive(Clone)]
+struct EmbeddingBatchItem {
+    original_index: usize,
+    chunk_id: String,
+    text: String,
+}
+
+fn embedding_error_message(error: &EmbeddingError) -> &str {
+    match error {
+        EmbeddingError::AuthError { message }
+        | EmbeddingError::ConnectionError { message }
+        | EmbeddingError::ApiError { message, .. }
+        | EmbeddingError::RateLimitError { message }
+        | EmbeddingError::ResponseError { message } => message,
+    }
+}
+
+fn context_size_limit(error: &EmbeddingError) -> Option<usize> {
+    let message = embedding_error_message(error);
+    if !message.contains("context size")
+        && !message.contains("exceed_context_size_error")
+        && !message.contains("\"n_ctx\"")
+    {
+        return None;
+    }
+
+    static N_CTX_RE: OnceLock<Regex> = OnceLock::new();
+    static MAX_CONTEXT_RE: OnceLock<Regex> = OnceLock::new();
+    let n_ctx_re = N_CTX_RE.get_or_init(|| Regex::new(r#""n_ctx"\s*:\s*(\d+)"#).unwrap());
+    let max_context_re =
+        MAX_CONTEXT_RE.get_or_init(|| Regex::new(r"max context size \((\d+)\)").unwrap());
+
+    n_ctx_re
+        .captures(message)
+        .and_then(|caps| caps.get(1))
+        .or_else(|| {
+            max_context_re
+                .captures(message)
+                .and_then(|caps| caps.get(1))
+        })
+        .and_then(|capture| capture.as_str().parse::<usize>().ok())
+        .or(Some(8192))
+}
+
+fn truncate_to_char_boundary(text: &str, max_chars: usize) -> &str {
+    if text.chars().count() <= max_chars {
+        return text;
+    }
+
+    text.char_indices()
+        .nth(max_chars)
+        .map(|(idx, _)| &text[..idx])
+        .unwrap_or(text)
+}
+
+fn shrink_text_for_context_limit(text: &str, max_tokens: usize) -> String {
+    let current_chars = text.chars().count();
+    if current_chars <= 1 {
+        return text.to_string();
+    }
+
+    let estimated_budget = max_tokens.saturating_mul(CONTEXT_ERROR_CHARS_PER_TOKEN);
+    let fallback_budget = current_chars.saturating_mul(3) / 4;
+    let marker_chars = TRUNCATED_EMBEDDING_MARKER.chars().count();
+    let target_chars = estimated_budget
+        .min(fallback_budget)
+        .max(1)
+        .saturating_sub(marker_chars);
+
+    if target_chars >= current_chars {
+        return text.to_string();
+    }
+
+    let truncated = truncate_to_char_boundary(text, target_chars).trim_end();
+    if truncated.is_empty() {
+        return text.to_string();
+    }
+
+    let mut shrunk = truncated.to_string();
+    shrunk.push_str(TRUNCATED_EMBEDDING_MARKER);
+    shrunk
+}
+
+async fn embed_batch_resilient<P: EmbeddingProvider>(
+    provider: &P,
+    items: Vec<EmbeddingBatchItem>,
+) -> Result<Vec<(usize, String, Vec<f32>)>, EmbeddingError> {
+    let mut pending = vec![items];
+    let mut completed = Vec::new();
+
+    while let Some(batch) = pending.pop() {
+        let texts: Vec<String> = batch.iter().map(|item| item.text.clone()).collect();
+
+        match provider.embed_batch(&texts).await {
+            Ok(vectors) => {
+                completed.extend(
+                    batch
+                        .into_iter()
+                        .zip(vectors.into_iter())
+                        .map(|(item, vector)| (item.original_index, item.chunk_id, vector)),
+                );
+            }
+            Err(error) => {
+                let Some(limit) = context_size_limit(&error) else {
+                    return Err(error);
+                };
+
+                if batch.len() > 1 {
+                    let mid = batch.len() / 2;
+                    debug!(
+                        batch_size = batch.len(),
+                        token_limit = limit,
+                        "embedding batch exceeded provider context limit, retrying in smaller batches"
+                    );
+                    pending.push(batch[mid..].to_vec());
+                    pending.push(batch[..mid].to_vec());
+                    continue;
+                }
+
+                let item = batch.into_iter().next().expect("single-item batch");
+                let shrunk_text = shrink_text_for_context_limit(&item.text, limit);
+                if shrunk_text == item.text {
+                    return Err(error);
+                }
+
+                warn!(
+                    chunk_id = %item.chunk_id,
+                    token_limit = limit,
+                    original_chars = item.text.chars().count(),
+                    shrunk_chars = shrunk_text.chars().count(),
+                    "embedding input exceeded provider context limit; retrying with a truncated text"
+                );
+                pending.push(vec![EmbeddingBatchItem {
+                    text: shrunk_text,
+                    ..item
+                }]);
+            }
+        }
+    }
+
+    completed.sort_by_key(|(original_index, _, _)| *original_index);
+    Ok(completed)
+}
+
 /// Embed all chunks using the given provider, respecting batch size.
 ///
 /// Returns a vector of `(chunk_id, embedding)` pairs in the same order
@@ -462,12 +610,20 @@ pub async fn embed_chunks<P: EmbeddingProvider>(
             "embedding batch"
         );
 
-        let texts: Vec<String> = batch.iter().map(chunk_to_embedding_text).collect();
+        let items: Vec<EmbeddingBatchItem> = batch
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| EmbeddingBatchItem {
+                original_index: index,
+                chunk_id: chunk.id.clone(),
+                text: chunk_to_embedding_text(chunk),
+            })
+            .collect();
 
-        let vectors = provider.embed_batch(&texts).await?;
+        let vectors = embed_batch_resilient(provider, items).await?;
 
-        for (chunk, vector) in batch.iter().zip(vectors.into_iter()) {
-            results.push((chunk.id.clone(), vector));
+        for (_, chunk_id, vector) in vectors {
+            results.push((chunk_id, vector));
         }
     }
 
@@ -510,19 +666,17 @@ pub async fn embed_chunks_concurrent<P: EmbeddingProvider>(
 
     // Prepare all batch inputs upfront (in length-sorted order).
     // (original_index, chunk_id) pairs + embedding texts per batch.
-    type BatchInput = (Vec<(usize, String)>, Vec<String>);
-    let batch_inputs: Vec<BatchInput> = indexed_chunks
+    let batch_inputs: Vec<Vec<EmbeddingBatchItem>> = indexed_chunks
         .chunks(batch_size)
         .map(|batch| {
-            let ids: Vec<(usize, String)> = batch
+            batch
                 .iter()
-                .map(|(orig_idx, c)| (*orig_idx, c.id.clone()))
-                .collect();
-            let texts: Vec<String> = batch
-                .iter()
-                .map(|(_, c)| chunk_to_embedding_text(c))
-                .collect();
-            (ids, texts)
+                .map(|(orig_idx, chunk)| EmbeddingBatchItem {
+                    original_index: *orig_idx,
+                    chunk_id: chunk.id.clone(),
+                    text: chunk_to_embedding_text(chunk),
+                })
+                .collect()
         })
         .collect();
 
@@ -538,17 +692,11 @@ pub async fn embed_chunks_concurrent<P: EmbeddingProvider>(
         let futures: Vec<_> = group
             .iter()
             .enumerate()
-            .map(|(i, (ids, texts))| {
+            .map(|(i, items)| {
                 let batch_idx = group_start + i;
                 async move {
                     debug!(batch = batch_idx + 1, total_batches, "embedding batch");
-                    let vectors = provider.embed_batch(texts).await?;
-                    let triples: Vec<(usize, String, Vec<f32>)> = ids
-                        .iter()
-                        .zip(vectors)
-                        .map(|((orig_idx, id), vec)| (*orig_idx, id.clone(), vec))
-                        .collect();
-                    Ok::<_, EmbeddingError>(triples)
+                    embed_batch_resilient(provider, items.clone()).await
                 }
             })
             .collect();
