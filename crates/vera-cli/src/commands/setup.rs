@@ -123,6 +123,7 @@ fn run_wizard() -> anyhow::Result<()> {
             .interact()?;
         commands::index::execute(
             path.trim(),
+            false,
             effective_backend,
             Vec::new(),
             false,
@@ -188,7 +189,15 @@ pub(crate) fn configure_backend(
     }
 
     if let Some(path) = index_path.as_deref() {
-        commands::index::execute(path, effective_backend, Vec::new(), false, false, false)?;
+        commands::index::execute(
+            path,
+            json_output,
+            effective_backend,
+            Vec::new(),
+            false,
+            false,
+            false,
+        )?;
     }
 
     let report = SetupReport {

@@ -11,7 +11,7 @@ mod provider;
 
 pub use provider::{
     CachedEmbeddingProvider, EmbeddingError, EmbeddingProvider, EmbeddingProviderConfig,
-    OpenAiProvider, embed_chunks, embed_chunks_concurrent,
+    OpenAiProvider, embed_chunks, embed_chunks_concurrent, embed_chunks_concurrent_with_progress,
 };
 
 pub mod dynamic;

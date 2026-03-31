@@ -14,7 +14,7 @@ use tracing::{debug, info, warn};
 
 use crate::config::VeraConfig;
 use crate::discovery::{self, DiscoveryResult};
-use crate::embedding::{EmbeddingProvider, embed_chunks_concurrent};
+use crate::embedding::{EmbeddingProvider, embed_chunks_concurrent_with_progress};
 use crate::indexing::update::content_hash;
 use crate::parsing;
 use crate::parsing::references::RawReference;
@@ -54,6 +54,26 @@ pub struct FileError {
     pub file_path: String,
     pub error: String,
 }
+
+// ── Progress reporting ───────────────────────────────────────────────
+
+/// Progress events emitted during indexing.
+#[derive(Debug, Clone)]
+pub enum IndexProgress {
+    /// File discovery complete.
+    DiscoveryDone { file_count: usize },
+    /// Parsing and chunking complete.
+    ParsingDone { chunk_count: usize },
+    /// An embedding batch finished. `done` is cumulative chunks embedded so far.
+    EmbeddingProgress { done: usize, total: usize },
+    /// All embeddings generated.
+    EmbeddingDone { count: usize },
+    /// Index artifacts written to disk.
+    StorageDone,
+}
+
+/// No-op progress callback (used when caller doesn't need progress).
+pub(crate) fn no_progress(_: IndexProgress) {}
 
 // ── Index directory layout ───────────────────────────────────────────
 
@@ -96,6 +116,21 @@ pub async fn index_repository<P: EmbeddingProvider>(
     config: &VeraConfig,
     model_name: &str,
 ) -> Result<IndexSummary> {
+    index_repository_with_progress(repo_path, provider, config, model_name, no_progress).await
+}
+
+/// Index a repository with progress reporting via a callback.
+pub async fn index_repository_with_progress<P, F>(
+    repo_path: &Path,
+    provider: &P,
+    config: &VeraConfig,
+    model_name: &str,
+    on_progress: F,
+) -> Result<IndexSummary>
+where
+    P: EmbeddingProvider,
+    F: Fn(IndexProgress) + Send + Sync,
+{
     let start = Instant::now();
 
     // ── 1. Validate path ─────────────────────────────────────────
@@ -137,6 +172,9 @@ pub async fn index_repository<P: EmbeddingProvider>(
         error_skipped = discovery.error_skipped,
         "file discovery complete"
     );
+    on_progress(IndexProgress::DiscoveryDone {
+        file_count: discovery.files.len(),
+    });
 
     // ── 3. Parse and chunk each file (parallelized with rayon) ──
     let (all_chunks, parse_errors, file_hashes, all_refs) =
@@ -147,6 +185,9 @@ pub async fn index_repository<P: EmbeddingProvider>(
         parse_errors = parse_errors.len(),
         "parsing complete"
     );
+    on_progress(IndexProgress::ParsingDone {
+        chunk_count: all_chunks.len(),
+    });
 
     if all_chunks.is_empty() {
         return Ok(IndexSummary {
@@ -166,10 +207,18 @@ pub async fn index_repository<P: EmbeddingProvider>(
     let batch_size = config.embedding.batch_size;
     let max_concurrent_requests = config.embedding.max_concurrent_requests;
 
-    let mut embeddings =
-        embed_chunks_concurrent(provider, &all_chunks, batch_size, max_concurrent_requests)
-            .await
-            .context("embedding generation failed")?;
+    let progress_cb = |done: usize, total: usize| {
+        on_progress(IndexProgress::EmbeddingProgress { done, total });
+    };
+    let mut embeddings = embed_chunks_concurrent_with_progress(
+        provider,
+        &all_chunks,
+        batch_size,
+        max_concurrent_requests,
+        progress_cb,
+    )
+    .await
+    .context("embedding generation failed")?;
 
     // Truncate vectors if max_stored_dim is configured.
     let stored_dim = super::truncate_embeddings(&mut embeddings, config.embedding.max_stored_dim);
@@ -178,6 +227,9 @@ pub async fn index_repository<P: EmbeddingProvider>(
         embeddings = embeddings.len(),
         stored_dim, "embeddings generated"
     );
+    on_progress(IndexProgress::EmbeddingDone {
+        count: embeddings.len(),
+    });
 
     // ── 5. Store everything on disk ──────────────────────────────
     let idx_dir = index_dir(&repo_root);
@@ -192,6 +244,7 @@ pub async fn index_repository<P: EmbeddingProvider>(
     .context("failed to write index artifacts")?;
 
     info!(index_dir = %idx_dir.display(), "index artifacts written");
+    on_progress(IndexProgress::StorageDone);
 
     let files_parsed = discovery.files.len() - parse_errors.len();
 

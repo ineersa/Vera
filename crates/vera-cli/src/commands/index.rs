@@ -1,9 +1,11 @@
 //! `vera index <path>` — Index a codebase for search.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use vera_core::config::InferenceBackend;
+use vera_core::indexing::IndexProgress;
 
 use crate::helpers::{load_runtime_config, print_human_summary};
 
@@ -21,6 +23,7 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let summary = execute(
         path,
+        json_output,
         backend,
         exclude,
         no_ignore,
@@ -42,6 +45,7 @@ pub fn run(
 /// Index a repository and return the resulting summary.
 pub fn execute(
     path: &str,
+    json_output: bool,
     backend: InferenceBackend,
     exclude: Vec<String>,
     no_ignore: bool,
@@ -79,14 +83,63 @@ pub fn execute(
         &config, backend,
     ))?;
 
+    // Use progress bar for interactive (non-JSON) output.
+    if json_output {
+        let summary = rt
+            .block_on(vera_core::indexing::index_repository(
+                repo_path,
+                &provider,
+                &config,
+                &model_name,
+            ))
+            .context("indexing failed")?;
+        return Ok(summary);
+    }
+
+    let multi = cliclack::multi_progress("Indexing...");
+    let spinner = multi.add(cliclack::spinner());
+    spinner.start("Discovering files...");
+    let embed_bar: Arc<cliclack::ProgressBar> = Arc::new(multi.add(cliclack::progress_bar(0)));
+    let embed_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let spinner_ref = &spinner;
+    let embed_bar_ref = embed_bar.clone();
+    let embed_started_ref = embed_started.clone();
+
+    let on_progress = move |event: IndexProgress| match event {
+        IndexProgress::DiscoveryDone { file_count } => {
+            spinner_ref.stop(format!("Discovered {file_count} files"));
+        }
+        IndexProgress::ParsingDone { chunk_count } => {
+            spinner_ref.start(format!("Parsed into {chunk_count} chunks"));
+            spinner_ref.stop(format!("Parsed into {chunk_count} chunks"));
+        }
+        IndexProgress::EmbeddingProgress { done, total } => {
+            if !embed_started_ref.load(std::sync::atomic::Ordering::Relaxed) {
+                embed_started_ref.store(true, std::sync::atomic::Ordering::Relaxed);
+                embed_bar_ref.set_length(total as u64);
+                embed_bar_ref.start("Generating embeddings...");
+            }
+            embed_bar_ref.set_position(done as u64);
+            embed_bar_ref.set_message(format!("Generating embeddings ({done}/{total})"));
+        }
+        IndexProgress::EmbeddingDone { count } => {
+            embed_bar_ref.stop(format!("Generated {count} embeddings"));
+        }
+        IndexProgress::StorageDone => {}
+    };
+
     let summary = rt
-        .block_on(vera_core::indexing::index_repository(
+        .block_on(vera_core::indexing::index_repository_with_progress(
             repo_path,
             &provider,
             &config,
             &model_name,
+            on_progress,
         ))
         .context("indexing failed")?;
+
+    multi.stop();
 
     Ok(summary)
 }

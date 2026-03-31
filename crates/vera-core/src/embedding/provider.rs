@@ -111,6 +111,7 @@ impl EmbeddingProviderConfig {
     /// - `EMBEDDING_MODEL_BASE_URL`
     /// - `EMBEDDING_MODEL_ID`
     /// - `EMBEDDING_MODEL_API_KEY`
+    /// - `EMBEDDING_QUERY_PREFIX` (optional override; auto-detected from model ID if unset)
     pub fn from_env() -> Result<Self> {
         let base_url = std::env::var("EMBEDDING_MODEL_BASE_URL")
             .context("EMBEDDING_MODEL_BASE_URL not set")?;
@@ -119,7 +120,8 @@ impl EmbeddingProviderConfig {
             std::env::var("EMBEDDING_MODEL_API_KEY").context("EMBEDDING_MODEL_API_KEY not set")?;
         let query_prefix = std::env::var("EMBEDDING_QUERY_PREFIX")
             .ok()
-            .filter(|s| !s.is_empty());
+            .filter(|s| !s.is_empty())
+            .or_else(|| default_query_prefix_for_model(&model_id));
 
         let mut config = Self::new(base_url, model_id, api_key);
         config.query_prefix = query_prefix;
@@ -137,6 +139,69 @@ impl EmbeddingProviderConfig {
         self.max_retries = max_retries;
         self
     }
+}
+
+// ── Query prefix auto-detection ──────────────────────────────────────
+
+/// Auto-detect the query prefix for known asymmetric embedding model families.
+///
+/// Returns `None` for symmetric models or unrecognized model IDs.
+/// Users can always override via `EMBEDDING_QUERY_PREFIX` env var.
+fn default_query_prefix_for_model(model_id: &str) -> Option<String> {
+    let id = model_id.to_lowercase();
+    if id.contains("qwen3-embedding") || id.contains("qwen3_embedding") {
+        Some("Instruct: Given a code search query, retrieve relevant code snippets that match the query\nQuery: ".into())
+    } else if id.contains("coderankembed") {
+        Some("Represent this query for retrieving relevant code: ".into())
+    } else if id.contains("e5-") || id.contains("e5_") {
+        Some("query: ".into())
+    } else if id.contains("bge-") || id.contains("bge_") {
+        Some("Represent this sentence for searching relevant passages: ".into())
+    } else {
+        // Unrecognized model: try fetching prefix from HuggingFace.
+        fetch_query_prefix_from_hf(model_id)
+    }
+}
+
+/// Try to fetch the default query prompt from a model's HuggingFace `tokenizer_config.json`.
+///
+/// Many HuggingFace models store a default retrieval prompt under
+/// `prompts.retrieval` or `default_prompt` in their tokenizer config.
+/// This is a best-effort fallback; returns `None` on any failure.
+fn fetch_query_prefix_from_hf(model_id: &str) -> Option<String> {
+    // Only attempt if model_id looks like a HuggingFace repo (contains '/').
+    if !model_id.contains('/') {
+        return None;
+    }
+    let url = format!(
+        "https://huggingface.co/{}/resolve/main/tokenizer_config.json",
+        model_id
+    );
+    debug!(model_id, url = %url, "fetching query prefix from HuggingFace");
+
+    let body = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .ok()?
+        .get(&url)
+        .send()
+        .ok()?
+        .text()
+        .ok()?;
+
+    let config: serde_json::Value = serde_json::from_str(&body).ok()?;
+
+    // Check common locations for a retrieval/query prompt.
+    let prompt = config
+        .get("prompts")
+        .and_then(|p| p.get("retrieval").or_else(|| p.get("query")))
+        .and_then(|v| v.as_str())
+        .or_else(|| config.get("default_prompt").and_then(|v| v.as_str()));
+
+    prompt.map(|p| {
+        debug!(model_id, prefix = %p, "auto-detected query prefix from HuggingFace");
+        format!("{p} ")
+    })
 }
 
 // ── OpenAI-compatible provider ───────────────────────────────────────
@@ -733,6 +798,87 @@ pub async fn embed_chunks_concurrent<P: EmbeddingProvider>(
     Ok(results)
 }
 
+/// Like `embed_chunks_concurrent` but calls `on_progress(done, total)` after each batch.
+pub async fn embed_chunks_concurrent_with_progress<P, F>(
+    provider: &P,
+    chunks: &[Chunk],
+    batch_size: usize,
+    max_concurrent: usize,
+    on_progress: F,
+) -> Result<Vec<(String, Vec<f32>)>, EmbeddingError>
+where
+    P: EmbeddingProvider,
+    F: Fn(usize, usize),
+{
+    if chunks.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let batch_size = batch_size.max(1);
+    let max_concurrent = max_concurrent.max(1);
+    let total = chunks.len();
+    let total_batches = total.div_ceil(batch_size);
+
+    debug!(
+        total_chunks = total,
+        batch_size, total_batches, max_concurrent, "starting concurrent embedding"
+    );
+
+    let mut indexed_chunks: Vec<(usize, &Chunk)> = chunks.iter().enumerate().collect();
+    indexed_chunks.sort_by_key(|(_, c)| c.content.len());
+
+    let batch_inputs: Vec<Vec<EmbeddingBatchItem>> = indexed_chunks
+        .chunks(batch_size)
+        .map(|batch| {
+            batch
+                .iter()
+                .map(|(orig_idx, chunk)| EmbeddingBatchItem {
+                    original_index: *orig_idx,
+                    chunk_id: chunk.id.clone(),
+                    text: chunk_to_embedding_text(chunk),
+                })
+                .collect()
+        })
+        .collect();
+
+    let mut all_results: Vec<(usize, String, Vec<f32>)> = Vec::with_capacity(total);
+    let mut done_count: usize = 0;
+
+    for group_start in (0..batch_inputs.len()).step_by(max_concurrent) {
+        let group_end = (group_start + max_concurrent).min(batch_inputs.len());
+        let group = &batch_inputs[group_start..group_end];
+
+        let futures: Vec<_> = group
+            .iter()
+            .enumerate()
+            .map(|(i, items)| {
+                let batch_idx = group_start + i;
+                async move {
+                    debug!(batch = batch_idx + 1, total_batches, "embedding batch");
+                    embed_batch_resilient(provider, items.clone()).await
+                }
+            })
+            .collect();
+
+        let results = futures::future::join_all(futures).await;
+        for result in results {
+            let batch_results = result?;
+            done_count += batch_results.len();
+            all_results.extend(batch_results);
+            on_progress(done_count, total);
+        }
+    }
+
+    all_results.sort_by_key(|(orig_idx, _, _)| *orig_idx);
+
+    let results: Vec<(String, Vec<f32>)> = all_results
+        .into_iter()
+        .map(|(_, id, vec)| (id, vec))
+        .collect();
+
+    Ok(results)
+}
+
 /// Format a chunk's content for embedding.
 ///
 /// Prepends metadata context (language, symbol info) to help the model
@@ -867,5 +1013,63 @@ pub(crate) mod test_helpers {
         fn expected_dim(&self) -> Option<usize> {
             Some(self.dim)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepare_query_text_with_prefix() {
+        let mut config = EmbeddingProviderConfig::new("http://x".into(), "m".into(), "k".into());
+        config.query_prefix = Some("Instruct: search\nQuery: ".into());
+        let provider = OpenAiProvider::new(config).unwrap();
+        assert_eq!(
+            provider.prepare_query_text("find foo"),
+            "Instruct: search\nQuery: find foo"
+        );
+    }
+
+    #[test]
+    fn prepare_query_text_without_prefix() {
+        let config = EmbeddingProviderConfig::new("http://x".into(), "m".into(), "k".into());
+        let provider = OpenAiProvider::new(config).unwrap();
+        assert_eq!(provider.prepare_query_text("find foo"), "find foo");
+    }
+
+    #[test]
+    fn auto_detect_qwen3_prefix() {
+        let prefix = default_query_prefix_for_model("Qwen/Qwen3-Embedding-8B");
+        assert!(prefix.is_some());
+        assert!(prefix.unwrap().contains("Query: "));
+    }
+
+    #[test]
+    fn auto_detect_coderankembed_prefix() {
+        let prefix = default_query_prefix_for_model("krlvi/CodeRankEmbed");
+        assert!(prefix.is_some());
+        assert!(prefix.unwrap().contains("Represent this query"));
+    }
+
+    #[test]
+    fn auto_detect_e5_prefix() {
+        let prefix = default_query_prefix_for_model("intfloat/e5-large-v2");
+        assert!(prefix.is_some());
+        assert_eq!(prefix.unwrap(), "query: ");
+    }
+
+    #[test]
+    fn auto_detect_bge_prefix() {
+        let prefix = default_query_prefix_for_model("BAAI/bge-large-en-v1.5");
+        assert!(prefix.is_some());
+        assert!(prefix.unwrap().contains("Represent this sentence"));
+    }
+
+    #[test]
+    fn auto_detect_unknown_model_no_prefix() {
+        // Unknown model without '/' won't attempt HF fetch.
+        let prefix = default_query_prefix_for_model("some-unknown-model");
+        assert!(prefix.is_none());
     }
 }

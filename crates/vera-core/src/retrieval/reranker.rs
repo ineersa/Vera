@@ -143,6 +143,7 @@ pub struct ApiReranker {
     client: reqwest::Client,
     config: RerankerConfig,
     max_rerank_batch: usize,
+    max_document_chars: usize,
 }
 
 impl ApiReranker {
@@ -153,6 +154,10 @@ impl ApiReranker {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(20);
+        let max_document_chars = std::env::var("VERA_MAX_RERANK_DOC_CHARS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4800);
         let client = reqwest::Client::builder()
             .timeout(config.timeout)
             .build()
@@ -162,6 +167,7 @@ impl ApiReranker {
             client,
             config,
             max_rerank_batch,
+            max_document_chars,
         })
     }
 
@@ -310,6 +316,13 @@ impl Reranker for ApiReranker {
         if documents.is_empty() {
             return Ok(Vec::new());
         }
+
+        // Truncate documents that exceed the reranker's context window.
+        let truncated: Vec<String> = documents
+            .iter()
+            .map(|d| truncate_document(d, self.max_document_chars))
+            .collect();
+        let documents = &truncated;
 
         let batch_size = self.max_rerank_batch;
         if batch_size == 0 || documents.len() <= batch_size {
@@ -463,6 +476,27 @@ fn sanitize_error_message(msg: &str) -> String {
         "no details available".to_string()
     } else {
         sanitized
+    }
+}
+
+// ── Document truncation ──────────────────────────────────────────────
+
+/// Truncate a document to at most `max_chars` characters, cutting at the last
+/// newline boundary to avoid splitting mid-line. Documents within the limit
+/// are returned as-is (zero-copy path).
+fn truncate_document(doc: &str, max_chars: usize) -> String {
+    if max_chars == 0 || doc.len() <= max_chars {
+        return doc.to_string();
+    }
+    // Find the last char boundary at or before max_chars.
+    let mut end = max_chars.min(doc.len());
+    while end > 0 && !doc.is_char_boundary(end) {
+        end -= 1;
+    }
+    let slice = &doc[..end];
+    match slice.rfind('\n') {
+        Some(pos) => slice[..pos].to_string(),
+        None => slice.to_string(),
     }
 }
 
@@ -923,6 +957,32 @@ mod tests {
             reranker.endpoint_url(),
             "https://api.siliconflow.com/v1/rerank"
         );
+    }
+
+    // ── truncate_document tests ─────────────────────────────────────
+
+    #[test]
+    fn truncate_document_short_passthrough() {
+        assert_eq!(truncate_document("hello", 100), "hello");
+    }
+
+    #[test]
+    fn truncate_document_cuts_at_newline() {
+        let doc = "line1\nline2\nline3\nline4";
+        let result = truncate_document(doc, 15);
+        assert_eq!(result, "line1\nline2");
+    }
+
+    #[test]
+    fn truncate_document_no_newline() {
+        let doc = "abcdefghij";
+        let result = truncate_document(doc, 5);
+        assert_eq!(result, "abcde");
+    }
+
+    #[test]
+    fn truncate_document_zero_max_passthrough() {
+        assert_eq!(truncate_document("hello", 0), "hello");
     }
 
     #[tokio::test]
