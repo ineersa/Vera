@@ -75,6 +75,7 @@ export RERANKER_MODEL_ID="bge-reranker-base-q8_0.gguf"
 export RERANKER_MODEL_API_KEY="not-needed"
 export RERANKER_MAX_DOCS_PER_REQUEST="8"
 export RERANKER_MAX_DOCUMENT_CHARS="1200"
+export VERA_NO_UPDATE_CHECK="1"
 ```
 
 Then reload shell config:
