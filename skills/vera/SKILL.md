@@ -10,7 +10,7 @@ Semantic code search CLI. Combines BM25 keyword matching with vector similarity 
 ## Workflow
 
 1. Ensure Vera is installed and on `PATH` (add `.vera/` to `.gitignore` on first use). If missing: `references/install.md`.
-2. Configure exclusions: Vera respects `.gitignore` by default. To customize what gets indexed, create a `.veraignore` file (gitignore syntax). Add `#include .gitignore` at the top to layer your rules on top of gitignore. Use `--exclude` for one-off exclusions, `--no-ignore` to disable all ignore parsing, or `--verbose` during indexing to see which files are skipped.
+2. Configure exclusions: Vera respects `.gitignore` by default (no setup needed). If you need custom exclusions, create a `.veraignore` file (gitignore syntax). Important: `.veraignore` **replaces** `.gitignore` rules entirely. To keep gitignore rules and add your own on top, start `.veraignore` with `#include .gitignore`, then add only your extra patterns (do not repeat entries already in `.gitignore`). Use `--exclude` for one-off exclusions, `--no-ignore` to disable all ignore parsing, or `--verbose` during indexing to see which files are skipped.
 3. Index the repo: `vera index .` (first time) or `vera update .` (after edits). Use `vera index . --verbose` to debug exclusion rules.
 4. For long sessions, start the watcher: `vera watch .` (background process, Ctrl-C to stop, 2s debounce). This auto-updates the index on file changes and replaces manual `vera update .` calls.
 5. Get oriented: `vera overview` returns a project summary: language breakdown, directory structure, entry points, complexity hotspots, and detected conventions (frameworks, patterns, config files). Use this for onboarding before searching.

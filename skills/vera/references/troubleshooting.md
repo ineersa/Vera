@@ -93,4 +93,4 @@ If unexpected files are indexed or missing from results:
 vera index . --verbose            # shows which files are skipped and why
 ```
 
-Check `.veraignore` syntax (gitignore format). Remember: `.veraignore` replaces `.gitignore` rules unless you add `#include .gitignore` at the top to merge both.
+Check `.veraignore` syntax (gitignore format). Remember: `.veraignore` replaces `.gitignore` rules entirely unless you add `#include .gitignore` at the top to merge both. When using `#include .gitignore`, only add patterns that aren't already in `.gitignore`.
