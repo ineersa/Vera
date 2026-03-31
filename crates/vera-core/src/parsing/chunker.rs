@@ -336,207 +336,77 @@ pub fn tier0_line_chunks(source: &str, file_path: &str, language: Language) -> V
     chunks
 }
 
-/// Split chunks whose embedding text would exceed `max_chars`.
-///
-/// This is a strict guard: every output chunk is adjusted to fit the limit
-/// (except pathological cases where even metadata alone would exceed it).
-/// Splitting uses overlapping line windows to preserve continuity.
-pub fn split_oversized_chunks(chunks: Vec<Chunk>, max_chars: usize) -> Vec<Chunk> {
-    let mut result = Vec::with_capacity(chunks.len());
-    let input_count = chunks.len();
-    let mut split_count = 0u32;
-    let mut truncated_single_line = 0u32;
-    let mut max_seen = 0usize;
+fn file_name(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
 
+/// Split chunks that exceed `max_bytes` into smaller sub-chunks at line boundaries.
+///
+/// Uses a byte-length pre-filter: chunks already under the limit are passed
+/// through untouched (the common case for ~70-80% of chunks). Oversized chunks
+/// are split at natural boundaries using `find_split_boundary`.
+pub fn split_oversized_chunks(chunks: Vec<Chunk>, max_bytes: usize) -> Vec<Chunk> {
+    if max_bytes == 0 {
+        return chunks;
+    }
+
+    let mut result = Vec::with_capacity(chunks.len());
     for chunk in chunks {
-        let text_len = crate::chunk_text::build_embedding_text(&chunk).len();
-        max_seen = max_seen.max(text_len);
-        if text_len <= max_chars {
+        if chunk.content.len() <= max_bytes {
             result.push(chunk);
             continue;
         }
 
-        let split = split_chunk_to_max_chars(&chunk, max_chars);
-        if split.len() > 1 {
-            split_count += 1;
-        }
+        let lines: Vec<&str> = chunk.content.lines().collect();
+        let total = lines.len() as u32;
+        let mut current: u32 = 0;
+        let mut part = 1u32;
 
-        for mut sub in split {
-            let mut sub_len = crate::chunk_text::build_embedding_text(&sub).len();
-            if sub_len <= max_chars {
-                result.push(sub);
-                continue;
-            }
-
-            // If this still overflows and has multiple lines, fall back to
-            // one-line chunks so each piece can be individually constrained.
-            if sub.content.lines().count() > 1 {
-                for (idx, line) in sub.content.lines().enumerate() {
-                    let mut line_chunk = Chunk {
-                        id: format!("{}::line{}", sub.id, idx + 1),
-                        file_path: sub.file_path.clone(),
-                        line_start: sub.line_start + idx as u32,
-                        line_end: sub.line_start + idx as u32,
-                        content: line.to_string(),
-                        language: sub.language,
-                        symbol_type: sub.symbol_type,
-                        symbol_name: sub
-                            .symbol_name
-                            .as_ref()
-                            .map(|name| format!("{name} (line {})", idx + 1)),
-                    };
-
-                    let mut line_len = crate::chunk_text::build_embedding_text(&line_chunk).len();
-                    if line_len > max_chars {
-                        truncated_single_line += 1;
-                        let header_len = line_len.saturating_sub(line_chunk.content.len());
-                        let keep = max_chars.saturating_sub(header_len).max(1);
-                        line_chunk.content = truncate_utf8_to_bytes(&line_chunk.content, keep);
-                        line_len = crate::chunk_text::build_embedding_text(&line_chunk).len();
-                        if line_len > max_chars {
-                            line_chunk.content.clear();
-                        }
-                    }
-
-                    result.push(line_chunk);
-                }
-                continue;
-            }
-
-            // Last-resort safeguard for very long single-line chunks.
-            if sub.content.lines().count() <= 1 {
-                truncated_single_line += 1;
-                let header_len = sub_len.saturating_sub(sub.content.len());
-                let keep = max_chars.saturating_sub(header_len).max(1);
-                sub.content = truncate_utf8_to_bytes(&sub.content, keep);
-                sub_len = crate::chunk_text::build_embedding_text(&sub).len();
-                if sub_len > max_chars {
-                    sub.content.clear();
+        while current < total {
+            // Binary search for the largest end line that fits within max_bytes.
+            let mut lo = current;
+            let mut hi = (total - 1).min(current + 500); // cap search range
+            while lo < hi {
+                let mid = lo + (hi - lo).div_ceil(2);
+                let candidate: usize = lines[current as usize..=mid as usize]
+                    .iter()
+                    .map(|l| l.len() + 1)
+                    .sum();
+                if candidate <= max_bytes {
+                    lo = mid;
+                } else {
+                    hi = mid - 1;
                 }
             }
 
-            result.push(sub);
+            // Ensure at least one line per sub-chunk.
+            let end = lo.max(current);
+            let sub_content = lines[current as usize..=end as usize].join("\n");
+            let sub_name = chunk
+                .symbol_name
+                .as_ref()
+                .map(|n| format!("{n} (part {part})"));
+
+            result.push(Chunk {
+                id: format!("{}:{part}", chunk.id),
+                file_path: chunk.file_path.clone(),
+                line_start: chunk.line_start + current,
+                line_end: chunk.line_start + end,
+                content: sub_content,
+                language: chunk.language,
+                symbol_type: chunk.symbol_type,
+                symbol_name: if part == 1 && end + 1 >= total {
+                    chunk.symbol_name.clone()
+                } else {
+                    sub_name
+                },
+            });
+
+            part += 1;
+            current = end + 1;
         }
     }
-
-    tracing::debug!(
-        split_count,
-        truncated_single_line,
-        max_chars,
-        max_embedding_text_chars = max_seen,
-        input_chunks = input_count,
-        result_chunks = result.len(),
-        "chunk size check complete"
-    );
     result
-}
-
-fn split_chunk_to_max_chars(chunk: &Chunk, max_chars: usize) -> Vec<Chunk> {
-    let full_text_len = crate::chunk_text::build_embedding_text(chunk).len();
-    if full_text_len <= max_chars {
-        return vec![chunk.clone()];
-    }
-
-    let lines: Vec<&str> = chunk.content.lines().collect();
-    let total_lines = lines.len() as u32;
-    if total_lines <= 1 {
-        return vec![chunk.clone()];
-    }
-
-    let header_len = full_text_len.saturating_sub(chunk.content.len());
-    let content_budget = max_chars.saturating_sub(header_len);
-    if content_budget < 64 {
-        return vec![chunk.clone()];
-    }
-
-    let mut out = Vec::new();
-    let mut start = 0u32;
-    let overlap = 2u32;
-    let mut part = 1u32;
-
-    while start < total_lines {
-        let mut end = find_end_for_content_budget(&lines, start, content_budget);
-        let mut sub = make_sub_chunk(chunk, &lines, start, end, part);
-        let mut sub_len = crate::chunk_text::build_embedding_text(&sub).len();
-
-        // Strictly shrink until this piece fits.
-        while sub_len > max_chars && end > start {
-            end -= 1;
-            sub = make_sub_chunk(chunk, &lines, start, end, part);
-            sub_len = crate::chunk_text::build_embedding_text(&sub).len();
-        }
-
-        out.push(sub);
-
-        if end + 1 >= total_lines {
-            break;
-        }
-
-        let next_start = (end + 1).saturating_sub(overlap);
-        start = if next_start <= start {
-            start + 1
-        } else {
-            next_start
-        };
-        part += 1;
-    }
-
-    if out.is_empty() {
-        vec![chunk.clone()]
-    } else {
-        out
-    }
-}
-
-fn find_end_for_content_budget(lines: &[&str], start: u32, budget: usize) -> u32 {
-    let total = lines.len() as u32;
-    let mut used = 0usize;
-    let mut end = start;
-
-    while end < total {
-        let add = lines[end as usize].len() + 1;
-        if end > start && used + add > budget {
-            break;
-        }
-        used += add;
-        end += 1;
-    }
-
-    end.saturating_sub(1)
-}
-
-fn make_sub_chunk(chunk: &Chunk, lines: &[&str], start: u32, end: u32, part: u32) -> Chunk {
-    let sub_content = lines[start as usize..=end as usize].join("\n");
-    let sub_name = chunk
-        .symbol_name
-        .as_ref()
-        .map(|name| format!("{name} (part {part})"));
-
-    Chunk {
-        id: format!("{}::part{}", chunk.id, part),
-        file_path: chunk.file_path.clone(),
-        line_start: chunk.line_start + start,
-        line_end: chunk.line_start + end,
-        content: sub_content,
-        language: chunk.language,
-        symbol_type: chunk.symbol_type,
-        symbol_name: sub_name,
-    }
-}
-
-fn truncate_utf8_to_bytes(s: &str, max_bytes: usize) -> String {
-    if s.len() <= max_bytes {
-        return s.to_string();
-    }
-    let mut end = max_bytes.min(s.len());
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    s[..end].to_string()
-}
-
-fn file_name(path: &str) -> &str {
-    path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
 /// Join lines from `start_row` to `end_row` (inclusive, 0-based) into a string.

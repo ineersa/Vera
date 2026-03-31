@@ -33,15 +33,18 @@ pub struct IndexingConfig {
     /// Disable smart default exclusions.
     #[serde(default)]
     pub no_default_excludes: bool,
-    /// Maximum character length for the embedding text (metadata + content).
-    /// Chunks exceeding this are split into overlapping sub-chunks before
-    /// embedding. Default 3000 chars.
-    #[serde(default = "default_max_embedding_chars")]
-    pub max_embedding_chars: usize,
+    /// Maximum chunk size in bytes for embedding. Chunks exceeding this are
+    /// split at line boundaries. 0 disables byte-based splitting.
+    /// Default: 24576 (24KB, ~6K-7K tokens, safe for any embedding model).
+    #[serde(default = "default_max_chunk_bytes")]
+    pub max_chunk_bytes: usize,
 }
 
-fn default_max_embedding_chars() -> usize {
-    3000
+fn default_max_chunk_bytes() -> usize {
+    std::env::var("VERA_MAX_CHUNK_BYTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(24_576)
 }
 
 impl Default for IndexingConfig {
@@ -62,7 +65,7 @@ impl Default for IndexingConfig {
             extra_excludes: Vec::new(),
             no_ignore: false,
             no_default_excludes: false,
-            max_embedding_chars: default_max_embedding_chars(),
+            max_chunk_bytes: default_max_chunk_bytes(),
         }
     }
 }
@@ -78,15 +81,37 @@ pub struct RetrievalConfig {
     pub rerank_candidates: usize,
     /// Whether to enable reranking (requires API credentials).
     pub reranking_enabled: bool,
+    /// Maximum documents per reranker API call. Larger candidate sets are
+    /// partitioned into batches and scores merged. 0 means no batching.
+    #[serde(default = "default_max_rerank_batch")]
+    pub max_rerank_batch: usize,
+    /// Total character budget for search output. Results are progressively
+    /// truncated so the combined output stays within this limit.
+    /// 0 means unlimited.
+    #[serde(default = "default_max_output_chars")]
+    pub max_output_chars: usize,
+}
+
+fn default_max_output_chars() -> usize {
+    12_000
+}
+
+fn default_max_rerank_batch() -> usize {
+    std::env::var("VERA_MAX_RERANK_BATCH")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20)
 }
 
 impl Default for RetrievalConfig {
     fn default() -> Self {
         Self {
-            default_limit: 10,
+            default_limit: 5,
             rrf_k: 60.0,
             rerank_candidates: 50,
             reranking_enabled: true,
+            max_rerank_batch: default_max_rerank_batch(),
+            max_output_chars: 12_000,
         }
     }
 }

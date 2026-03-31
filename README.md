@@ -65,7 +65,7 @@ The installer downloads the `vera` binary, writes a shim to a user bin directory
 ```bash
 vera mcp   # or: bunx @vera-ai/cli mcp / uvx vera-ai mcp
 ```
-Exposes `search_code`, `index_project`, `update_project`, `get_stats`, `get_overview`, `watch_project`, `find_references`, `find_dead_code`, and `regex_search` tools.
+Exposes `search_code`, `get_stats`, `get_overview`, and `regex_search` tools. `search_code` auto-indexes and starts a file watcher on first use if no index exists.
 
 **Docker** (MCP server):
 ```bash
@@ -74,7 +74,7 @@ docker run --rm -i -v $(pwd):/workspace ghcr.io/lemon07r/vera:cpu
 CPU, CUDA, ROCm, and OpenVINO images available. See [docs/docker.md](docs/docker.md).
 
 **Prebuilt binaries:**
-Download from [GitHub Releases](https://github.com/lemon07r/Vera/releases) for Linux (x86_64, aarch64), macOS (x86_64, aarch64), or Windows (x86_64).
+Download from [GitHub Releases](https://github.com/lemon07r/Vera/releases) for Linux (x86_64, aarch64), macOS (x86_64, aarch64), or Windows (x86_64). For Alpine, NixOS, or minimal containers without glibc, use the `x86_64-unknown-linux-musl` archive (fully static, zero runtime dependencies). The npm/pip wrappers auto-detect musl systems; to force a specific target, set `VERA_TARGET=x86_64-unknown-linux-musl` before running the install command.
 
 **Build from source** (Rust 1.85+):
 ```bash
@@ -125,6 +125,7 @@ vera search "error handling" --lang rust
 vera search "routes" --path "src/**/*.ts"
 vera search "handler" --type function --limit 5
 vera search "config loading" --deep              # follows symbols from initial results
+vera search "auth" --compact                     # signatures only, broad exploration
 ```
 
 Update the index after code changes: `vera update .`
@@ -166,7 +167,7 @@ vera agent sync                    # refresh stale skill installs
 vera agent remove                  # pick installs to remove
 
 # Cleanup
-vera uninstall                     # removes ~/.vera/, skill files, PATH shim
+vera uninstall                     # removes config dir, skill files, PATH shim
 ```
 
 </details>
@@ -189,7 +190,7 @@ Vera respects `.gitignore` by default. Create a `.veraignore` file (gitignore sy
 
 ## Model Backend
 
-Vera itself is always local: the index lives in `.vera/`, config in `~/.vera/`. The backend choice only affects where embeddings and reranking run.
+Vera itself is always local: the index lives in `.vera/` per project, config and models in `$XDG_DATA_HOME/vera` (or `~/.vera` for existing installs). The backend choice only affects where embeddings and reranking run.
 
 `vera setup` downloads two curated ONNX models and auto-detects your GPU. GPU is recommended; CPU works but is slow for initial indexing. After the first index, `vera update .` only re-embeds changed files, so updates are fast even on CPU.
 
@@ -209,16 +210,29 @@ Full methodology and version history: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## Configure Your AI Agent
 
-`vera agent install` installs the Vera skill for your coding agents and offers to add a usage snippet to your project's `AGENTS.md` (or `CLAUDE.md`, `.cursorrules`, etc.).
+`vera agent install` installs the Vera skill for your coding agents and offers to add a usage snippet to your project's `AGENTS.md`, `CLAUDE.md`, `COPILOT.md`, or editor rules file. Installed agents start preselected in the interactive picker, deselecting one removes its existing Vera skill install, and stale installs can be refreshed in one step before you enter the full picker.
+
+Alternatively, install the Vera skill with the [skills CLI](https://github.com/vercel-labs/skills):
+
+```bash
+npx skills add lemon07r/Vera
+```
 
 If you skipped the prompt or want to add it manually:
 
 ```markdown
 ## Code Search
 
-This project is indexed with Vera. Use `vera search "query"` for semantic code search
-and `vera grep "pattern"` for regex search. Run `vera update .` after code changes.
-For query tips and output format details, see the Vera skill in your skills directory.
+Use Vera before opening many files or running broad text search when you need to find where logic lives or how a feature works.
+
+- `vera search "query"` for semantic code search. Describe behavior: "JWT validation", not "auth".
+- `vera grep "pattern"` for exact text or regex
+- `vera references <symbol>` for callers and callees
+- `vera overview` for a project summary (languages, entry points, hotspots)
+- `vera search --deep "query"` to follow symbols across multiple hops
+- Narrow results with `--lang`, `--path`, `--type`, or `--scope docs`
+- `vera watch .` to auto-update the index, or `vera update .` after edits (`vera index .` if `.vera/` is missing)
+- For detailed usage, query patterns, and troubleshooting, read the Vera skill file installed by `vera agent install`
 ```
 
 ## Contributing

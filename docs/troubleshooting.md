@@ -36,7 +36,10 @@ Common causes:
 - ONNX Runtime auto-download failed. check network, or set `ORT_DYLIB_PATH` to a manually installed library
 - If your network only allows browser downloads, use [manual-install.md](manual-install.md)
 - GPU backend not working. make sure the required drivers are installed (CUDA 12+ for `--onnx-jina-cuda`, ROCm for `--onnx-jina-rocm`, DirectX 12 for `--onnx-jina-directml`). CoreML (`--onnx-jina-coreml`) requires macOS on Apple Silicon. OpenVINO (`--onnx-jina-openvino`) and ROCm (`--onnx-jina-rocm`) are installed automatically via pip; if the automatic install fails, install manually (`pip install onnxruntime-openvino` or `pip install onnxruntime-rocm`), then set `ORT_DYLIB_PATH` to the `libonnxruntime.so` inside the package. If GPU init still fails, rerun with `--onnx-jina-cpu` or fix the provider-specific dependencies.
+- On Windows CUDA, Vera now uses the installed toolkit (`CUDA_PATH` or `nvcc --version`) to choose the CUDA 12 vs CUDA 13 ONNX Runtime build instead of the driver's maximum supported version. If you switch CUDA toolkits, rerun `vera repair --onnx-jina-cuda` to refresh the downloaded runtime.
 - `vera doctor` will flag missing models or runtime, show the saved and active backend, print the installed Vera version, and check for newer releases. `vera doctor --probe` adds a deeper read-only session probe and does not download or repair missing assets. `vera repair` is the write path if you need Vera to re-fetch local assets. `vera upgrade` shows the binary update plan and can apply it when the install method is known.
+
+If API mode hits an `exceed_context_size_error` during indexing, update to the latest Vera build. Current releases split and shrink pathological embedding inputs instead of aborting the whole batch on one oversized chunk.
 
 If Vera now fails fast with a message like `CUDA backend selected, but required libraries are missing`, the ONNX Runtime CUDA provider was downloaded but your system linker cannot find the CUDA or cuDNN shared libraries it depends on. Install the required userspace libraries, refresh the linker cache if needed, then rerun `vera doctor --probe`.
 
@@ -66,7 +69,7 @@ vera index . --low-vram
 
 This forces batch size 1 and caps the ONNX Runtime memory arena to 1 GB. You can also manually tune batch size with `vera config set embedding.batch_size 1`.
 
-On newer builds, Vera does not send every local GPU batch to ONNX at the configured `embedding.batch_size`. It tokenizes first, shrinks long-sequence micro-batches aggressively, and learns safer limits per sequence-length bucket from real runs. Those learned windows are stored in `~/.vera/adaptive-batch-scaler.json` and reused on later runs for the same backend, device, and model. If a pathological batch still trips an allocation error, Vera retries it at a smaller size instead of aborting the whole index.
+On newer builds, Vera does not send every local GPU batch to ONNX at the configured `embedding.batch_size`. It tokenizes first, shrinks long-sequence micro-batches aggressively, and learns safer limits per sequence-length bucket from real runs. Those learned windows are stored in `adaptive-batch-scaler.json` inside Vera's data directory and reused on later runs for the same backend, device, and model. If a pathological batch still trips an allocation error, Vera retries it at a smaller size instead of aborting the whole index.
 
 If you still see repeated retries or very slow indexing, lower `embedding.batch_size` manually or use `--low-vram`.
 

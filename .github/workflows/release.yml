@@ -21,6 +21,11 @@ jobs:
             os: ubuntu-latest
             archive: tar.gz
 
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+            musl: true
+
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             use_cross: true
@@ -81,6 +86,21 @@ jobs:
       - name: Install cross
         if: matrix.use_cross
         run: cargo install cross --locked
+
+      - name: Install musl tools
+        if: matrix.musl
+        shell: bash
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          # esaxx-rs (tokenizers dep) needs a C++ compiler for musl target.
+          # musl-tools only provides musl-gcc; create a musl-g++ wrapper that
+          # invokes g++ with the musl libc spec so cc-rs can find it.
+          sudo ln -s /usr/bin/g++ /usr/local/bin/x86_64-linux-musl-g++
+          echo "CC_x86_64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+          echo "CXX_x86_64_unknown_linux_musl=g++" >> "$GITHUB_ENV"
+          # sqlite-vec uses BSD u_int8_t/u_int16_t/u_int64_t types unavailable in musl.
+          # Define them via CFLAGS so the C compiler can resolve them.
+          echo "CFLAGS_x86_64_unknown_linux_musl=-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int64_t=uint64_t" >> "$GITHUB_ENV"
 
       - name: Set MSVC CRT flags
         if: runner.os == 'Windows'
@@ -163,13 +183,27 @@ jobs:
         run: |
           python3 scripts/generate_release_manifest.py release "${GITHUB_REF_NAME}" "${{ github.repository }}"
 
+      - name: Determine if latest release
+        id: latest
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          HIGHEST=$(git tag --sort=-v:refname | head -1)
+          if [ "$TAG" = "$HIGHEST" ]; then
+            echo "is_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_latest=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Generate changelog
         id: changelog
         shell: bash
         run: |
           TAG="${GITHUB_REF_NAME}"
-          # Find previous tag
-          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -1)
+          # Find the previous tag by version order (the one just below current)
+          PREV_TAG=$(git tag --sort=-v:refname | grep -A1 "^${TAG}$" | tail -1)
+          # If grep matched only the tag itself, there's no previous
+          if [ "$PREV_TAG" = "$TAG" ]; then PREV_TAG=""; fi
           if [ -z "$PREV_TAG" ]; then
             RANGE="HEAD"
           else
@@ -214,6 +248,7 @@ jobs:
           body_path: release/CHANGELOG.md
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+          make_latest: ${{ steps.latest.outputs.is_latest }}
 
       - name: Set up Node.js
         if: ${{ env.NPM_TOKEN != '' }}

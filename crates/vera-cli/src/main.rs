@@ -66,8 +66,8 @@ enum Commands {
     /// Start the MCP (Model Context Protocol) server.
     ///
     /// Runs a JSON-RPC 2.0 server over stdio for tool integration.
-    /// The server exposes tools: search_code, index_project, update_project, get_stats,
-    /// get_overview, watch_project, find_references, find_dead_code, and regex_search.
+    /// The server exposes tools: search_code, get_stats, get_overview, and regex_search.
+    /// search_code auto-indexes and starts a file watcher on first use.
     ///
     /// Examples:
     ///   vera mcp
@@ -77,14 +77,9 @@ enum Commands {
                       The server reads JSON-RPC messages from stdin and writes responses \
                       to stdout. Logs go to stderr.\n\n\
                       Exposed tools:\n  \
-                      search_code      — Hybrid search with filters\n  \
-                      index_project    — Index a project directory\n  \
-                      update_project   — Incremental index update\n  \
+                      search_code      — Hybrid search (auto-indexes and watches on first use)\n  \
                       get_stats        — Index statistics\n  \
                       get_overview     — Project summary for onboarding\n  \
-                      watch_project    — Watch files and auto-update the index\n  \
-                      find_references  — Find callers or callees of a symbol\n  \
-                      find_dead_code   — Find functions with no callers\n  \
                       regex_search     — Regex search over indexed files\n\n\
                       Examples:\n  \
                       vera mcp                       # Start MCP server on stdio")]
@@ -103,7 +98,9 @@ enum Commands {
                       `vera stats` directly.\n\n\
                       `vera agent install` detects existing installs and lets you \
                       add or remove agents in one step. Deselecting an installed \
-                      agent removes it.\n\n\
+                      agent removes it. If stale installs are detected, the \
+                      interactive flow can refresh them in one step before \
+                      opening the full selector.\n\n\
                       `vera agent sync` refreshes all stale skill installs to match \
                       the current binary version, no prompts needed.\n\n\
                       Examples:\n  \
@@ -358,7 +355,7 @@ enum Commands {
         #[arg(long)]
         path: Option<String>,
 
-        /// Maximum number of results to return (default: 10).
+        /// Maximum number of results to return (default: 5).
         #[arg(long, short = 'n')]
         limit: Option<usize>,
 
@@ -380,6 +377,13 @@ enum Commands {
         /// Multi-hop iterative search: follow up on symbols found in initial results.
         #[arg(long)]
         deep: bool,
+
+        /// Show only function/class signatures (omit bodies).
+        ///
+        /// Useful for broad exploration: fits more results in fewer tokens.
+        /// Use default mode for targeted retrieval of full implementations.
+        #[arg(long)]
+        compact: bool,
 
         #[command(flatten)]
         backend: helpers::LocalBackendFlags,
@@ -500,6 +504,10 @@ enum Commands {
         /// Include generated or minified files such as dist bundles.
         #[arg(long)]
         include_generated: bool,
+
+        /// Show only function/class signatures (omit bodies).
+        #[arg(long)]
+        compact: bool,
     },
 
     /// Find symbols with no callers (potential dead code).
@@ -574,12 +582,13 @@ enum Commands {
                       to update it.\n\n\
                       Configuration keys use dot notation:\n  \
                        indexing.max_chunk_lines       Max lines per chunk (default: 200)\n  \
-                       indexing.max_embedding_chars   Max embedding text chars, splits oversized (default: 3000)\n  \
+                       indexing.max_chunk_bytes       Max chunk bytes for embedding (default: 24576)\n  \
                        indexing.max_file_size_bytes   Max file size to index (default: 1000000)\n  \
-                      retrieval.default_limit        Default result count (default: 10)\n  \
-                      retrieval.rrf_k                RRF fusion constant (default: 60)\n  \
+                       retrieval.default_limit        Default result count (default: 5)\n  \
+                       retrieval.rrf_k                RRF fusion constant (default: 60)\n  \
                       retrieval.rerank_candidates    Reranker candidate count (default: 50)\n  \
                       retrieval.reranking_enabled    Enable reranking (default: true)\n  \
+                      retrieval.max_output_chars     Total output char budget (default: 12000)\n  \
                       embedding.batch_size           Embedding batch size (default: 128)\n  \
                       embedding.max_concurrent_requests  Concurrent API requests (default: 8)\n  \
                       embedding.timeout_secs         API timeout (default: 60)\n  \
@@ -717,6 +726,7 @@ fn main() {
             scope,
             include_generated,
             deep,
+            compact,
             backend,
         } => {
             tracing::info!(query = %query, deep, "searching");
@@ -735,6 +745,7 @@ fn main() {
                 cli.raw,
                 cli.timing,
                 deep,
+                compact,
                 backend.resolve(),
             )
         }
@@ -770,6 +781,7 @@ fn main() {
             context,
             scope,
             include_generated,
+            compact,
         } => {
             tracing::info!(pattern = %pattern, "grep");
             let filters = vera_core::types::SearchFilters {
@@ -785,6 +797,7 @@ fn main() {
                 &filters,
                 cli.json,
                 cli.raw,
+                compact,
             )
         }
         Commands::DeadCode => {
@@ -1170,7 +1183,7 @@ mod tests {
     fn config_values_match_defaults() {
         let config = vera_core::config::VeraConfig::default();
         let val = commands::config::get_config_value(&config, "retrieval.default_limit").unwrap();
-        assert_eq!(val, serde_json::json!(10));
+        assert_eq!(val, serde_json::json!(5));
 
         let val = commands::config::get_config_value(&config, "indexing.max_chunk_lines").unwrap();
         assert_eq!(val, serde_json::json!(200));

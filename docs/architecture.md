@@ -52,7 +52,7 @@ All stored in `.vera/` at the project root.
 
 - `types.rs`: `Language` enum (60+ variants), `SearchResult`, `CodeChunk`, `SymbolType`
 - `config.rs`: `RetrievalConfig`, `IndexConfig` defaults
-- `local_models.rs`: Manages local embedding presets, custom ONNX embedding configs, and ORT/model assets under `~/.vera/`
+- `local_models.rs`: Manages local embedding presets, custom ONNX embedding configs, and ORT/model assets under the Vera data directory (XDG-compliant)
 - `discovery/`: File discovery with gitignore support, binary/size filtering
 
 ## vera-cli
@@ -61,7 +61,7 @@ All stored in `.vera/` at the project root.
 
 ## vera-mcp
 
-`server.rs` routes JSON-RPC requests. `tools.rs` implements nine MCP tools: `search_code`, `index_project`, `update_project`, `get_stats`, `get_overview`, `watch_project`, `find_references`, `find_dead_code`, and `regex_search`.
+`server.rs` routes JSON-RPC requests. `tools.rs` implements four MCP tools: `search_code`, `get_stats`, `get_overview`, and `regex_search`. `search_code` auto-indexes and starts a file watcher on first use.
 
 ## Adding a new language
 

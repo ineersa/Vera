@@ -1,17 +1,11 @@
 //! MCP tool definitions and handler dispatch.
 //!
 //! Defines the tools that the Vera MCP server exposes:
-//! - `search_code` — search indexed codebase
-//! - `index_project` — trigger full indexing
-//! - `update_project` — trigger incremental update
+//! - `search_code` — search indexed codebase (auto-indexes and watches on first use)
 //! - `get_stats` — retrieve index statistics
 //! - `get_overview` — architecture overview for agent onboarding
-//! - `watch_project` — watch files and auto-update the index
-//! - `find_references` — find callers or callees of a symbol
-//! - `find_dead_code` — find functions with no callers
 //! - `regex_search` — regex search over indexed files
 
-use std::path::Path;
 use std::sync::Mutex;
 
 use serde::Serialize;
@@ -23,10 +17,8 @@ use crate::watcher::WatchHandle;
 /// Global watcher handle. Kept alive for the lifetime of the MCP server process.
 static WATCHER: Mutex<Option<WatchHandle>> = Mutex::new(None);
 
-/// Maximum character length for a single chunk's content in MCP responses.
-/// Chunks exceeding this limit are truncated with a marker to prevent
-/// blowing up LLM context windows.
-const MAX_CONTENT_CHARS: usize = 8_000;
+/// Default total output budget for MCP responses (chars).
+const MCP_OUTPUT_BUDGET: usize = 20_000;
 
 /// Compact result representation for MCP tool responses.
 /// Drops `score` and `language` (inferrable from extension), omits null fields.
@@ -42,38 +34,76 @@ struct CompactResult<'a> {
     symbol_type: Option<&'a vera_core::types::SymbolType>,
 }
 
-/// Truncate content to `MAX_CONTENT_CHARS`, appending a marker if truncated.
-fn truncate_content(content: &str) -> std::borrow::Cow<'_, str> {
-    if content.len() <= MAX_CONTENT_CHARS {
+/// Truncate `content` to fit within `allowed` bytes, breaking at a line boundary.
+fn truncate_to_budget(content: &str, allowed: usize) -> std::borrow::Cow<'_, str> {
+    if content.len() <= allowed {
         return std::borrow::Cow::Borrowed(content);
     }
-    // Find a safe char boundary near the limit.
     let end = content
         .char_indices()
-        .take_while(|(i, _)| *i < MAX_CONTENT_CHARS)
+        .take_while(|(i, _)| *i < allowed)
         .last()
         .map(|(i, c)| i + c.len_utf8())
         .unwrap_or(0);
-    let mut truncated = content[..end].to_string();
+    let break_at = content[..end].rfind('\n').unwrap_or(end);
+    let mut truncated = content[..break_at].to_string();
     truncated.push_str("\n[...truncated]");
     std::borrow::Cow::Owned(truncated)
 }
 
-/// Serialize search results as compact single-line JSON.
+/// Serialize search results as compact JSON, applying a total character budget.
+/// When `signatures_only` is true, function/class bodies are stripped before output.
 fn compact_results_json(
     results: &[vera_core::types::SearchResult],
+    budget: usize,
+    signatures_only: bool,
 ) -> Result<String, serde_json::Error> {
-    let compact: Vec<CompactResult> = results
+    use vera_core::parsing::signatures::extract_signature;
+
+    let signatures: Vec<String> = if signatures_only {
+        results
+            .iter()
+            .map(|r| extract_signature(&r.content, r.language))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // Build a parallel vec of display content (signature or original).
+    let display: Vec<&str> = results
         .iter()
-        .map(|r| CompactResult {
+        .enumerate()
+        .map(|(i, r)| {
+            if signatures_only {
+                signatures[i].as_str()
+            } else {
+                r.content.as_str()
+            }
+        })
+        .collect();
+
+    let mut remaining = budget;
+    let mut compact: Vec<CompactResult> = Vec::with_capacity(results.len());
+    for (i, r) in results.iter().enumerate() {
+        if budget > 0 && remaining == 0 {
+            break;
+        }
+        let content = if budget > 0 {
+            let c = truncate_to_budget(display[i], remaining);
+            remaining = remaining.saturating_sub(c.len());
+            c
+        } else {
+            std::borrow::Cow::Borrowed(display[i])
+        };
+        compact.push(CompactResult {
             file_path: &r.file_path,
             line_start: r.line_start,
             line_end: r.line_end,
-            content: truncate_content(&r.content),
+            content,
             symbol_name: r.symbol_name.as_deref(),
             symbol_type: r.symbol_type.as_ref(),
-        })
-        .collect();
+        });
+    }
     serde_json::to_string(&compact)
 }
 
@@ -135,42 +165,14 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum number of results (default: 10)"
+                        "description": "Maximum number of results (default: 5)"
+                    },
+                    "compact": {
+                        "type": "boolean",
+                        "description": "Return only function/class signatures (omit bodies). Use for broad exploration; fits more results in fewer tokens."
                     }
                 },
                 "required": []
-            }),
-        },
-        ToolDefinition {
-            name: "index_project".to_string(),
-            description: "Index a project directory for code search. Creates a .vera/ \
-                          index with BM25 and vector search capabilities."
-                .to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the project directory to index"
-                    }
-                },
-                "required": ["path"]
-            }),
-        },
-        ToolDefinition {
-            name: "update_project".to_string(),
-            description: "Incrementally update the index for a project. Only re-indexes \
-                          files that have changed since the last index/update."
-                .to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the project directory to update"
-                    }
-                },
-                "required": ["path"]
             }),
         },
         ToolDefinition {
@@ -194,62 +196,6 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                           directories, entry points, symbol types, complexity hotspots, \
                           and detected project conventions (frameworks, patterns, config files). \
                           Useful for onboarding and understanding project structure."
-                .to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the project directory (default: current dir)"
-                    }
-                }
-            }),
-        },
-        ToolDefinition {
-            name: "watch_project".to_string(),
-            description: "Start watching a project directory for file changes and \
-                          automatically update the index when files are modified. \
-                          Requires an existing index (run index_project first)."
-                .to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the project directory to watch (default: current dir)"
-                    }
-                }
-            }),
-        },
-        ToolDefinition {
-            name: "find_references".to_string(),
-            description: "Find callers or callees of a symbol using the call graph \
-                          built during indexing. Returns file paths and line numbers."
-                .to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "symbol": {
-                        "type": "string",
-                        "description": "Symbol name to look up (function or method name)"
-                    },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["callers", "callees"],
-                        "description": "Whether to find callers (default) or callees"
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the project directory (default: current dir)"
-                    }
-                },
-                "required": ["symbol"]
-            }),
-        },
-        ToolDefinition {
-            name: "find_dead_code".to_string(),
-            description: "Find functions and methods with no callers (potential dead code). \
-                          Excludes common entry points like main, new, default, etc."
                 .to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -298,6 +244,10 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     "include_generated": {
                         "type": "boolean",
                         "description": "Include generated or minified files such as dist bundles."
+                    },
+                    "compact": {
+                        "type": "boolean",
+                        "description": "Return only function/class signatures (omit bodies). Use for broad exploration."
                     }
                 },
                 "required": ["pattern"]
@@ -313,13 +263,8 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
 pub fn handle_tool_call(name: &str, arguments: &Value) -> ToolCallResult {
     match name {
         "search_code" => handle_search_code(arguments),
-        "index_project" => handle_index_project(arguments),
-        "update_project" => handle_update_project(arguments),
         "get_stats" => handle_get_stats(arguments),
         "get_overview" => handle_get_overview(arguments),
-        "watch_project" => handle_watch_project(arguments),
-        "find_references" => handle_find_references(arguments),
-        "find_dead_code" => handle_find_dead_code(arguments),
         "regex_search" => handle_regex_search(arguments),
         _ => ToolCallResult::error(format!("Unknown tool: {name}")),
     }
@@ -389,9 +334,33 @@ fn handle_search_code(args: &Value) -> ToolCallResult {
     let index_dir = vera_core::indexing::index_dir(&cwd);
 
     if !index_dir.exists() {
-        return ToolCallResult::error(
-            "No index found in current directory. Run index_project first.",
-        );
+        // Auto-index on first search.
+        let (rt, provider, idx_config, model_name) = match create_runtime_and_provider() {
+            Ok(t) => t,
+            Err(e) => return e,
+        };
+        match rt.block_on(vera_core::indexing::index_repository(
+            &cwd,
+            &provider,
+            &idx_config,
+            &model_name,
+        )) {
+            Ok(_) => {}
+            Err(e) => return ToolCallResult::error(format!("Auto-indexing failed: {e}")),
+        }
+        // Start watcher after indexing.
+        if let Ok(handle) = crate::watcher::start_watching(&cwd) {
+            let mut guard = WATCHER.lock().unwrap();
+            *guard = Some(handle);
+        }
+    } else {
+        // Start watcher if not already running.
+        let mut guard = WATCHER.lock().unwrap();
+        if guard.is_none() {
+            if let Ok(handle) = crate::watcher::start_watching(&cwd) {
+                *guard = Some(handle);
+            }
+        }
     }
 
     // Run each query, collect all results.
@@ -426,30 +395,15 @@ fn handle_search_code(args: &Value) -> ToolCallResult {
     all_results.retain(|r| seen.insert(format!("{}:{}:{}", r.file_path, r.line_start, r.line_end)));
     all_results.truncate(result_limit);
 
-    match compact_results_json(&all_results) {
+    let signatures_only = args
+        .get("compact")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    match compact_results_json(&all_results, MCP_OUTPUT_BUDGET, signatures_only) {
         Ok(json) => ToolCallResult::success(json),
         Err(e) => ToolCallResult::error(format!("Failed to serialize results: {e}")),
     }
-}
-
-/// Validate a required path argument and return it as a Path reference.
-fn require_dir_path(args: &Value) -> Result<&Path, ToolCallResult> {
-    let path = args
-        .get("path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| ToolCallResult::error("Missing required parameter: path"))?;
-    let p = Path::new(path);
-    if !p.exists() {
-        return Err(ToolCallResult::error(format!(
-            "Path does not exist: {path}"
-        )));
-    }
-    if !p.is_dir() {
-        return Err(ToolCallResult::error(format!(
-            "Path is not a directory: {path}"
-        )));
-    }
-    Ok(p)
 }
 
 /// Create a tokio runtime, resolve backend config, and build an embedding provider.
@@ -476,78 +430,6 @@ fn create_runtime_and_provider() -> Result<
         .map_err(|e| ToolCallResult::error(format!("Failed to create embedding provider: {e}")))?;
 
     Ok((rt, provider, config, model_name))
-}
-
-/// Handle the `index_project` tool.
-fn handle_index_project(args: &Value) -> ToolCallResult {
-    let repo_path = match require_dir_path(args) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-
-    let (rt, provider, config, model_name) = match create_runtime_and_provider() {
-        Ok(t) => t,
-        Err(e) => return e,
-    };
-
-    match rt.block_on(vera_core::indexing::index_repository(
-        repo_path,
-        &provider,
-        &config,
-        &model_name,
-    )) {
-        Ok(summary) => match serde_json::to_string_pretty(&summary) {
-            Ok(json) => ToolCallResult::success(json),
-            Err(e) => ToolCallResult::error(format!("Failed to serialize summary: {e}")),
-        },
-        Err(e) => ToolCallResult::error(format!("Indexing failed: {e}")),
-    }
-}
-
-/// Handle the `update_project` tool.
-fn handle_update_project(args: &Value) -> ToolCallResult {
-    let repo_path = match require_dir_path(args) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-
-    let (rt, provider, config, model_name) = match create_runtime_and_provider() {
-        Ok(t) => t,
-        Err(e) => return e,
-    };
-
-    match rt.block_on(vera_core::indexing::update_repository(
-        repo_path,
-        &provider,
-        &config,
-        &model_name,
-    )) {
-        Ok(summary) => match serde_json::to_string_pretty(&summary) {
-            Ok(json) => ToolCallResult::success(json),
-            Err(e) => ToolCallResult::error(format!("Failed to serialize summary: {e}")),
-        },
-        Err(e) => ToolCallResult::error(format!("Update failed: {e}")),
-    }
-}
-
-/// Handle the `watch_project` tool.
-fn handle_watch_project(args: &Value) -> ToolCallResult {
-    let repo_path = match resolve_repo_path(args) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-
-    match crate::watcher::start_watching(&repo_path) {
-        Ok(handle) => {
-            let mut guard = WATCHER.lock().unwrap();
-            *guard = Some(handle);
-            ToolCallResult::success(format!(
-                "Watching {} for changes. Index will auto-update when files are modified.",
-                repo_path.display()
-            ))
-        }
-        Err(e) => ToolCallResult::error(e),
-    }
 }
 
 /// Resolve an optional path argument to a validated directory path.
@@ -596,54 +478,6 @@ fn handle_get_overview(args: &Value) -> ToolCallResult {
     }
 }
 
-/// Handle the `find_references` tool.
-fn handle_find_references(args: &Value) -> ToolCallResult {
-    let symbol = match args.get("symbol").and_then(|v| v.as_str()) {
-        Some(s) => s,
-        None => return ToolCallResult::error("Missing required parameter: symbol"),
-    };
-    let repo_path = match resolve_repo_path(args) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-    let mode = args
-        .get("mode")
-        .and_then(|v| v.as_str())
-        .unwrap_or("callers");
-
-    match mode {
-        "callees" => match vera_core::stats::find_callees(&repo_path, symbol) {
-            Ok(results) => match serde_json::to_string(&results) {
-                Ok(json) => ToolCallResult::success(json),
-                Err(e) => ToolCallResult::error(format!("Failed to serialize: {e}")),
-            },
-            Err(e) => ToolCallResult::error(format!("Failed to find callees: {e}")),
-        },
-        _ => match vera_core::stats::find_callers(&repo_path, symbol) {
-            Ok(results) => match serde_json::to_string(&results) {
-                Ok(json) => ToolCallResult::success(json),
-                Err(e) => ToolCallResult::error(format!("Failed to serialize: {e}")),
-            },
-            Err(e) => ToolCallResult::error(format!("Failed to find callers: {e}")),
-        },
-    }
-}
-
-/// Handle the `find_dead_code` tool.
-fn handle_find_dead_code(args: &Value) -> ToolCallResult {
-    let repo_path = match resolve_repo_path(args) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-    match vera_core::stats::find_dead_symbols(&repo_path) {
-        Ok(results) => match serde_json::to_string(&results) {
-            Ok(json) => ToolCallResult::success(json),
-            Err(e) => ToolCallResult::error(format!("Failed to serialize: {e}")),
-        },
-        Err(e) => ToolCallResult::error(format!("Failed to find dead code: {e}")),
-    }
-}
-
 /// Handle the `regex_search` tool.
 fn handle_regex_search(args: &Value) -> ToolCallResult {
     let pattern = match args.get("pattern").and_then(|v| v.as_str()) {
@@ -683,7 +517,7 @@ fn handle_regex_search(args: &Value) -> ToolCallResult {
 
     if !index_dir.exists() {
         return ToolCallResult::error(
-            "No index found in current directory. Run index_project first.",
+            "No index found in current directory. Run search_code first to auto-index.",
         );
     }
 
@@ -705,10 +539,15 @@ fn handle_regex_search(args: &Value) -> ToolCallResult {
         context,
         &filters,
     ) {
-        Ok(results) => match compact_results_json(&results) {
+        Ok(results) => {
+            let signatures_only = args
+                .get("compact")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            match compact_results_json(&results, MCP_OUTPUT_BUDGET, signatures_only) {
             Ok(json) => ToolCallResult::success(json),
             Err(e) => ToolCallResult::error(format!("Failed to serialize results: {e}")),
-        },
+        }},
         Err(e) => ToolCallResult::error(format!("Regex search failed: {e}")),
     }
 }
@@ -718,19 +557,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tool_definitions_has_nine_tools() {
+    fn tool_definitions_has_four_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 4);
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"search_code"));
-        assert!(names.contains(&"index_project"));
-        assert!(names.contains(&"update_project"));
         assert!(names.contains(&"get_stats"));
         assert!(names.contains(&"get_overview"));
-        assert!(names.contains(&"watch_project"));
-        assert!(names.contains(&"find_references"));
-        assert!(names.contains(&"find_dead_code"));
         assert!(names.contains(&"regex_search"));
     }
 
@@ -763,75 +597,43 @@ mod tests {
 
     #[test]
     fn search_code_accepts_queries_array() {
-        // No index, but should get past parameter validation.
+        // No index and no embedding config, should get past parameter validation.
         let result = handle_tool_call(
             "search_code",
             &serde_json::json!({"queries": ["foo", "bar"]}),
         );
-        // Should fail with "No index found", not "Missing required parameter".
+        // Should fail (either auto-index fails or embedding provider fails).
         assert!(result.is_error);
-        assert!(
-            result.content[0].text.contains("No index found"),
-            "got: {}",
-            result.content[0].text
-        );
     }
 
     #[test]
-    fn truncate_content_short_passthrough() {
+    fn truncate_to_budget_short_passthrough() {
         let short = "hello world";
-        let result = truncate_content(short);
+        let result = truncate_to_budget(short, 1000);
         assert_eq!(result.as_ref(), short);
     }
 
     #[test]
-    fn truncate_content_long_truncates() {
-        let long = "a".repeat(MAX_CONTENT_CHARS + 100);
-        let result = truncate_content(&long);
+    fn truncate_to_budget_long_truncates() {
+        let long = "a".repeat(500);
+        let result = truncate_to_budget(&long, 100);
         assert!(result.len() < long.len());
         assert!(result.ends_with("[...truncated]"));
     }
 
     #[test]
-    fn index_project_missing_path_returns_error() {
-        let result = handle_tool_call("index_project", &serde_json::json!({}));
-        assert!(result.is_error);
-        assert!(
-            result.content[0]
-                .text
-                .contains("Missing required parameter")
-        );
-    }
-
-    #[test]
-    fn update_project_missing_path_returns_error() {
-        let result = handle_tool_call("update_project", &serde_json::json!({}));
-        assert!(result.is_error);
-        assert!(
-            result.content[0]
-                .text
-                .contains("Missing required parameter")
-        );
-    }
-
-    #[test]
-    fn index_project_invalid_path_returns_error() {
-        let result = handle_tool_call(
+    fn removed_tools_return_unknown() {
+        for tool in &[
             "index_project",
-            &serde_json::json!({"path": "/nonexistent/path/abc"}),
-        );
-        assert!(result.is_error);
-        assert!(result.content[0].text.contains("does not exist"));
-    }
-
-    #[test]
-    fn update_project_invalid_path_returns_error() {
-        let result = handle_tool_call(
             "update_project",
-            &serde_json::json!({"path": "/nonexistent/path/abc"}),
-        );
-        assert!(result.is_error);
-        assert!(result.content[0].text.contains("does not exist"));
+            "watch_project",
+            "find_references",
+            "find_dead_code",
+        ] {
+            let result = handle_tool_call(tool, &serde_json::json!({}));
+            assert!(result.is_error);
+            assert!(result.content[0].text.contains("Unknown tool"));
+        }
     }
 
     #[test]

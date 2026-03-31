@@ -19,6 +19,34 @@ fn sample_chunks(n: usize) -> Vec<Chunk> {
         .collect()
 }
 
+struct ContextLimitProvider {
+    dim: usize,
+    max_chars: usize,
+}
+
+impl EmbeddingProvider for ContextLimitProvider {
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+        if texts
+            .iter()
+            .any(|text| text.chars().count() > self.max_chars)
+        {
+            return Err(EmbeddingError::ApiError {
+                status: 400,
+                message: r#"{"error":{"code":400,"message":"input (8766 tokens) is larger than the max context size (8192 tokens). skipping","type":"exceed_context_size_error","n_prompt_tokens":8766,"n_ctx":8192}}"#.to_string(),
+            });
+        }
+
+        Ok(texts
+            .iter()
+            .map(|text| vec![text.len() as f32, 1.0, 2.0, 3.0][..self.dim].to_vec())
+            .collect())
+    }
+
+    fn expected_dim(&self) -> Option<usize> {
+        Some(self.dim)
+    }
+}
+
 // ── Provider trait tests ────────────────────────────────────────────
 
 #[tokio::test]
@@ -96,7 +124,7 @@ async fn embed_chunks_returns_all_embeddings() {
     let provider = MockProvider::new(64);
     let chunks = sample_chunks(5);
 
-    let result = embed_chunks(&provider, &chunks, 32).await.unwrap();
+    let result = embed_chunks(&provider, &chunks, 32, 0).await.unwrap();
 
     assert_eq!(result.len(), 5, "should get one embedding per chunk");
     for (id, vec) in &result {
@@ -112,7 +140,7 @@ async fn embed_chunks_respects_batch_size() {
     let provider = MockProvider::new(32);
     let chunks = sample_chunks(10);
 
-    let result = embed_chunks(&provider, &chunks, 3).await.unwrap();
+    let result = embed_chunks(&provider, &chunks, 3, 0).await.unwrap();
 
     assert_eq!(result.len(), 10);
     // Verify ordering is preserved.
@@ -126,7 +154,7 @@ async fn embed_chunks_single_batch() {
     let provider = MockProvider::new(16);
     let chunks = sample_chunks(3);
 
-    let result = embed_chunks(&provider, &chunks, 100).await.unwrap();
+    let result = embed_chunks(&provider, &chunks, 100, 0).await.unwrap();
 
     assert_eq!(result.len(), 3);
 }
@@ -134,7 +162,7 @@ async fn embed_chunks_single_batch() {
 #[tokio::test]
 async fn embed_chunks_empty_input() {
     let provider = MockProvider::new(64);
-    let result = embed_chunks(&provider, &[], 32).await.unwrap();
+    let result = embed_chunks(&provider, &[], 32, 0).await.unwrap();
     assert!(result.is_empty());
 }
 
@@ -143,7 +171,7 @@ async fn embed_chunks_batch_size_one() {
     let provider = MockProvider::new(16);
     let chunks = sample_chunks(3);
 
-    let result = embed_chunks(&provider, &chunks, 1).await.unwrap();
+    let result = embed_chunks(&provider, &chunks, 1, 0).await.unwrap();
 
     assert_eq!(result.len(), 3);
 }
@@ -153,7 +181,7 @@ async fn embed_chunks_vectors_are_non_zero() {
     let provider = MockProvider::new(64);
     let chunks = sample_chunks(5);
 
-    let result = embed_chunks(&provider, &chunks, 32).await.unwrap();
+    let result = embed_chunks(&provider, &chunks, 32, 0).await.unwrap();
 
     for (id, vec) in &result {
         let norm: f32 = vec.iter().map(|v| v * v).sum::<f32>().sqrt();
@@ -171,7 +199,7 @@ async fn embed_chunks_propagates_auth_error() {
     });
     let chunks = sample_chunks(3);
 
-    let result = embed_chunks(&provider, &chunks, 32).await;
+    let result = embed_chunks(&provider, &chunks, 32, 0).await;
 
     assert!(result.is_err());
     assert!(matches!(
@@ -187,7 +215,7 @@ async fn embed_chunks_propagates_connection_error() {
     });
     let chunks = sample_chunks(3);
 
-    let result = embed_chunks(&provider, &chunks, 32).await;
+    let result = embed_chunks(&provider, &chunks, 32, 0).await;
 
     assert!(result.is_err());
     assert!(matches!(
@@ -203,7 +231,7 @@ async fn different_chunks_get_different_vectors() {
     let provider = MockProvider::new(64);
     let chunks = sample_chunks(3);
 
-    let result = embed_chunks(&provider, &chunks, 32).await.unwrap();
+    let result = embed_chunks(&provider, &chunks, 32, 0).await.unwrap();
 
     // Different content should produce different vectors.
     assert_ne!(result[0].1, result[1].1);
@@ -242,7 +270,7 @@ async fn embed_and_store_in_vector_db() {
     let provider = MockProvider::new(dim);
     let chunks = sample_chunks(5);
 
-    let embeddings = embed_chunks(&provider, &chunks, 32).await.unwrap();
+    let embeddings = embed_chunks(&provider, &chunks, 32, 0).await.unwrap();
 
     // Store in vector DB.
     let store = VectorStore::open_in_memory(dim).unwrap();
@@ -271,7 +299,7 @@ async fn embed_and_store_batch() {
     let provider = MockProvider::new(dim);
     let chunks = sample_chunks(10);
 
-    let embeddings = embed_chunks(&provider, &chunks, 4).await.unwrap();
+    let embeddings = embed_chunks(&provider, &chunks, 4, 0).await.unwrap();
     assert_eq!(embeddings.len(), 10);
 
     // Batch insert into vector store.
@@ -292,7 +320,7 @@ async fn concurrent_embed_returns_all_embeddings() {
     let provider = MockProvider::new(64);
     let chunks = sample_chunks(20);
 
-    let result = embed_chunks_concurrent(&provider, &chunks, 5, 4)
+    let result = embed_chunks_concurrent(&provider, &chunks, 5, 4, 0)
         .await
         .unwrap();
 
@@ -309,8 +337,8 @@ async fn concurrent_embed_matches_sequential() {
     let provider = MockProvider::new(32);
     let chunks = sample_chunks(15);
 
-    let sequential = embed_chunks(&provider, &chunks, 4).await.unwrap();
-    let concurrent = embed_chunks_concurrent(&provider, &chunks, 4, 3)
+    let sequential = embed_chunks(&provider, &chunks, 4, 0).await.unwrap();
+    let concurrent = embed_chunks_concurrent(&provider, &chunks, 4, 3, 0)
         .await
         .unwrap();
 
@@ -324,7 +352,7 @@ async fn concurrent_embed_matches_sequential() {
 #[tokio::test]
 async fn concurrent_embed_empty_input() {
     let provider = MockProvider::new(64);
-    let result = embed_chunks_concurrent(&provider, &[], 32, 4)
+    let result = embed_chunks_concurrent(&provider, &[], 32, 4, 0)
         .await
         .unwrap();
     assert!(result.is_empty());
@@ -335,7 +363,7 @@ async fn concurrent_embed_single_batch() {
     let provider = MockProvider::new(16);
     let chunks = sample_chunks(3);
 
-    let result = embed_chunks_concurrent(&provider, &chunks, 100, 4)
+    let result = embed_chunks_concurrent(&provider, &chunks, 100, 4, 0)
         .await
         .unwrap();
     assert_eq!(result.len(), 3);
@@ -348,12 +376,31 @@ async fn concurrent_embed_propagates_error() {
     });
     let chunks = sample_chunks(10);
 
-    let result = embed_chunks_concurrent(&provider, &chunks, 3, 4).await;
+    let result = embed_chunks_concurrent(&provider, &chunks, 3, 4, 0).await;
     assert!(result.is_err());
     assert!(matches!(
         result.unwrap_err(),
         EmbeddingError::AuthError { .. }
     ));
+}
+
+#[tokio::test]
+async fn concurrent_embed_recovers_from_context_limit_errors() {
+    let provider = ContextLimitProvider {
+        dim: 4,
+        max_chars: 80,
+    };
+    let mut chunks = sample_chunks(3);
+    chunks[1].content = format!("fn huge() {{\n    {}\n}}", "x".repeat(600));
+
+    let result = embed_chunks_concurrent(&provider, &chunks, 2, 2, 0)
+        .await
+        .unwrap();
+
+    assert_eq!(result.len(), 3);
+    assert_eq!(result[0].0, "chunk-0");
+    assert_eq!(result[1].0, "chunk-1");
+    assert_eq!(result[2].0, "chunk-2");
 }
 
 // ── OpenAI provider config tests ────────────────────────────────────

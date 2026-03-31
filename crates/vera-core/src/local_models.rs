@@ -42,6 +42,11 @@ const RERANKER_TOKENIZER_FILE: &str = "tokenizer.json";
 /// The `ort` crate (rc.11) uses `load-dynamic` so any ABI-compatible ORT works.
 const ORT_VERSION: &str = "1.24.4";
 
+/// ONNX Runtime 1.24.x dropped macOS x86_64 binaries. 1.23.2 is the last
+/// release that ships `onnxruntime-osx-x86_64` archives.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const ORT_VERSION_MACOS_X86: &str = "1.23.2";
+
 static ORT_INIT_RESULT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -412,7 +417,11 @@ pub fn ensure_ort_runtime(lib_path: Option<&std::path::Path>) -> Result<()> {
 
 /// Return Vera's home directory.
 ///
-/// Uses `VERA_HOME` when set, otherwise defaults to `~/.vera`.
+/// Resolution order:
+/// 1. `VERA_HOME` env var (explicit override)
+/// 2. `~/.vera` if it already exists (backward compatibility)
+/// 3. `$XDG_DATA_HOME/vera` (XDG standard, defaults to `~/.local/share/vera`)
+/// 4. `~/.vera` as final fallback
 pub fn vera_home_dir() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("VERA_HOME") {
         if !path.trim().is_empty() {
@@ -420,9 +429,17 @@ pub fn vera_home_dir() -> Result<PathBuf> {
         }
     }
 
-    Ok(dirs::home_dir()
-        .context("Could not find home directory")?
-        .join(".vera"))
+    let home = dirs::home_dir().context("Could not find home directory")?;
+    let legacy = home.join(".vera");
+    if legacy.exists() {
+        return Ok(legacy);
+    }
+
+    if let Some(data) = dirs::data_dir() {
+        return Ok(data.join("vera"));
+    }
+
+    Ok(legacy)
 }
 
 /// Get the platform-specific ONNX Runtime shared library filename.
@@ -459,29 +476,74 @@ fn ort_lib_filename() -> String {
 
 use crate::config::OnnxExecutionProvider;
 
-/// Detect the system CUDA major version by running `nvcc --version` or
-/// checking the CUDA_PATH environment variable. Returns None if not found.
-fn detect_cuda_major_version() -> Option<u32> {
-    // Try nvidia-smi first (works even without toolkit installed)
-    if let Ok(output) = std::process::Command::new("nvidia-smi").output() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // Look for "CUDA Version: XX.Y"
-        if let Some(pos) = stdout.find("CUDA Version:") {
-            let rest = &stdout[pos + 14..];
-            if let Some(major) = rest.trim().split('.').next() {
-                if let Ok(v) = major.parse::<u32>() {
-                    return Some(v);
-                }
-            }
-        }
+fn parse_cuda_major_version(value: &str) -> Option<u32> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
     }
-    None
+
+    let normalized = trimmed.trim_matches(|ch: char| ch == '"' || ch.is_whitespace());
+    let last_segment = normalized
+        .rsplit(['\\', '/'])
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(normalized);
+    let version_segment = last_segment
+        .strip_prefix('v')
+        .or_else(|| last_segment.strip_prefix("cuda-"))
+        .unwrap_or(last_segment);
+    version_segment
+        .split(['.', '_', '-'])
+        .next()
+        .and_then(|major| major.parse::<u32>().ok())
 }
 
-/// Platform-specific ORT archive info: (archive_ext, archive_name, primary_lib_path_inside_archive, local_lib_name).
+fn detect_cuda_major_from_cuda_path() -> Option<u32> {
+    std::env::var("CUDA_PATH")
+        .ok()
+        .and_then(|value| parse_cuda_major_version(&value))
+        .or_else(|| {
+            std::env::vars().find_map(|(key, value)| {
+                key.strip_prefix("CUDA_PATH_V")
+                    .and_then(parse_cuda_major_version)
+                    .or_else(|| parse_cuda_major_version(&value))
+            })
+        })
+}
+
+fn detect_cuda_major_from_nvcc() -> Option<u32> {
+    let output = std::process::Command::new("nvcc")
+        .arg("--version")
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let release = stdout.split("release ").nth(1)?;
+    release
+        .split([',', '\n', '\r'])
+        .next()
+        .and_then(parse_cuda_major_version)
+}
+
+fn detect_cuda_major_from_nvidia_smi() -> Option<u32> {
+    let output = std::process::Command::new("nvidia-smi").output().ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let rest = stdout.split("CUDA Version:").nth(1)?;
+    rest.split_whitespace()
+        .next()
+        .and_then(parse_cuda_major_version)
+}
+
+/// Detect the CUDA toolkit major version. Prefer the installed toolkit over
+/// the driver's maximum supported version so Vera picks the matching ORT build.
+fn detect_cuda_major_version() -> Option<u32> {
+    detect_cuda_major_from_cuda_path()
+        .or_else(detect_cuda_major_from_nvcc)
+        .or_else(detect_cuda_major_from_nvidia_smi)
+}
+
+/// Platform-specific ORT archive info: (archive_ext, archive_name, primary_lib_path_inside_archive, local_lib_name, version).
 fn ort_platform_info(
     ep: OnnxExecutionProvider,
-) -> Result<(&'static str, String, String, &'static str)> {
+) -> Result<(&'static str, String, String, &'static str, &'static str)> {
     let gpu_suffix = match ep {
         OnnxExecutionProvider::Cpu => "",
         OnnxExecutionProvider::Cuda => {
@@ -517,6 +579,7 @@ fn ort_platform_info(
                 base.clone(),
                 format!("{base}/lib/libonnxruntime.so.{ORT_VERSION}"),
                 "libonnxruntime.so",
+                ORT_VERSION,
             ));
         }
         // The CUDA 13 archive is named with `_cuda13` in the filename, but the
@@ -535,6 +598,7 @@ fn ort_platform_info(
             archive_name,
             format!("{internal_base}/lib/libonnxruntime.so.{ORT_VERSION}"),
             "libonnxruntime.so",
+            ORT_VERSION,
         ))
     }
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
@@ -548,6 +612,7 @@ fn ort_platform_info(
             base.clone(),
             format!("{base}/lib/libonnxruntime.so.{ORT_VERSION}"),
             "libonnxruntime.so",
+            ORT_VERSION,
         ))
     }
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -564,6 +629,7 @@ fn ort_platform_info(
             base.clone(),
             format!("{base}/lib/libonnxruntime.{ORT_VERSION}.dylib"),
             "libonnxruntime.dylib",
+            ORT_VERSION,
         ))
     }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
@@ -571,12 +637,14 @@ fn ort_platform_info(
         if !matches!(ep, OnnxExecutionProvider::Cpu) {
             anyhow::bail!("Only CPU execution provider is supported on macOS x86_64");
         }
-        let base = format!("onnxruntime-osx-x86_64-{ORT_VERSION}");
+        let ver = ORT_VERSION_MACOS_X86;
+        let base = format!("onnxruntime-osx-x86_64-{ver}");
         Ok((
             "tgz",
             base.clone(),
-            format!("{base}/lib/libonnxruntime.{ORT_VERSION}.dylib"),
+            format!("{base}/lib/libonnxruntime.{ver}.dylib"),
             "libonnxruntime.dylib",
+            ORT_VERSION_MACOS_X86,
         ))
     }
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -600,7 +668,7 @@ fn ort_platform_info(
         // Internal paths inside the zip always use the plain gpu suffix (no _cuda13).
         let internal_base = format!("onnxruntime-win-x64{gpu_suffix}-{ORT_VERSION}");
         let entry = format!("{internal_base}/lib/onnxruntime.dll");
-        Ok(("zip", archive_name, entry, "onnxruntime.dll"))
+        Ok(("zip", archive_name, entry, "onnxruntime.dll", ORT_VERSION))
     }
     #[cfg(not(any(
         all(target_os = "linux", target_arch = "x86_64"),
@@ -900,7 +968,7 @@ pub async fn ensure_ort_library_for_ep(ep: OnnxExecutionProvider) -> Result<Path
     }
 
     // Standard path: download from GitHub releases
-    let (ext, archive_name, lib_path_in_archive, local_lib_name) = ort_platform_info(ep)?;
+    let (ext, archive_name, lib_path_in_archive, local_lib_name, ort_version) = ort_platform_info(ep)?;
     let is_gpu = ep != OnnxExecutionProvider::Cpu;
 
     let archive_filename = if ext == "tgz" {
@@ -909,10 +977,10 @@ pub async fn ensure_ort_library_for_ep(ep: OnnxExecutionProvider) -> Result<Path
         format!("{archive_name}.zip")
     };
     let url = format!(
-        "https://github.com/microsoft/onnxruntime/releases/download/v{ORT_VERSION}/{archive_filename}"
+        "https://github.com/microsoft/onnxruntime/releases/download/v{ort_version}/{archive_filename}"
     );
 
-    eprintln!("Downloading ONNX Runtime v{ORT_VERSION} ({ep})...");
+    eprintln!("Downloading ONNX Runtime v{ort_version} ({ep})...");
     eprintln!("  {url}");
 
     crate::init_tls();
@@ -956,10 +1024,45 @@ pub async fn ensure_ort_library_for_ep(ep: OnnxExecutionProvider) -> Result<Path
     }
 
     eprintln!(
-        "ONNX Runtime v{ORT_VERSION} installed to {}",
+        "ONNX Runtime v{ort_version} installed to {}",
         lib_dir.display()
     );
     Ok(target_path)
+}
+
+/// Re-fetch the ONNX Runtime library for the selected execution provider.
+///
+/// `vera setup` and `vera repair` call this for CUDA so switching between CUDA
+/// toolkits refreshes the downloaded ORT build instead of reusing a stale one.
+pub async fn refresh_ort_library_for_ep(ep: OnnxExecutionProvider) -> Result<PathBuf> {
+    if let Ok(path) = std::env::var("ORT_DYLIB_PATH") {
+        if !path.is_empty() {
+            return Ok(PathBuf::from(path));
+        }
+    }
+
+    let target_path = ort_library_path_for_ep(ep)?;
+    if ep == OnnxExecutionProvider::Cpu {
+        if target_path.exists() {
+            fs::remove_file(&target_path).await.with_context(|| {
+                format!(
+                    "failed to remove stale ONNX Runtime at {}",
+                    target_path.display()
+                )
+            })?;
+        }
+    } else if let Some(dir) = target_path.parent() {
+        if dir.exists() {
+            fs::remove_dir_all(dir).await.with_context(|| {
+                format!(
+                    "failed to remove stale ONNX Runtime directory {}",
+                    dir.display()
+                )
+            })?;
+        }
+    }
+
+    ensure_ort_library_for_ep(ep).await
 }
 
 /// Pip-based fallback chain for OpenVINO and ROCm.
@@ -1683,12 +1786,20 @@ fn extract_zip_all_libs(
 /// Wrap an ort error with a user-friendly message suggesting alternatives.
 pub fn wrap_ort_error(e: impl std::fmt::Display) -> String {
     let err_msg = e.to_string();
-    if err_msg.contains("load")
-        || err_msg.contains("libonnxruntime")
-        || err_msg.contains("onnxruntime")
-        || err_msg.contains("dylib")
-        || err_msg.contains("dll")
-        || err_msg.contains(".so")
+    let lower = err_msg.to_ascii_lowercase();
+    if lower.contains("required libraries are missing") {
+        return err_msg;
+    }
+    if lower.contains("libonnxruntime")
+        || lower.contains("onnxruntime.dll")
+        || lower.contains("libonnxruntime.so")
+        || lower.contains("libonnxruntime.dylib")
+        || lower.contains("loadlibrary")
+        || lower.contains("shared library")
+        || lower.contains("specified module could not be found")
+        || lower.contains(".dll")
+        || lower.contains(".dylib")
+        || lower.contains(".so")
     {
         format!(
             "ONNX Runtime shared library not found.\n\
@@ -1696,7 +1807,9 @@ pub fn wrap_ort_error(e: impl std::fmt::Display) -> String {
              Original error: {err_msg}"
         )
     } else {
-        format!("Failed to initialize ONNX Runtime: {err_msg}")
+        format!(
+            "Failed to initialize ONNX session: {err_msg}\nRun `vera doctor --probe` for details."
+        )
     }
 }
 
@@ -1757,7 +1870,12 @@ pub async fn prepare_local_models_for_ep(
     let mut model = embedding_model.clone();
     model.adjust_for_gpu(ep);
     let mut paths = Vec::new();
-    paths.push(ensure_ort_library_for_ep(ep).await?);
+    let ort_path = if ep == OnnxExecutionProvider::Cuda {
+        refresh_ort_library_for_ep(ep).await?
+    } else {
+        ensure_ort_library_for_ep(ep).await?
+    };
+    paths.push(ort_path);
     let embedding_paths = ensure_local_embedding_assets(&model).await?;
     paths.push(embedding_paths.onnx_path);
     if let Some(path) = embedding_paths.onnx_data_path {
@@ -1942,12 +2060,42 @@ mod tests {
         assert!(config.onnx_data_file.is_none());
     }
 
+    #[test]
+    fn parse_cuda_major_version_handles_paths_and_versions() {
+        assert_eq!(
+            parse_cuda_major_version(r#"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2"#),
+            Some(13)
+        );
+        assert_eq!(parse_cuda_major_version("12.9"), Some(12));
+        assert_eq!(parse_cuda_major_version("12_6"), Some(12));
+    }
+
+    #[test]
+    fn wrap_ort_error_keeps_model_load_failures_specific() {
+        let message =
+            wrap_ort_error("failed to load embedding model C:\\Users\\me\\.vera\\model.onnx");
+        assert!(message.contains("Failed to initialize ONNX session"));
+        assert!(!message.contains("shared library not found"));
+    }
+
+    #[test]
+    fn wrap_ort_error_still_flags_missing_dlls() {
+        let message = wrap_ort_error(
+            "LoadLibrary failed for onnxruntime.dll: The specified module could not be found",
+        );
+        assert!(message.contains("ONNX Runtime shared library not found"));
+    }
+
     #[tokio::test]
     async fn test_download_failure_cleanup() {
         let temp_dir = tempfile::tempdir().unwrap();
         let home = temp_dir.path().join(".vera");
 
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = match TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(err) => panic!("failed to bind test listener: {err}"),
+        };
         let port = listener.local_addr().unwrap().port();
 
         std::thread::spawn(move || {

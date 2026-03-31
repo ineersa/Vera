@@ -16,6 +16,7 @@ pub mod chunker;
 pub mod extractor;
 pub mod languages;
 pub mod references;
+pub mod signatures;
 
 use anyhow::{Context, Result};
 use tree_sitter::Parser;
@@ -50,13 +51,15 @@ pub fn parse_and_chunk(
         return Ok(chunker::whole_file_chunk(source, file_path, language));
     }
 
-    match languages::tree_sitter_grammar(language) {
-        Some(grammar) => parse_with_treesitter(source, file_path, language, grammar, config),
-        None => {
-            // Tier 0 fallback
-            Ok(chunker::tier0_line_chunks(source, file_path, language))
-        }
-    }
+    let chunks = match languages::tree_sitter_grammar(language) {
+        Some(grammar) => parse_with_treesitter(source, file_path, language, grammar, config)?,
+        None => chunker::tier0_line_chunks(source, file_path, language),
+    };
+
+    Ok(chunker::split_oversized_chunks(
+        chunks,
+        config.max_chunk_bytes,
+    ))
 }
 
 /// Parse source using tree-sitter and produce symbol-aware chunks.

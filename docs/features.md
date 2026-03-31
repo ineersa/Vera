@@ -17,6 +17,8 @@ Results from both paths merge through Reciprocal Rank Fusion (RRF), so a result 
 
 After fusion, the top candidates go through a cross-encoder that reads query and candidate together as a single pair. This is the most impactful stage: it lifts MRR@10 from 0.39 to 0.60 (54% improvement). Most code search tools skip this step entirely.
 
+Large candidate sets are automatically batched (default 20 per request, configurable via `VERA_MAX_RERANK_BATCH`). Individual documents exceeding the reranker's context window are truncated at the last newline boundary before the character limit (default 4800, configurable via `VERA_MAX_RERANK_DOC_CHARS`). Both settings work automatically with no required configuration.
+
 ### Multi-Query Search
 
 A single search call can accept multiple queries at once. Run 2-3 varied queries to capture different aspects of what you're looking for (e.g., "OAuth token refresh", "JWT expiry handling", "auth middleware"). Results are deduplicated and reranked together. This reduces round-trips and improves recall.
@@ -28,6 +30,10 @@ An optional `intent` parameter lets you describe your higher-level goal separate
 ### Multi-Hop Deep Search
 
 `vera search "query" --deep` runs an initial search, extracts symbol names from the top results, then automatically searches for those symbols to find related code. This follows the call chain outward from your initial results without manual follow-up queries.
+
+### Compact Mode
+
+`vera search "query" --compact` strips function and class bodies from results, returning only signatures (name, parameters, return type). This fits more results into fewer tokens, making it useful for broad exploration before drilling into specific implementations. Works with `vera grep` too. Falls back to the first 3 lines for languages or chunks where body stripping isn't applicable.
 
 ### Query-Aware Ranking
 
@@ -62,6 +68,8 @@ Symbol-aware chunking scores 2.3x higher MRR on symbol lookup than sliding-windo
 
 Large symbols (>150 lines) are split at logical boundaries: closing braces, semicolons, blank lines. This preserves readability instead of cutting at arbitrary line counts. Languages without a tree-sitter grammar fall back to sliding-window chunking. Module-level gaps between symbols are kept as chunks when they carry useful retrieval context.
 
+Chunks that exceed the embedding model's input limit are automatically split in a post-processing pass. API mode uses a 24KB byte budget (roughly 6K-7K tokens, safe for any modern embedding model). Local mode uses the model's own tokenizer and max_length. Override with `VERA_MAX_CHUNK_BYTES` if needed.
+
 ### Incremental Updates
 
 `vera update .` compares content hashes against the stored index and only re-parses, re-chunks, and re-embeds changed files. For small changes this takes seconds, not minutes.
@@ -73,6 +81,10 @@ Large symbols (>150 lines) are split at logical boundaries: closing braces, semi
 ### Flexible Exclusions
 
 Vera respects `.gitignore` by default. For more control, `.veraignore` (gitignore syntax) gives full control over what gets indexed. Use `#include .gitignore` at the top to layer extra exclusions on top of gitignore rules. One-off `--exclude` flags, `--no-ignore`, and `--no-default-excludes` are also available.
+
+### Progress Reporting
+
+Indexing shows a live progress bar with file discovery, parsing, and embedding generation phases. JSON output mode (`--json`) skips the progress UI for machine consumption.
 
 ### Verbose Indexing
 
@@ -103,7 +115,7 @@ Vera respects `.gitignore` by default. For more control, `.veraignore` (gitignor
 Indexing, storage, and search always stay on your machine. The backend choice only affects where embeddings and reranking run:
 
 - **Local mode**: `vera setup` downloads curated ONNX models. The full pipeline (BM25 + vector + rerank) runs without external calls.
-- **API mode**: Point at any OpenAI-compatible endpoint (remote APIs or local servers like llama.cpp). Only model calls leave your machine.
+- **API mode**: Point at any OpenAI-compatible endpoint (remote APIs or local servers like llama.cpp). Only model calls leave your machine. Query prefixes for asymmetric embedding models (Qwen3, CodeRankEmbed, E5, BGE) are auto-detected from the model ID. Override with `EMBEDDING_QUERY_PREFIX` for unsupported models.
 
 ### Curated Local Models
 
@@ -163,14 +175,9 @@ Large chunks are automatically truncated at 8K characters with a `[...truncated]
 
 | Tool | What it does |
 |------|-------------|
-| `search_code` | Hybrid search with multi-query, intent, and all filters |
-| `index_project` | Full index build |
-| `update_project` | Incremental update |
+| `search_code` | Hybrid search with multi-query, intent, and all filters. Auto-indexes and starts watcher on first use. |
 | `get_stats` | File count, chunk count, index size, language breakdown |
 | `get_overview` | Architecture overview with conventions detection |
-| `watch_project` | Auto-update index on file changes |
-| `find_references` | Callers or callees of a symbol |
-| `find_dead_code` | Functions with no callers |
 | `regex_search` | Regex search with context lines |
 
 Tool descriptions include explicit WHEN TO USE / WHEN NOT TO USE guidance so AI agents route queries to the right tool automatically.
@@ -185,11 +192,11 @@ Docker images available for CPU, CUDA, ROCm, and OpenVINO. Details: [docker.md](
 
 ### Agent Config Snippets
 
-During setup, Vera offers to add a usage snippet to your project's agent config file (`AGENTS.md`, `CLAUDE.md`, `.cursorrules`, etc.) so agents discover Vera automatically.
+During setup, Vera offers to add a usage snippet to your project's agent config file (`AGENTS.md`, `CLAUDE.md`, `COPILOT.md`, `.cursorrules`, `.clinerules`, `.windsurfrules`) so agents discover Vera automatically.
 
 ### Auto-Sync on Upgrade
 
-`vera upgrade --apply` automatically syncs stale agent skill installs to match the new binary version after upgrading.
+`vera upgrade --apply` automatically syncs stale agent skill installs to match the new binary version after upgrading. You can also run `vera agent sync` directly, or let the interactive installer refresh stale installs in one step before opening the full selector.
 
 ## CLI Tooling
 
@@ -215,11 +222,13 @@ During setup, Vera offers to add a usage snippet to your project's agent config 
 
 ### Uninstalling
 
-`vera uninstall` removes `~/.vera/` (binary, models, ONNX Runtime libs, config), agent skill files, and the PATH shim. Per-project indexes (`.vera/` in each project) are left in place.
+`vera uninstall` removes Vera's data directory (models, ONNX Runtime libs, config), agent skill files, and the PATH shim. Per-project indexes (`.vera/` in each project) are left in place.
 
 ### Cross-Platform
 
 Single static binary for Linux (x86_64, aarch64), macOS (x86_64, aarch64), and Windows (x86_64). Install via npm (`bunx @vera-ai/cli install`), pip (`uvx vera-ai install`), prebuilt binary, Docker, or build from source.
+
+A fully static musl-linked binary (`x86_64-unknown-linux-musl`) is available for environments without standard shared libraries (NixOS, Alpine, minimal containers). It has zero runtime dependencies. The npm and pip wrappers auto-detect musl-based systems and select the correct binary. To override target selection manually, set `VERA_TARGET` (e.g., `VERA_TARGET=x86_64-unknown-linux-musl bunx @vera-ai/cli install`). The chosen target is stored in `~/.vera/install.json` so upgrades preserve it.
 
 ## Benchmarks
 
