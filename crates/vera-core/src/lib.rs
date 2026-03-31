@@ -35,5 +35,7 @@ pub mod config;
 
 pub mod local_models;
 
+pub(crate) mod token_budget;
+
 /// Index statistics collection.
 pub mod stats;

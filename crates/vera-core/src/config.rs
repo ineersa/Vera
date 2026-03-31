@@ -34,10 +34,20 @@ pub struct IndexingConfig {
     #[serde(default)]
     pub no_default_excludes: bool,
     /// Maximum chunk size in bytes for embedding. Chunks exceeding this are
-    /// split at line boundaries. 0 disables byte-based splitting.
-    /// Default: 24576 (24KB, ~6K-7K tokens, safe for any embedding model).
+    /// split at line boundaries. 0 disables byte fallback.
+    ///
+    /// Prefer `max_chunk_tokens` for token-aware chunk budgeting. This field
+    /// remains for backwards compatibility with existing configs.
     #[serde(default = "default_max_chunk_bytes")]
     pub max_chunk_bytes: usize,
+    /// Maximum chunk size in estimated tokens for embedding.
+    ///
+    /// When non-zero, this takes precedence over `max_chunk_bytes`.
+    #[serde(default = "default_max_chunk_tokens")]
+    pub max_chunk_tokens: usize,
+    /// Number of overlapping lines between token-split sub-chunks.
+    #[serde(default = "default_chunk_overlap_lines")]
+    pub chunk_overlap_lines: u32,
 }
 
 fn default_max_chunk_bytes() -> usize {
@@ -45,6 +55,34 @@ fn default_max_chunk_bytes() -> usize {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(24_576)
+}
+
+fn default_max_chunk_tokens() -> usize {
+    std::env::var("VERA_MAX_CHUNK_TOKENS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+
+fn default_chunk_overlap_lines() -> u32 {
+    std::env::var("VERA_CHUNK_OVERLAP_LINES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2)
+}
+
+impl IndexingConfig {
+    /// Effective max chunk token budget.
+    ///
+    /// Uses `max_chunk_tokens` when set, otherwise derives a conservative
+    /// token budget from `max_chunk_bytes`.
+    pub fn effective_max_chunk_tokens(&self) -> usize {
+        if self.max_chunk_tokens > 0 {
+            self.max_chunk_tokens
+        } else {
+            crate::token_budget::token_budget_from_bytes(self.max_chunk_bytes)
+        }
+    }
 }
 
 impl Default for IndexingConfig {
@@ -66,6 +104,8 @@ impl Default for IndexingConfig {
             no_ignore: false,
             no_default_excludes: false,
             max_chunk_bytes: default_max_chunk_bytes(),
+            max_chunk_tokens: default_max_chunk_tokens(),
+            chunk_overlap_lines: default_chunk_overlap_lines(),
         }
     }
 }

@@ -98,6 +98,14 @@ fn print_human_config(config: &vera_core::config::VeraConfig) {
         config.indexing.max_chunk_bytes
     );
     println!(
+        "    max_chunk_tokens          {}",
+        config.indexing.max_chunk_tokens
+    );
+    println!(
+        "    chunk_overlap_lines       {}",
+        config.indexing.chunk_overlap_lines
+    );
+    println!(
         "    default_excludes          {:?}",
         config.indexing.default_excludes
     );
@@ -119,6 +127,10 @@ fn print_human_config(config: &vera_core::config::VeraConfig) {
     println!(
         "    reranking_enabled         {}",
         config.retrieval.reranking_enabled
+    );
+    println!(
+        "    max_rerank_batch          {}",
+        config.retrieval.max_rerank_batch
     );
     println!();
     println!("  Embedding:");
@@ -159,6 +171,12 @@ pub fn get_config_value(
         "indexing.max_chunk_bytes" => Some(serde_json::Value::Number(
             config.indexing.max_chunk_bytes.into(),
         )),
+        "indexing.max_chunk_tokens" => Some(serde_json::Value::Number(
+            config.indexing.max_chunk_tokens.into(),
+        )),
+        "indexing.chunk_overlap_lines" => Some(serde_json::Value::Number(
+            config.indexing.chunk_overlap_lines.into(),
+        )),
         "indexing.default_excludes" => serde_json::to_value(&config.indexing.default_excludes).ok(),
         "retrieval.default_limit" => Some(serde_json::Value::Number(
             config.retrieval.default_limit.into(),
@@ -172,6 +190,9 @@ pub fn get_config_value(
         }
         "retrieval.max_output_chars" => Some(serde_json::Value::Number(
             config.retrieval.max_output_chars.into(),
+        )),
+        "retrieval.max_rerank_batch" => Some(serde_json::Value::Number(
+            config.retrieval.max_rerank_batch.into(),
         )),
         "embedding.batch_size" => Some(serde_json::Value::Number(
             config.embedding.batch_size.into(),
@@ -207,6 +228,12 @@ fn set_config_value(
         "indexing.max_chunk_bytes" => {
             config.indexing.max_chunk_bytes = parse_value(key, value)?;
         }
+        "indexing.max_chunk_tokens" => {
+            config.indexing.max_chunk_tokens = parse_value(key, value)?;
+        }
+        "indexing.chunk_overlap_lines" => {
+            config.indexing.chunk_overlap_lines = parse_value(key, value)?;
+        }
         "indexing.default_excludes" => {
             config.indexing.default_excludes = serde_json::from_str(value).with_context(|| {
                 format!("failed to parse {key} as JSON array of strings: {value}")
@@ -226,6 +253,9 @@ fn set_config_value(
         }
         "retrieval.max_output_chars" => {
             config.retrieval.max_output_chars = parse_value(key, value)?;
+        }
+        "retrieval.max_rerank_batch" => {
+            config.retrieval.max_rerank_batch = parse_value(key, value)?;
         }
         "embedding.batch_size" => {
             config.embedding.batch_size = parse_value(key, value)?;

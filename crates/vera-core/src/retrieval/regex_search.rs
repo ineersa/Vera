@@ -10,10 +10,12 @@ use std::path::Path;
 use anyhow::Result;
 use regex::{Match, RegexBuilder};
 
-use crate::corpus::{ContentClass, classify_content, classify_path};
+use crate::corpus::{classify_content, classify_path, ContentClass};
 use crate::retrieval::query_utils::path_depth;
-use crate::retrieval::ranking::{RankingStage, apply_query_ranking_with_filters};
+use crate::retrieval::ranking::{apply_query_ranking_with_filters, RankingStage};
 use crate::types::{Language, SearchFilters, SearchResult};
+
+const MAX_REGEX_MATCHES: usize = 10_000;
 
 /// Search indexed files for a regex pattern.
 ///
@@ -58,7 +60,7 @@ pub fn search_regex(
     let mut results = Vec::new();
 
     for file_rel in &files {
-        if results.len() >= limit {
+        if results.len() >= MAX_REGEX_MATCHES {
             break;
         }
 
@@ -81,14 +83,21 @@ pub fn search_regex(
         }
 
         if matches!(class, ContentClass::Generated) {
-            collect_minified_matches(&mut results, &regex, file_rel, &content, language, limit);
+            collect_minified_matches(
+                &mut results,
+                &regex,
+                file_rel,
+                &content,
+                language,
+                MAX_REGEX_MATCHES,
+            );
             continue;
         }
 
         let lines: Vec<&str> = content.lines().collect();
 
         for (i, line) in lines.iter().enumerate() {
-            if results.len() >= limit {
+            if results.len() >= MAX_REGEX_MATCHES {
                 break;
             }
             if !regex.is_match(line) {
@@ -112,12 +121,9 @@ pub fn search_regex(
         }
     }
 
-    Ok(apply_query_ranking_with_filters(
-        pattern,
-        results,
-        RankingStage::Initial,
-        filters,
-    ))
+    let ranked = apply_query_ranking_with_filters(pattern, results, RankingStage::Initial, filters);
+
+    Ok(ranked.into_iter().take(limit).collect())
 }
 
 fn collect_minified_matches(
@@ -126,10 +132,10 @@ fn collect_minified_matches(
     file_rel: &str,
     content: &str,
     language: Language,
-    limit: usize,
+    max_results: usize,
 ) {
     for found in regex.find_iter(content) {
-        if results.len() >= limit {
+        if results.len() >= max_results {
             break;
         }
         let (snippet, line_start, line_end) = bounded_match_snippet(content, found, 220);

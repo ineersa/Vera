@@ -206,6 +206,7 @@ where
     // ── 4. Generate embeddings (concurrent batches) ──────────────
     let batch_size = config.embedding.batch_size;
     let max_concurrent_requests = config.embedding.max_concurrent_requests;
+    let max_chunk_tokens = config.indexing.effective_max_chunk_tokens();
 
     let progress_cb = |done: usize, total: usize| {
         on_progress(IndexProgress::EmbeddingProgress { done, total });
@@ -215,7 +216,7 @@ where
         &all_chunks,
         batch_size,
         max_concurrent_requests,
-        config.indexing.max_chunk_bytes,
+        max_chunk_tokens,
         progress_cb,
     )
     .await

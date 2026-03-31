@@ -580,15 +580,18 @@ enum Commands {
                       configuration as a table (or JSON with --json).\n\n\
                       Use `get <key>` to read a specific value, or `set <key> <value>` \
                       to update it.\n\n\
-                      Configuration keys use dot notation:\n  \
-                       indexing.max_chunk_lines       Max lines per chunk (default: 200)\n  \
-                       indexing.max_chunk_bytes       Max chunk bytes for embedding (default: 24576)\n  \
-                       indexing.max_file_size_bytes   Max file size to index (default: 1000000)\n  \
-                       retrieval.default_limit        Default result count (default: 5)\n  \
+                       Configuration keys use dot notation:\n  \
+                        indexing.max_chunk_lines       Max lines per chunk (default: 200)\n  \
+                       indexing.max_chunk_tokens      Max chunk tokens for embedding (default: 0=derive from bytes)\n  \
+                        indexing.max_chunk_bytes       Max chunk bytes for embedding (default: 24576)\n  \
+                       indexing.chunk_overlap_lines   Overlapping lines between token-split chunks (default: 2)\n  \
+                        indexing.max_file_size_bytes   Max file size to index (default: 1000000)\n  \
+                        retrieval.default_limit        Default result count (default: 5)\n  \
                        retrieval.rrf_k                RRF fusion constant (default: 60)\n  \
-                      retrieval.rerank_candidates    Reranker candidate count (default: 50)\n  \
-                      retrieval.reranking_enabled    Enable reranking (default: true)\n  \
-                      retrieval.max_output_chars     Total output char budget (default: 12000)\n  \
+                       retrieval.rerank_candidates    Reranker candidate count (default: 50)\n  \
+                       retrieval.reranking_enabled    Enable reranking (default: true)\n  \
+                       retrieval.max_rerank_batch     Max docs per reranker API request (default: 20, 0 = no batching)\n  \
+                       retrieval.max_output_chars     Total output char budget (default: 12000)\n  \
                       embedding.batch_size           Embedding batch size (default: 128)\n  \
                       embedding.max_concurrent_requests  Concurrent API requests (default: 8)\n  \
                       embedding.timeout_secs         API timeout (default: 60)\n  \

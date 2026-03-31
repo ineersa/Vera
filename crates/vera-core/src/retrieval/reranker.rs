@@ -94,12 +94,12 @@ pub struct RerankerConfig {
     /// Some backends (notably llama.cpp reranking models) have a small
     /// context window and reject large document arrays in a single call.
     pub max_docs_per_request: usize,
-    /// Maximum characters per formatted reranker document.
+    /// Maximum estimated tokens per formatted reranker document.
     ///
     /// Long code snippets are split into overlapping windows (and truncated
     /// as a fallback) before reranking to avoid model context overflows on
     /// small rerank models.
-    pub max_document_chars: usize,
+    pub max_document_tokens: usize,
 }
 
 impl RerankerConfig {
@@ -112,7 +112,7 @@ impl RerankerConfig {
             timeout: Duration::from_secs(30),
             max_retries: 2,
             max_docs_per_request: 8,
-            max_document_chars: 1200,
+            max_document_tokens: 300,
         }
     }
 
@@ -123,6 +123,7 @@ impl RerankerConfig {
     /// - `RERANKER_MODEL_ID`
     /// - `RERANKER_MODEL_API_KEY`
     /// - `RERANKER_MAX_DOCS_PER_REQUEST` (optional)
+    /// - `RERANKER_MAX_DOCUMENT_TOKENS` (optional)
     /// - `RERANKER_MAX_DOCUMENT_CHARS` (optional)
     pub fn from_env() -> Result<Self> {
         let base_url =
@@ -134,12 +135,17 @@ impl RerankerConfig {
         let mut cfg = Self::new(base_url, model_id, api_key);
         if let Ok(value) = std::env::var("RERANKER_MAX_DOCS_PER_REQUEST") {
             if let Ok(parsed) = value.parse::<usize>() {
-                cfg.max_docs_per_request = parsed.max(1);
+                cfg.max_docs_per_request = parsed;
             }
         }
-        if let Ok(value) = std::env::var("RERANKER_MAX_DOCUMENT_CHARS") {
+        if let Ok(value) = std::env::var("RERANKER_MAX_DOCUMENT_TOKENS") {
             if let Ok(parsed) = value.parse::<usize>() {
-                cfg.max_document_chars = parsed.max(64);
+                cfg.max_document_tokens = parsed.max(16);
+            }
+        } else if let Ok(value) = std::env::var("RERANKER_MAX_DOCUMENT_CHARS") {
+            if let Ok(parsed) = value.parse::<usize>() {
+                cfg.max_document_tokens =
+                    crate::token_budget::token_budget_from_bytes(parsed).max(16);
             }
         }
 
@@ -160,13 +166,20 @@ impl RerankerConfig {
 
     /// Set maximum documents per API request.
     pub fn with_max_docs_per_request(mut self, max_docs_per_request: usize) -> Self {
-        self.max_docs_per_request = max_docs_per_request.max(1);
+        self.max_docs_per_request = max_docs_per_request;
         self
     }
 
-    /// Set maximum characters per formatted reranker document.
+    /// Set maximum token budget per formatted reranker document.
+    pub fn with_max_document_tokens(mut self, max_document_tokens: usize) -> Self {
+        self.max_document_tokens = max_document_tokens.max(16);
+        self
+    }
+
+    /// Backwards-compatible setter for char budgets.
     pub fn with_max_document_chars(mut self, max_document_chars: usize) -> Self {
-        self.max_document_chars = max_document_chars.max(64);
+        self.max_document_tokens =
+            crate::token_budget::token_budget_from_bytes(max_document_chars).max(16);
         self
     }
 }
@@ -340,7 +353,11 @@ impl ApiReranker {
             return Ok(Vec::new());
         }
 
-        let max_docs = self.config.max_docs_per_request.max(1);
+        let max_docs = if self.config.max_docs_per_request == 0 {
+            documents.len().max(1)
+        } else {
+            self.config.max_docs_per_request
+        };
         let mut pending: Vec<(usize, usize)> = Vec::new();
         let mut start = 0usize;
         while start < documents.len() {
@@ -368,10 +385,10 @@ impl ApiReranker {
                 Err(err) if is_context_limit_error(&err) && slice.len() == 1 => {
                     // Even one document overflowed. Retry with progressively smaller text.
                     let original = &documents[start];
-                    let mut budget = (self.config.max_document_chars / 2).max(64);
+                    let mut budget = (self.config.max_document_tokens / 2).max(16);
                     let mut recovered = None;
 
-                    while budget >= 64 {
+                    while budget >= 16 {
                         let shrunk = truncate_reranker_document(original, budget);
                         let singleton = vec![shrunk];
                         match self.call_api(query, &singleton, 1).await {
@@ -418,12 +435,13 @@ impl Reranker for ApiReranker {
             return Ok(Vec::new());
         }
 
-        let overlap_chars = (self.config.max_document_chars / 6).clamp(32, 256);
+        let overlap_tokens = (self.config.max_document_tokens / 6).clamp(8, 64);
         let mut expanded_documents = Vec::new();
         let mut expanded_to_original = Vec::new();
 
         for (doc_index, doc) in documents.iter().enumerate() {
-            let windows = split_reranker_document(doc, self.config.max_document_chars, overlap_chars);
+            let windows =
+                split_reranker_document(doc, self.config.max_document_tokens, overlap_tokens);
             for window in windows {
                 expanded_to_original.push(doc_index);
                 expanded_documents.push(window);
@@ -434,7 +452,7 @@ impl Reranker for ApiReranker {
             original_docs = documents.len(),
             expanded_docs = expanded_documents.len(),
             max_docs_per_request = self.config.max_docs_per_request,
-            max_document_chars = self.config.max_document_chars,
+            max_document_tokens = self.config.max_document_tokens,
             "prepared reranker windows"
         );
 
@@ -454,7 +472,38 @@ fn aggregate_split_scores(
     expanded_to_original: &[usize],
     original_count: usize,
 ) -> Vec<RerankScore> {
-    let mut best_scores: Vec<Option<f64>> = vec![None; original_count];
+    #[derive(Clone, Copy, Default)]
+    struct Top2 {
+        first: Option<f64>,
+        second: Option<f64>,
+    }
+
+    impl Top2 {
+        fn push(&mut self, score: f64) {
+            match self.first {
+                None => self.first = Some(score),
+                Some(first) if score >= first => {
+                    self.second = self.first;
+                    self.first = Some(score);
+                }
+                _ => match self.second {
+                    None => self.second = Some(score),
+                    Some(second) if score > second => self.second = Some(score),
+                    _ => {}
+                },
+            }
+        }
+
+        fn stable_score(self) -> Option<f64> {
+            match (self.first, self.second) {
+                (Some(first), Some(second)) => Some((first + second) / 2.0),
+                (Some(first), None) => Some(first),
+                _ => None,
+            }
+        }
+    }
+
+    let mut top_scores: Vec<Top2> = vec![Top2::default(); original_count];
 
     for score in expanded_scores {
         let Some(&original_index) = expanded_to_original.get(score.index) else {
@@ -466,18 +515,14 @@ fn aggregate_split_scores(
             continue;
         };
 
-        let entry = &mut best_scores[original_index];
-        *entry = Some(match *entry {
-            Some(existing) => existing.max(score.relevance_score),
-            None => score.relevance_score,
-        });
+        top_scores[original_index].push(score.relevance_score);
     }
 
-    let mut aggregated: Vec<RerankScore> = best_scores
+    let mut aggregated: Vec<RerankScore> = top_scores
         .into_iter()
         .enumerate()
-        .filter_map(|(index, relevance_score)| {
-            relevance_score.map(|score| RerankScore {
+        .filter_map(|(index, top2)| {
+            top2.stable_score().map(|score| RerankScore {
                 index,
                 relevance_score: score,
             })
@@ -493,8 +538,8 @@ fn aggregate_split_scores(
     aggregated
 }
 
-fn split_reranker_document(doc: &str, max_chars: usize, overlap_chars: usize) -> Vec<String> {
-    if doc.len() <= max_chars {
+fn split_reranker_document(doc: &str, max_tokens: usize, overlap_tokens: usize) -> Vec<String> {
+    if max_tokens == 0 || crate::token_budget::estimate_tokens(doc) <= max_tokens {
         return vec![doc.to_string()];
     }
 
@@ -502,67 +547,22 @@ fn split_reranker_document(doc: &str, max_chars: usize, overlap_chars: usize) ->
         let prefix_end = code_start + "Code:\n".len();
         let prefix = &doc[..prefix_end];
         let code = &doc[prefix_end..];
-        let content_budget = max_chars.saturating_sub(prefix.len());
+        let prefix_tokens = crate::token_budget::estimate_tokens(prefix);
+        let content_budget = max_tokens.saturating_sub(prefix_tokens);
 
-        if content_budget >= 64 {
-            return split_text_with_overlap(code, content_budget, overlap_chars)
+        if content_budget >= 16 {
+            return crate::token_budget::split_text_with_token_overlap(
+                code,
+                content_budget,
+                overlap_tokens,
+            )
                 .into_iter()
                 .map(|segment| format!("{prefix}{segment}"))
                 .collect();
         }
     }
 
-    split_text_with_overlap(doc, max_chars, overlap_chars)
-}
-
-fn split_text_with_overlap(text: &str, window_chars: usize, overlap_chars: usize) -> Vec<String> {
-    if text.is_empty() {
-        return vec![String::new()];
-    }
-
-    if text.len() <= window_chars || window_chars == 0 {
-        return vec![truncate_utf8_to_bytes(text, window_chars.max(1))];
-    }
-
-    let overlap = overlap_chars.min(window_chars.saturating_sub(1));
-    let mut windows = Vec::new();
-    let mut start = 0usize;
-
-    while start < text.len() {
-        let mut end = (start + window_chars).min(text.len());
-        while end > start && !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        if end == start {
-            end = next_char_boundary(text, start + 1);
-        }
-
-        windows.push(text[start..end].to_string());
-
-        if end >= text.len() {
-            break;
-        }
-
-        let mut next_start = end.saturating_sub(overlap);
-        while next_start > 0 && !text.is_char_boundary(next_start) {
-            next_start -= 1;
-        }
-        if next_start <= start {
-            next_start = next_char_boundary(text, start + 1);
-        }
-
-        start = next_start;
-    }
-
-    windows
-}
-
-fn next_char_boundary(text: &str, mut idx: usize) -> usize {
-    idx = idx.min(text.len());
-    while idx < text.len() && !text.is_char_boundary(idx) {
-        idx += 1;
-    }
-    idx
+    crate::token_budget::split_text_with_token_overlap(doc, max_tokens, overlap_tokens)
 }
 
 // ── Rerank search results ────────────────────────────────────────────
@@ -705,8 +705,8 @@ fn is_context_limit_error(err: &RerankerError) -> bool {
     }
 }
 
-fn truncate_reranker_document(doc: &str, max_chars: usize) -> String {
-    if doc.len() <= max_chars {
+fn truncate_reranker_document(doc: &str, max_tokens: usize) -> String {
+    if max_tokens == 0 || crate::token_budget::estimate_tokens(doc) <= max_tokens {
         return doc.to_string();
     }
 
@@ -714,24 +714,17 @@ fn truncate_reranker_document(doc: &str, max_chars: usize) -> String {
         let prefix_end = code_start + "Code:\n".len();
         let prefix = &doc[..prefix_end];
         let code = &doc[prefix_end..];
-        let keep = max_chars.saturating_sub(prefix.len());
-        if keep > 0 {
-            return format!("{prefix}{}", truncate_utf8_to_bytes(code, keep));
+        let prefix_tokens = crate::token_budget::estimate_tokens(prefix);
+        let keep_tokens = max_tokens.saturating_sub(prefix_tokens);
+        if keep_tokens > 0 {
+            return format!(
+                "{prefix}{}",
+                crate::token_budget::truncate_to_token_budget(code, keep_tokens)
+            );
         }
     }
 
-    truncate_utf8_to_bytes(doc, max_chars)
-}
-
-fn truncate_utf8_to_bytes(text: &str, max_bytes: usize) -> String {
-    if text.len() <= max_bytes {
-        return text.to_string();
-    }
-    let mut end = max_bytes.min(text.len());
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_string()
+    crate::token_budget::truncate_to_token_budget(doc, max_tokens)
 }
 
 // ── Document truncation ──────────────────────────────────────────────
@@ -1139,16 +1132,17 @@ mod tests {
         let body = "x".repeat(2000);
         let doc = format!("{prefix}{body}");
 
-        let parts = split_reranker_document(&doc, 400, 80);
+        let max_tokens = 120;
+        let parts = split_reranker_document(&doc, max_tokens, 24);
         assert!(parts.len() > 1, "document should be split into windows");
         for part in &parts {
             assert!(part.starts_with(prefix));
-            assert!(part.len() <= 400);
+            assert!(crate::token_budget::estimate_tokens(part) <= max_tokens + 16);
         }
     }
 
     #[test]
-    fn aggregate_split_scores_uses_max_score_per_original_doc() {
+    fn aggregate_split_scores_uses_top2_mean_per_original_doc() {
         let expanded_to_original = vec![0, 0, 1, 1, 2];
         let expanded_scores = vec![
             RerankScore {
@@ -1175,11 +1169,11 @@ mod tests {
 
         let aggregated = aggregate_split_scores(expanded_scores, &expanded_to_original, 3);
         assert_eq!(aggregated.len(), 3);
-        assert_eq!(aggregated[0].index, 0);
-        assert!((aggregated[0].relevance_score - 0.9).abs() < 1e-9);
+        let doc0 = aggregated.iter().find(|s| s.index == 0).unwrap();
+        assert!((doc0.relevance_score - 0.5).abs() < 1e-9);
 
         let doc1 = aggregated.iter().find(|s| s.index == 1).unwrap();
-        assert!((doc1.relevance_score - 0.6).abs() < 1e-9);
+        assert!((doc1.relevance_score - 0.5).abs() < 1e-9);
 
         let doc2 = aggregated.iter().find(|s| s.index == 2).unwrap();
         assert!((doc2.relevance_score - 0.2).abs() < 1e-9);

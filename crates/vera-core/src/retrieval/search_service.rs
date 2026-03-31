@@ -13,12 +13,12 @@ use tracing::warn;
 use crate::chunk_text::file_name;
 use crate::config::{InferenceBackend, VeraConfig};
 use crate::retrieval::hybrid::compute_vector_candidates;
-use crate::retrieval::query_classifier::{QueryType, classify_query, params_for_query_type};
+use crate::retrieval::query_classifier::{classify_query, params_for_query_type, QueryType};
 use crate::retrieval::query_utils::{
     looks_like_compound_identifier, looks_like_filename, path_depth, trim_query_token,
 };
 use crate::retrieval::ranking::{
-    RankingStage, apply_query_ranking_with_filters, is_path_weighted_query,
+    apply_query_ranking_with_filters, is_path_weighted_query, RankingStage,
 };
 use crate::retrieval::{apply_filters, search_bm25, search_hybrid, search_hybrid_reranked};
 use crate::types::{Chunk, SearchFilters, SearchResult, SymbolType};
@@ -138,8 +138,7 @@ pub fn execute_search(
     let rerank_candidates = effective_rerank_candidates(
         config.retrieval.rerank_candidates,
         fetch_limit,
-        query,
-        filters,
+        result_limit,
     );
 
     let ranking_stage = if reranker_enabled {
@@ -160,7 +159,7 @@ pub fn execute_search(
             fetch_limit,
             rrf_k,
             stored_dim,
-            rerank_candidates.max(fetch_limit),
+            rerank_candidates,
             vector_candidates,
         ))?
     } else {
@@ -229,17 +228,8 @@ fn effective_vector_candidates(
     compute_vector_candidates(fetch_limit, query_params.vector_candidate_multiplier)
 }
 
-fn effective_rerank_candidates(
-    base: usize,
-    fetch_limit: usize,
-    query: &str,
-    filters: &SearchFilters,
-) -> usize {
-    if needs_structural_overfetch(query, filters) {
-        return base;
-    }
-
-    base.max(fetch_limit)
+fn effective_rerank_candidates(base: usize, fetch_limit: usize, result_limit: usize) -> usize {
+    base.max(result_limit.max(1)).min(fetch_limit.max(1))
 }
 
 fn should_skip_reranking(query: &str, filters: &SearchFilters) -> bool {
@@ -548,17 +538,10 @@ mod tests {
 
     #[test]
     fn effective_candidates_use_base_multipliers() {
-        // Rerank candidates just return base.max(fetch_limit)
-        let filters = SearchFilters::default();
-        assert_eq!(
-            effective_rerank_candidates(50, 10, "anything", &filters),
-            50
-        );
-        assert_eq!(effective_rerank_candidates(5, 10, "anything", &filters), 10);
-        assert_eq!(
-            effective_rerank_candidates(50, 160, "file type detection and filtering", &filters),
-            50
-        );
+        // Rerank candidates are bounded to available fetch_limit.
+        assert_eq!(effective_rerank_candidates(50, 10, 5), 10);
+        assert_eq!(effective_rerank_candidates(5, 10, 5), 5);
+        assert_eq!(effective_rerank_candidates(50, 160, 20), 50);
 
         // Vector candidates use query_params multiplier without inflation
         let nl_params =
@@ -626,11 +609,9 @@ mod tests {
         )
         .unwrap();
 
-        assert!(
-            augmented
-                .iter()
-                .any(|result| result.symbol_name.as_deref() == Some("Sink"))
-        );
+        assert!(augmented
+            .iter()
+            .any(|result| result.symbol_name.as_deref() == Some("Sink")));
     }
 
     #[test]
