@@ -5,11 +5,13 @@
 //! without requiring manual update calls.
 
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use notify_debouncer_mini::{DebouncedEventKind, new_debouncer};
+use anyhow::Context;
+use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
+use serde::Deserialize;
 use tracing::{debug, info, warn};
 
 /// Debounce interval: wait this long after the last file change before updating.
@@ -132,8 +134,16 @@ fn run_incremental_update(repo_path: &Path, updating: &AtomicBool) {
 fn run_update_blocking(
     repo_path: &Path,
 ) -> Result<vera_core::indexing::UpdateSummary, anyhow::Error> {
-    let backend = vera_core::config::resolve_backend(None);
-    let mut config = vera_core::config::VeraConfig::default();
+    let runtime = match load_runtime_settings() {
+        Ok(settings) => settings,
+        Err(err) => {
+            warn!(error = %err, "Failed to load saved runtime config; using defaults");
+            RuntimeSettings::default()
+        }
+    };
+
+    let backend = vera_core::config::resolve_backend(runtime.backend_hint);
+    let mut config = runtime.config;
     config.adjust_for_backend(backend);
 
     let rt = tokio::runtime::Runtime::new()?;
@@ -148,4 +158,117 @@ fn run_update_blocking(
         &config,
         &model_name,
     ))
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeSettings {
+    config: vera_core::config::VeraConfig,
+    backend_hint: Option<vera_core::config::InferenceBackend>,
+}
+
+impl Default for RuntimeSettings {
+    fn default() -> Self {
+        Self {
+            config: vera_core::config::VeraConfig::default(),
+            backend_hint: None,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StoredConfigSnapshot {
+    #[serde(default)]
+    local_mode: Option<bool>,
+    #[serde(default)]
+    backend: Option<vera_core::config::InferenceBackend>,
+    #[serde(default)]
+    core_config: Option<vera_core::config::VeraConfig>,
+}
+
+fn load_runtime_settings() -> anyhow::Result<RuntimeSettings> {
+    let config_path = vera_core::local_models::vera_home_dir()?.join("config.json");
+    load_runtime_settings_from_path(&config_path)
+}
+
+fn load_runtime_settings_from_path(path: &Path) -> anyhow::Result<RuntimeSettings> {
+    if !path.exists() {
+        return Ok(RuntimeSettings::default());
+    }
+
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("failed to read runtime config: {}", path.display()))?;
+    if bytes.is_empty() {
+        return Ok(RuntimeSettings::default());
+    }
+
+    let stored: StoredConfigSnapshot = serde_json::from_slice(&bytes)
+        .with_context(|| format!("failed to parse runtime config: {}", path.display()))?;
+
+    let backend_hint = stored.backend.or(match stored.local_mode {
+        Some(true) => Some(vera_core::config::InferenceBackend::OnnxJina(
+            vera_core::config::OnnxExecutionProvider::Cpu,
+        )),
+        Some(false) => Some(vera_core::config::InferenceBackend::Api),
+        None => None,
+    });
+
+    Ok(RuntimeSettings {
+        config: stored.core_config.unwrap_or_default(),
+        backend_hint,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loads_saved_core_config_values() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("config.json");
+
+        let mut saved = vera_core::config::VeraConfig::default();
+        saved.indexing.max_chunk_tokens = 512;
+        saved.retrieval.max_rerank_batch = 7;
+
+        let payload = serde_json::json!({
+            "core_config": saved,
+        });
+        std::fs::write(&path, serde_json::to_vec(&payload).unwrap()).unwrap();
+
+        let settings = load_runtime_settings_from_path(&path).unwrap();
+        assert_eq!(settings.config.indexing.max_chunk_tokens, 512);
+        assert_eq!(settings.config.retrieval.max_rerank_batch, 7);
+        assert!(settings.backend_hint.is_none());
+    }
+
+    #[test]
+    fn local_mode_true_maps_to_local_backend() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("config.json");
+
+        std::fs::write(&path, br#"{"local_mode":true}"#).unwrap();
+
+        let settings = load_runtime_settings_from_path(&path).unwrap();
+        assert_eq!(
+            settings.backend_hint,
+            Some(vera_core::config::InferenceBackend::OnnxJina(
+                vera_core::config::OnnxExecutionProvider::Cpu
+            ))
+        );
+    }
+
+    #[test]
+    fn explicit_backend_takes_precedence_over_local_mode() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("config.json");
+
+        std::fs::write(&path, br#"{"local_mode":true,"backend":"api"}"#).unwrap();
+
+        let settings = load_runtime_settings_from_path(&path).unwrap();
+        assert_eq!(
+            settings.backend_hint,
+            Some(vera_core::config::InferenceBackend::Api)
+        );
+    }
 }
