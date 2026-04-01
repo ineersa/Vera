@@ -31,7 +31,6 @@ vera mcp
 The server exposes:
 
 - `search_code` (supports `queries` array for multi-query search, `intent` for reranking; auto-indexes and starts watcher on first use)
-- `get_stats`
 - `get_overview` (includes detected project conventions)
 - `regex_search`
 

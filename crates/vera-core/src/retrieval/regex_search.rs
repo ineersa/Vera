@@ -10,9 +10,9 @@ use std::path::Path;
 use anyhow::Result;
 use regex::{Match, RegexBuilder};
 
-use crate::corpus::{classify_content, classify_path, ContentClass};
+use crate::corpus::{ContentClass, classify_content, classify_path};
 use crate::retrieval::query_utils::path_depth;
-use crate::retrieval::ranking::{apply_query_ranking_with_filters, RankingStage};
+use crate::retrieval::ranking::{RankingStage, apply_query_ranking_with_filters};
 use crate::types::{Language, SearchFilters, SearchResult};
 
 const MAX_REGEX_MATCHES: usize = 10_000;

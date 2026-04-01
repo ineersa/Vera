@@ -2,7 +2,6 @@
 //!
 //! Defines the tools that the Vera MCP server exposes:
 //! - `search_code` — search indexed codebase (auto-indexes and watches on first use)
-//! - `get_stats` — retrieve index statistics
 //! - `get_overview` — architecture overview for agent onboarding
 //! - `regex_search` — regex search over indexed files
 
@@ -176,21 +175,6 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
-            name: "get_stats".to_string(),
-            description: "Get index statistics: file count, chunk count, index size, \
-                          and language breakdown."
-                .to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the project directory (default: current dir)"
-                    }
-                }
-            }),
-        },
-        ToolDefinition {
             name: "get_overview".to_string(),
             description: "Get architecture overview of the indexed project: languages, \
                           directories, entry points, symbol types, complexity hotspots, \
@@ -263,7 +247,6 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
 pub fn handle_tool_call(name: &str, arguments: &Value) -> ToolCallResult {
     match name {
         "search_code" => handle_search_code(arguments),
-        "get_stats" => handle_get_stats(arguments),
         "get_overview" => handle_get_overview(arguments),
         "regex_search" => handle_regex_search(arguments),
         _ => ToolCallResult::error(format!("Unknown tool: {name}")),
@@ -448,21 +431,6 @@ fn resolve_repo_path(args: &Value) -> Result<std::path::PathBuf, ToolCallResult>
     Ok(repo_path)
 }
 
-/// Handle the `get_stats` tool.
-fn handle_get_stats(args: &Value) -> ToolCallResult {
-    let repo_path = match resolve_repo_path(args) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-    match vera_core::stats::collect_stats(&repo_path) {
-        Ok(stats) => match serde_json::to_string_pretty(&stats) {
-            Ok(json) => ToolCallResult::success(json),
-            Err(e) => ToolCallResult::error(format!("Failed to serialize stats: {e}")),
-        },
-        Err(e) => ToolCallResult::error(format!("Failed to collect stats: {e}")),
-    }
-}
-
 /// Handle the `get_overview` tool.
 fn handle_get_overview(args: &Value) -> ToolCallResult {
     let repo_path = match resolve_repo_path(args) {
@@ -545,9 +513,10 @@ fn handle_regex_search(args: &Value) -> ToolCallResult {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             match compact_results_json(&results, MCP_OUTPUT_BUDGET, signatures_only) {
-            Ok(json) => ToolCallResult::success(json),
-            Err(e) => ToolCallResult::error(format!("Failed to serialize results: {e}")),
-        }},
+                Ok(json) => ToolCallResult::success(json),
+                Err(e) => ToolCallResult::error(format!("Failed to serialize results: {e}")),
+            }
+        }
         Err(e) => ToolCallResult::error(format!("Regex search failed: {e}")),
     }
 }
@@ -557,13 +526,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tool_definitions_has_four_tools() {
+    fn tool_definitions_has_three_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), 3);
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"search_code"));
-        assert!(names.contains(&"get_stats"));
         assert!(names.contains(&"get_overview"));
         assert!(names.contains(&"regex_search"));
     }
@@ -597,13 +565,14 @@ mod tests {
 
     #[test]
     fn search_code_accepts_queries_array() {
-        // No index and no embedding config, should get past parameter validation.
+        // Use an invalid scope to force a fast validation error before any indexing
+        // or embedding provider initialization.
         let result = handle_tool_call(
             "search_code",
-            &serde_json::json!({"queries": ["foo", "bar"]}),
+            &serde_json::json!({"queries": ["foo", "bar"], "scope": "invalid"}),
         );
-        // Should fail (either auto-index fails or embedding provider fails).
         assert!(result.is_error);
+        assert!(result.content[0].text.contains("Invalid scope"));
     }
 
     #[test]
@@ -637,10 +606,9 @@ mod tests {
     }
 
     #[test]
-    fn get_stats_no_index_returns_error() {
+    fn removed_get_stats_returns_unknown() {
         let result = handle_tool_call("get_stats", &serde_json::json!({"path": "/tmp"}));
         assert!(result.is_error);
-        // Should mention no index found or similar.
-        assert!(!result.content[0].text.is_empty());
+        assert!(result.content[0].text.contains("Unknown tool"));
     }
 }

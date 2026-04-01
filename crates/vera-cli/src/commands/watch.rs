@@ -8,8 +8,8 @@ pub fn run(path: &str, json: bool) -> Result<()> {
         .canonicalize()
         .map_err(|e| anyhow::anyhow!("Failed to resolve path: {e}"))?;
 
-    let _handle =
-        vera_mcp::watcher::start_watching(&repo_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let _handle = vera_mcp::watcher::start_watching_with_progress(&repo_path)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     if json {
         println!(
@@ -17,13 +17,13 @@ pub fn run(path: &str, json: bool) -> Result<()> {
             serde_json::json!({
                 "status": "watching",
                 "path": repo_path.display().to_string(),
-                "message": "Watching for file changes. Index will auto-update. Press Ctrl-C to stop."
+                "message": "Watching for file changes. Index will auto-update and print progress logs. Press Ctrl-C to stop."
             })
         );
     } else {
+        eprintln!("[watch] started in {}", repo_path.display());
         eprintln!(
-            "Watching {} for file changes. Index will auto-update. Press Ctrl-C to stop.",
-            repo_path.display()
+            "[watch] waiting for file changes (uses same ignore/exclude rules as indexing; Ctrl-C to stop)"
         );
     }
 

@@ -259,11 +259,10 @@ mod tests {
         assert_eq!(tools_resp["id"], 2);
 
         let tools = tools_resp["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), 3);
 
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"search_code"));
-        assert!(names.contains(&"get_stats"));
         assert!(names.contains(&"get_overview"));
         assert!(names.contains(&"regex_search"));
     }
@@ -407,7 +406,7 @@ mod tests {
         // tools list still works.
         assert_eq!(responses[4]["id"], 5);
         let tools = responses[4]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), 3);
     }
 
     #[test]
@@ -438,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn get_stats_via_mcp_returns_error_for_bad_path() {
+    fn removed_get_stats_via_mcp_returns_unknown_tool_error() {
         let responses = run_session(&[
             r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
             r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
@@ -448,5 +447,11 @@ mod tests {
         assert_eq!(responses.len(), 2);
         let result = &responses[1];
         assert_eq!(result["result"]["isError"], true);
+        assert!(
+            result["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Unknown tool")
+        );
     }
 }

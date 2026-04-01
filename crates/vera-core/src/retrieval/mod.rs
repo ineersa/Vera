@@ -9,8 +9,12 @@
 //! - Graceful degradation when services are unavailable
 
 pub mod bm25;
+pub mod completion_client;
+pub mod dynamic_reranker;
 pub mod hybrid;
+pub mod local_reranker;
 pub mod query_classifier;
+pub mod rag_fusion;
 pub mod ranking;
 pub mod reranker;
 pub mod search_service;
@@ -24,11 +28,7 @@ pub use reranker::{
     ApiReranker, RerankScore, Reranker, RerankerConfig, RerankerError, rerank_results,
 };
 
-pub mod dynamic_reranker;
 pub use dynamic_reranker::{DynamicReranker, create_dynamic_reranker};
-
-pub mod iterative_search;
-pub mod local_reranker;
 pub(crate) mod query_utils;
 pub mod regex_search;
 

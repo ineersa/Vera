@@ -65,7 +65,7 @@ The installer downloads the `vera` binary, writes a shim to a user bin directory
 ```bash
 vera mcp   # or: bunx @vera-ai/cli mcp / uvx vera-ai mcp
 ```
-Exposes `search_code`, `get_stats`, `get_overview`, and `regex_search` tools. `search_code` auto-indexes and starts a file watcher on first use if no index exists.
+Exposes `search_code`, `get_overview`, and `regex_search` tools. `search_code` auto-indexes and starts a file watcher on first use if no index exists.
 
 **Docker** (MCP server):
 ```bash
@@ -124,7 +124,7 @@ vera search "authentication logic"
 vera search "error handling" --lang rust
 vera search "routes" --path "src/**/*.ts"
 vera search "handler" --type function --limit 5
-vera search "config loading" --deep              # follows symbols from initial results
+vera search "config loading" --deep              # RAG-fusion: query expansion + reciprocal rank fusion
 vera search "auth" --compact                     # signatures only, broad exploration
 ```
 
@@ -229,7 +229,7 @@ Use Vera before opening many files or running broad text search when you need to
 - `vera grep "pattern"` for exact text or regex
 - `vera references <symbol>` for callers and callees
 - `vera overview` for a project summary (languages, entry points, hotspots)
-- `vera search --deep "query"` to follow symbols across multiple hops
+- `vera search --deep "query"` for RAG-fusion query expansion + merged ranking
 - Narrow results with `--lang`, `--path`, `--type`, or `--scope docs`
 - `vera watch .` to auto-update the index, or `vera update .` after edits (`vera index .` if `.vera/` is missing)
 - For detailed usage, query patterns, and troubleshooting, read the Vera skill file installed by `vera agent install`

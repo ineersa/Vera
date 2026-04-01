@@ -27,9 +27,9 @@ A single search call can accept multiple queries at once. Run 2-3 varied queries
 
 An optional `intent` parameter lets you describe your higher-level goal separately from the search query. The reranker uses this to score candidates against what you actually need, not just what you typed. Useful when the query is ambiguous or too short to convey full context.
 
-### Multi-Hop Deep Search
+### Deep Search (RAG Fusion)
 
-`vera search "query" --deep` runs an initial search, extracts symbol names from the top results, then automatically searches for those symbols to find related code. This follows the call chain outward from your initial results without manual follow-up queries.
+`vera search "query" --deep` expands the query into multiple related rewrites using an OpenAI-compatible completion model, runs search for each rewrite, and fuses all ranked lists with reciprocal rank fusion (RRF). This improves recall for broad conceptual queries without requiring manual multi-query prompting.
 
 ### Compact Mode
 
@@ -176,7 +176,6 @@ Large chunks are automatically truncated at 8K characters with a `[...truncated]
 | Tool | What it does |
 |------|-------------|
 | `search_code` | Hybrid search with multi-query, intent, and all filters. Auto-indexes and starts watcher on first use. |
-| `get_stats` | File count, chunk count, index size, language breakdown |
 | `get_overview` | Architecture overview with conventions detection |
 | `regex_search` | Regex search with context lines |
 

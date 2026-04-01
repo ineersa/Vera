@@ -1,11 +1,12 @@
 # Vera Setup Guide (API mode + local llama.cpp)
 
-This is the exact setup we are using now: Vera in `api` backend mode, with local llama.cpp servers for embeddings and reranking.
+This is the exact setup we are using now: Vera in `api` backend mode, with local llama.cpp servers for embeddings and reranking. `vera search --deep` can additionally use an OpenAI-compatible completion endpoint for RAG-fusion query expansion.
 
 ## 0) Prerequisites
 
 - Embedding server running at `http://localhost:8059/v1` with model `coderankembed-q8_0.gguf`
 - Reranker server running at `http://localhost:8060/v1` with model `bge-reranker-base-q8_0.gguf`
+- Optional (for `vera search --deep`): completion server running at `http://localhost:8061/v1`
 - `coderankembed` query prefix requirement: `Represent this query for searching relevant code:`
 
 Optional quick checks:
@@ -75,6 +76,11 @@ export RERANKER_MODEL_ID="bge-reranker-base-q8_0.gguf"
 export RERANKER_MODEL_API_KEY="not-needed"
 export RERANKER_MAX_DOCS_PER_REQUEST="8"
 export RERANKER_MAX_DOCUMENT_CHARS="1200"
+export VERA_COMPLETION_BASE_URL="http://localhost:8061/v1"
+export VERA_COMPLETION_MODEL_ID="<your-completion-model>"
+export VERA_COMPLETION_API_KEY="not-needed"
+export VERA_COMPLETION_MAX_TOKENS="16384"
+export VERA_COMPLETION_TIMEOUT_SECS="120"
 export VERA_NO_UPDATE_CHECK="1"
 ```
 
@@ -207,9 +213,21 @@ How watch works:
 - Ignores changes inside `.vera/`
 - Stop with `Ctrl+C`
 
-## 8) OpenCode project MCP setup (optional)
+## 8) MCP setup (OpenCode + generic JSON snippets)
 
-Project-level `opencode.json` can force Vera MCP to run in that project directory:
+Canonical MCP command:
+
+```bash
+vera mcp
+```
+
+To force MCP to use a specific repository index, run with a fixed CWD:
+
+```bash
+bash -lc 'cd /absolute/path/to/repo && vera mcp'
+```
+
+### A) OpenCode `opencode.json`
 
 ```json
 {
@@ -220,7 +238,7 @@ Project-level `opencode.json` can force Vera MCP to run in that project director
       "command": [
         "bash",
         "-lc",
-        "cd /home/ineersa/projects/mate/ai && /home/ineersa/mcp-servers/Vera/target/release/vera mcp"
+        "cd /home/ineersa/projects/mate/ai && vera mcp"
       ],
       "enabled": true
     }
@@ -228,7 +246,23 @@ Project-level `opencode.json` can force Vera MCP to run in that project director
 }
 ```
 
-This ensures MCP search tools use that repo's `.vera/` index.
+### B) Generic MCP client JSON (`command` + `args` style)
+
+```json
+{
+  "mcpServers": {
+    "vera": {
+      "command": "vera",
+      "args": ["mcp"],
+      "cwd": "/absolute/path/to/repo"
+    }
+  }
+}
+```
+
+If you do not want to depend on `PATH`, replace `"command": "vera"` with the absolute binary path.
+
+MCP tools exposed by Vera: `search_code`, `get_overview`, `regex_search`.
 
 ## 9) Common issues
 
@@ -236,5 +270,10 @@ This ensures MCP search tools use that repo's `.vera/` index.
   - lower `indexing.max_embedding_chars` and/or increase excludes
 - Reranker context errors:
   - ensure `RERANKER_MAX_DOCS_PER_REQUEST` and `RERANKER_MAX_DOCUMENT_CHARS` are set
+- `vera search --deep` behaves like normal search:
+  - ensure `VERA_COMPLETION_BASE_URL` and `VERA_COMPLETION_MODEL_ID` are set
+- `vera search --deep` fails with `failed to generate deep-search query candidates`:
+  - ensure completion model responds with JSON content (array or object containing rewrite strings) on OpenAI-compatible `/chat/completions`
+  - reasoning-heavy models often need larger budgets: increase `VERA_COMPLETION_MAX_TOKENS` (e.g. `16384`) and `VERA_COMPLETION_TIMEOUT_SECS`
 - No `.vera` in expected repo:
   - run `vera index .` from the repo root (or pass absolute repo path)

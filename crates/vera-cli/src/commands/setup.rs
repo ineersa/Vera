@@ -534,9 +534,10 @@ fn configure_api_interactive() -> anyhow::Result<()> {
     };
 
     // Reranker (optional)
-    let setup_reranker: bool = cliclack::confirm("Configure a reranker? (improves search precision)")
-        .initial_value(!preset.reranker_base_url.is_empty())
-        .interact()?;
+    let setup_reranker: bool =
+        cliclack::confirm("Configure a reranker? (improves search precision)")
+            .initial_value(!preset.reranker_base_url.is_empty())
+            .interact()?;
 
     let reranker = if setup_reranker {
         let reranker_base_url: String = if preset.reranker_base_url.is_empty() {
@@ -559,9 +560,10 @@ fn configure_api_interactive() -> anyhow::Result<()> {
                 .interact()?
         };
 
-        let reranker_api_key: String = cliclack::password("Reranker API key (Enter to reuse embedding key)")
-            .mask('▪')
-            .interact()?;
+        let reranker_api_key: String =
+            cliclack::password("Reranker API key (Enter to reuse embedding key)")
+                .mask('▪')
+                .interact()?;
         let reranker_api_key = if reranker_api_key.is_empty() {
             embedding_api_key
         } else {

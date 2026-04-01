@@ -61,7 +61,7 @@ All stored in `.vera/` at the project root.
 
 ## vera-mcp
 
-`server.rs` routes JSON-RPC requests. `tools.rs` implements four MCP tools: `search_code`, `get_stats`, `get_overview`, and `regex_search`. `search_code` auto-indexes and starts a file watcher on first use.
+`server.rs` routes JSON-RPC requests. `tools.rs` implements three MCP tools: `search_code`, `get_overview`, and `regex_search`. `search_code` auto-indexes and starts a file watcher on first use.
 
 ## Adding a new language
 

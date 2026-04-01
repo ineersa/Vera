@@ -13,12 +13,12 @@ use tracing::warn;
 use crate::chunk_text::file_name;
 use crate::config::{InferenceBackend, VeraConfig};
 use crate::retrieval::hybrid::compute_vector_candidates;
-use crate::retrieval::query_classifier::{classify_query, params_for_query_type, QueryType};
+use crate::retrieval::query_classifier::{QueryType, classify_query, params_for_query_type};
 use crate::retrieval::query_utils::{
     looks_like_compound_identifier, looks_like_filename, path_depth, trim_query_token,
 };
 use crate::retrieval::ranking::{
-    apply_query_ranking_with_filters, is_path_weighted_query, RankingStage,
+    RankingStage, apply_query_ranking_with_filters, is_path_weighted_query,
 };
 use crate::retrieval::{apply_filters, search_bm25, search_hybrid, search_hybrid_reranked};
 use crate::types::{Chunk, SearchFilters, SearchResult, SymbolType};
@@ -609,9 +609,11 @@ mod tests {
         )
         .unwrap();
 
-        assert!(augmented
-            .iter()
-            .any(|result| result.symbol_name.as_deref() == Some("Sink")));
+        assert!(
+            augmented
+                .iter()
+                .any(|result| result.symbol_name.as_deref() == Some("Sink"))
+        );
     }
 
     #[test]

@@ -226,31 +226,30 @@ pub fn fuse_rrf(
     rrf_k: f64,
     limit: usize,
 ) -> Vec<SearchResult> {
+    fuse_rrf_multi(&[bm25_results, vector_results], rrf_k, limit)
+}
+
+/// Fuse multiple ranked result lists with reciprocal rank fusion (RRF).
+pub fn fuse_rrf_multi(
+    result_sets: &[&[SearchResult]],
+    rrf_k: f64,
+    limit: usize,
+) -> Vec<SearchResult> {
     // Build a map of chunk_key → (rrf_score, SearchResult).
     // We key by (file_path, line_start, line_end) since chunk IDs aren't
     // in SearchResult but these fields uniquely identify a chunk.
     let mut fused: HashMap<String, (f64, SearchResult)> = HashMap::new();
 
-    // Process BM25 results (1-based ranking).
-    for (rank_0, result) in bm25_results.iter().enumerate() {
-        let key = result_key(result);
-        let rrf_score = 1.0 / (rrf_k + (rank_0 + 1) as f64);
+    for result_set in result_sets {
+        for (rank_0, result) in result_set.iter().enumerate() {
+            let key = result_key(result);
+            let rrf_score = 1.0 / (rrf_k + (rank_0 + 1) as f64);
 
-        fused
-            .entry(key)
-            .and_modify(|(score, _)| *score += rrf_score)
-            .or_insert_with(|| (rrf_score, result.clone()));
-    }
-
-    // Process vector results (1-based ranking).
-    for (rank_0, result) in vector_results.iter().enumerate() {
-        let key = result_key(result);
-        let rrf_score = 1.0 / (rrf_k + (rank_0 + 1) as f64);
-
-        fused
-            .entry(key)
-            .and_modify(|(score, _)| *score += rrf_score)
-            .or_insert_with(|| (rrf_score, result.clone()));
+            fused
+                .entry(key)
+                .and_modify(|(score, _)| *score += rrf_score)
+                .or_insert_with(|| (rrf_score, result.clone()));
+        }
     }
 
     // Sort by RRF score descending.
@@ -327,6 +326,28 @@ mod tests {
             expected_score_1
         );
         assert_eq!(results[0].file_path, "a.rs");
+    }
+
+    #[test]
+    fn rrf_multi_fuses_across_three_lists() {
+        let q1 = vec![
+            make_result("shared.rs", 1, 10, 0.9, Some("shared")),
+            make_result("q1.rs", 1, 10, 0.8, Some("q1")),
+        ];
+        let q2 = vec![
+            make_result("q2.rs", 1, 10, 0.9, Some("q2")),
+            make_result("shared.rs", 1, 10, 0.8, Some("shared")),
+        ];
+        let q3 = vec![
+            make_result("shared.rs", 1, 10, 0.9, Some("shared")),
+            make_result("q3.rs", 1, 10, 0.8, Some("q3")),
+        ];
+
+        let result_sets = vec![q1.as_slice(), q2.as_slice(), q3.as_slice()];
+        let fused = fuse_rrf_multi(&result_sets, 60.0, 10);
+
+        assert_eq!(fused[0].file_path, "shared.rs");
+        assert!(fused[0].score > fused[1].score);
     }
 
     #[test]

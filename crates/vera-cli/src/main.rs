@@ -66,7 +66,7 @@ enum Commands {
     /// Start the MCP (Model Context Protocol) server.
     ///
     /// Runs a JSON-RPC 2.0 server over stdio for tool integration.
-    /// The server exposes tools: search_code, get_stats, get_overview, and regex_search.
+    /// The server exposes tools: search_code, get_overview, and regex_search.
     /// search_code auto-indexes and starts a file watcher on first use.
     ///
     /// Examples:
@@ -78,7 +78,6 @@ enum Commands {
                       to stdout. Logs go to stderr.\n\n\
                       Exposed tools:\n  \
                       search_code      — Hybrid search (auto-indexes and watches on first use)\n  \
-                      get_stats        — Index statistics\n  \
                       get_overview     — Project summary for onboarding\n  \
                       regex_search     — Regex search over indexed files\n\n\
                       Examples:\n  \
@@ -374,7 +373,7 @@ enum Commands {
         #[arg(long)]
         include_generated: bool,
 
-        /// Multi-hop iterative search: follow up on symbols found in initial results.
+        /// Deep RAG-fusion search: expand query variants and fuse ranked results.
         #[arg(long)]
         deep: bool,
 

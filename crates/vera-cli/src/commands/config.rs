@@ -1,6 +1,6 @@
 //! `vera config` — Show or set configuration values.
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 
 use crate::helpers::load_runtime_config;
 use crate::state;

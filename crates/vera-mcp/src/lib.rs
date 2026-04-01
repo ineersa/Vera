@@ -3,7 +3,6 @@
 //! Exposes Vera's indexing and retrieval capabilities as MCP tools over
 //! JSON-RPC 2.0 with stdio transport:
 //! - `search_code` — hybrid search (auto-indexes and watches on first use)
-//! - `get_stats` — retrieve index statistics
 //! - `get_overview` — summarize project structure
 //! - `regex_search` — regex search over indexed files
 //!

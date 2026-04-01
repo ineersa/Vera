@@ -556,9 +556,9 @@ fn split_reranker_document(doc: &str, max_tokens: usize, overlap_tokens: usize) 
                 content_budget,
                 overlap_tokens,
             )
-                .into_iter()
-                .map(|segment| format!("{prefix}{segment}"))
-                .collect();
+            .into_iter()
+            .map(|segment| format!("{prefix}{segment}"))
+            .collect();
         }
     }
 
