@@ -29,7 +29,7 @@ An optional `intent` parameter lets you describe your higher-level goal separate
 
 ### Deep Search
 
-`vera search "query" --deep` expands your query into multiple search variants using an LLM completion endpoint, runs parallel hybrid searches for each variant, and fuses results with N-way Reciprocal Rank Fusion. This captures different phrasings and angles of the same intent in a single call.
+`vera search "query" --deep` runs a BM25 pre-filter to collect real symbol names and file paths from the index, feeds those as context hints to an LLM completion endpoint, and generates query rewrites grounded in actual codebase identifiers. Each rewrite runs a full hybrid search, and all result lists fuse with N-way Reciprocal Rank Fusion. This captures different phrasings and angles of the same intent while staying anchored to symbols that actually exist in the code.
 
 Requires a completion endpoint: set `VERA_COMPLETION_BASE_URL` and `VERA_COMPLETION_MODEL_ID` (any OpenAI-compatible chat endpoint works, including local llama.cpp). When no completion endpoint is configured, `--deep` falls back to iterative symbol-following: it extracts symbol names from top results and searches for those symbols automatically.
 

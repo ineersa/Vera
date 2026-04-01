@@ -124,8 +124,29 @@ impl CompletionClient {
 
     /// Generate alternative code-search queries for RAG fusion.
     pub fn expand_query(&self, query: &str) -> Result<Vec<String>> {
+        self.expand_query_with_context(query, &[])
+    }
+
+    /// Generate alternative queries with optional codebase context from a BM25
+    /// pre-filter. When `context_hints` is non-empty the LLM sees real symbol
+    /// names and file paths from the index, producing more targeted rewrites.
+    pub fn expand_query_with_context(
+        &self,
+        query: &str,
+        context_hints: &[String],
+    ) -> Result<Vec<String>> {
+        let context_block = if context_hints.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n\nRelevant symbols and files found in the codebase:\n{}\n\n\
+                 Use these as hints to generate more targeted rewrites.",
+                context_hints.join("\n")
+            )
+        };
+
         let prompt = format!(
-            "Original query: {query}\n\n\
+            "Original query: {query}{context_block}\n\n\
              Generate {} alternative code-search queries that keep the same intent \
              but vary terminology and angle (implementation, API usage, symbols, \
              related concepts).\n\n\

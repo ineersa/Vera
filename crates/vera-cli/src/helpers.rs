@@ -214,7 +214,11 @@ pub fn output_results(
     // Helper: pick compacted or original content by index.
     macro_rules! content_for {
         ($i:expr, $r:expr) => {
-            if compact { compacted[$i].as_str() } else { $r.content.as_str() }
+            if compact {
+                compacted[$i].as_str()
+            } else {
+                $r.content.as_str()
+            }
         };
     }
 

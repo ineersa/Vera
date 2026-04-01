@@ -86,7 +86,9 @@ fn start_watching_internal(repo_path: &Path, progress_logs: bool) -> Result<Watc
             {
                 debug!("Skipping auto-update: previous update still running");
                 if progress_logs {
-                    eprintln!("[watch] update already running, changes will be picked up next cycle");
+                    eprintln!(
+                        "[watch] update already running, changes will be picked up next cycle"
+                    );
                 }
                 return;
             }
@@ -164,7 +166,12 @@ fn load_saved_runtime_config() -> vera_core::config::VeraConfig {
         Ok(dir) => dir.join("config.json"),
         Err(_) => return vera_core::config::VeraConfig::default(),
     };
-    let data = match std::fs::read_to_string(&config_path) {
+    load_config_from_path(&config_path)
+}
+
+/// Load config from a specific path, falling back to defaults on any error.
+fn load_config_from_path(config_path: &std::path::Path) -> vera_core::config::VeraConfig {
+    let data = match std::fs::read_to_string(config_path) {
         Ok(d) => d,
         Err(_) => return vera_core::config::VeraConfig::default(),
     };
@@ -207,35 +214,38 @@ mod tests {
     #[test]
     fn load_config_missing_file_returns_default() {
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("VERA_HOME", tmp.path()) };
-        let config = load_saved_runtime_config();
-        assert_eq!(config.indexing.max_chunk_lines, vera_core::config::VeraConfig::default().indexing.max_chunk_lines);
-        unsafe { std::env::remove_var("VERA_HOME") };
+        let config = load_config_from_path(&tmp.path().join("config.json"));
+        assert_eq!(
+            config.indexing.max_chunk_lines,
+            vera_core::config::VeraConfig::default()
+                .indexing
+                .max_chunk_lines
+        );
     }
 
     #[test]
     fn load_config_reads_core_config() {
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("VERA_HOME", tmp.path()) };
-        // Serialize a full config, then modify the values we want to test.
         let mut cfg = vera_core::config::VeraConfig::default();
         cfg.indexing.max_chunk_lines = 99;
         cfg.indexing.max_chunk_bytes = 1800;
         let json = serde_json::json!({ "core_config": cfg });
         std::fs::write(tmp.path().join("config.json"), json.to_string()).unwrap();
-        let config = load_saved_runtime_config();
+        let config = load_config_from_path(&tmp.path().join("config.json"));
         assert_eq!(config.indexing.max_chunk_lines, 99);
         assert_eq!(config.indexing.max_chunk_bytes, 1800);
-        unsafe { std::env::remove_var("VERA_HOME") };
     }
 
     #[test]
     fn load_config_no_core_config_key_returns_default() {
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("VERA_HOME", tmp.path()) };
         std::fs::write(tmp.path().join("config.json"), r#"{"backend":"api"}"#).unwrap();
-        let config = load_saved_runtime_config();
-        assert_eq!(config.indexing.max_chunk_lines, vera_core::config::VeraConfig::default().indexing.max_chunk_lines);
-        unsafe { std::env::remove_var("VERA_HOME") };
+        let config = load_config_from_path(&tmp.path().join("config.json"));
+        assert_eq!(
+            config.indexing.max_chunk_lines,
+            vera_core::config::VeraConfig::default()
+                .indexing
+                .max_chunk_lines
+        );
     }
 }

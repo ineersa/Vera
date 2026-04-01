@@ -31,8 +31,8 @@ pub use dynamic_reranker::{DynamicReranker, create_dynamic_reranker};
 pub mod completion_client;
 pub mod iterative_search;
 pub mod local_reranker;
-pub mod rag_fusion;
 pub(crate) mod query_utils;
+pub mod rag_fusion;
 pub mod regex_search;
 
 pub use local_reranker::LocalReranker;

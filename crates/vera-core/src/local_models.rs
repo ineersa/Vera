@@ -968,7 +968,8 @@ pub async fn ensure_ort_library_for_ep(ep: OnnxExecutionProvider) -> Result<Path
     }
 
     // Standard path: download from GitHub releases
-    let (ext, archive_name, lib_path_in_archive, local_lib_name, ort_version) = ort_platform_info(ep)?;
+    let (ext, archive_name, lib_path_in_archive, local_lib_name, ort_version) =
+        ort_platform_info(ep)?;
     let is_gpu = ep != OnnxExecutionProvider::Cpu;
 
     let archive_filename = if ext == "tgz" {

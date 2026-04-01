@@ -35,7 +35,7 @@ Data flow: file → grammar lookup → tree-sitter parse → node classification
 5. Top candidates reranked by cross-encoder (`reranker.rs` or `local_reranker.rs`)
 6. Final `Vec<SearchResult>` returned
 
-Deep search (`--deep`): `rag_fusion.rs` expands the query into multiple variants via an LLM completion endpoint (`completion_client.rs`), runs parallel hybrid searches, and fuses results with N-way RRF. Falls back to iterative symbol-following when no completion endpoint is configured.
+Deep search (`--deep`): `rag_fusion.rs` first runs a cheap BM25 pre-filter to collect symbol names and file paths from the index, then passes these as context hints to the LLM (`completion_client.rs`) so it generates query rewrites grounded in real codebase identifiers. Each rewrite runs a full hybrid search, and all result lists fuse with N-way RRF. Falls back to iterative symbol-following when no completion endpoint is configured.
 
 ### `storage/`: Persistent storage
 

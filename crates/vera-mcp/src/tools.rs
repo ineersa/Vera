@@ -545,9 +545,10 @@ fn handle_regex_search(args: &Value) -> ToolCallResult {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             match compact_results_json(&results, MCP_OUTPUT_BUDGET, signatures_only) {
-            Ok(json) => ToolCallResult::success(json),
-            Err(e) => ToolCallResult::error(format!("Failed to serialize results: {e}")),
-        }},
+                Ok(json) => ToolCallResult::success(json),
+                Err(e) => ToolCallResult::error(format!("Failed to serialize results: {e}")),
+            }
+        }
         Err(e) => ToolCallResult::error(format!("Regex search failed: {e}")),
     }
 }

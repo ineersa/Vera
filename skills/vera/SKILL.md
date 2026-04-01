@@ -73,7 +73,7 @@ Vera favors source files by default. Use `--scope docs` for prose and ADRs, `--s
 ## Search Modes
 
 - **Default**: full results with code bodies. Best for targeted retrieval ("how does BM25 scoring work?").
-- **`--deep`**: deep search. When a completion endpoint is configured (`VERA_COMPLETION_BASE_URL`), expands the query into multiple variants via an LLM and fuses results with RRF. Otherwise falls back to iterative symbol-following search. Use when initial results need broader context.
+- **`--deep`**: deep search. Runs a BM25 pre-filter to gather real symbol names and file paths, then feeds them to an LLM to generate query rewrites grounded in actual codebase identifiers. Each rewrite runs a full hybrid search and results fuse with RRF. Requires `VERA_COMPLETION_BASE_URL`; falls back to iterative symbol-following when unconfigured. Use when initial results miss the mark or you need broader context.
 - **`--compact`**: signatures only (name, parameters, return type). Fits more results into fewer tokens. Best for broad exploration ("what functions handle auth?"). Works with `vera grep` too.
 
 ## Query Strategy

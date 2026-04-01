@@ -7,13 +7,15 @@
 //! Falls back to iterative (symbol-following) search when no completion
 //! endpoint is configured.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::config::{InferenceBackend, VeraConfig};
+use crate::retrieval::bm25::search_bm25;
 use crate::types::{SearchFilters, SearchResult};
 
 use super::completion_client::CompletionClient;
@@ -79,8 +81,16 @@ fn execute_rag_fusion(
 ) -> Result<(Vec<SearchResult>, SearchTimings)> {
     let overall_start = Instant::now();
 
+    // BM25 pre-filter: run a cheap keyword search to gather codebase context
+    // (symbol names and file paths) that helps the LLM generate better rewrites.
+    let context_hints = bm25_context_hints(index_dir, query);
+    debug!(
+        hints = context_hints.len(),
+        "BM25 pre-filter produced context hints for query expansion"
+    );
+
     let expanded = completion_client
-        .expand_query(query)
+        .expand_query_with_context(query, &context_hints)
         .map_err(|e| anyhow!("failed to generate deep-search query candidates: {e}"))?;
 
     let queries = dedupe_queries_with_original(query, expanded);
@@ -168,6 +178,43 @@ fn add_duration(target: &mut Option<Duration>, incoming: Option<Duration>) {
     }
 }
 
+/// Run a quick BM25 search and extract deduplicated symbol names and file
+/// paths from the top results. These hints give the LLM real identifiers
+/// from the codebase so it can produce more targeted query rewrites.
+const BM25_PREFILTER_LIMIT: usize = 10;
+const MAX_CONTEXT_HINTS: usize = 15;
+
+fn bm25_context_hints(index_dir: &Path, query: &str) -> Vec<String> {
+    let results = match search_bm25(index_dir, query, BM25_PREFILTER_LIMIT) {
+        Ok(r) => r,
+        Err(e) => {
+            debug!(error = %e, "BM25 pre-filter failed, continuing without context");
+            return Vec::new();
+        }
+    };
+
+    let mut seen = HashSet::new();
+    let mut hints = Vec::new();
+
+    for r in &results {
+        if let Some(ref sym) = r.symbol_name {
+            let hint = format!("symbol: {sym}");
+            if seen.insert(hint.clone()) {
+                hints.push(hint);
+            }
+        }
+        let hint = format!("file: {}", r.file_path);
+        if seen.insert(hint.clone()) {
+            hints.push(hint);
+        }
+        if hints.len() >= MAX_CONTEXT_HINTS {
+            break;
+        }
+    }
+
+    hints
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,7 +231,11 @@ mod tests {
         );
         assert_eq!(
             queries,
-            vec!["auth token refresh", "jwt expiry handling", "auth middleware"]
+            vec![
+                "auth token refresh",
+                "jwt expiry handling",
+                "auth middleware"
+            ]
         );
     }
 
