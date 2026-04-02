@@ -19,7 +19,7 @@ RUN ARCHIVE="vera-${TARGET}.tar.gz" && \
     echo "Downloading ${RELEASE_URL}..." && \
     curl -sL "$RELEASE_URL" -o "$ARCHIVE" && \
     tar xzf "$ARCHIVE" && \
-    mv vera /usr/local/bin/vera && \
+    mv "vera-${TARGET}/vera" /usr/local/bin/vera && \
     chmod +x /usr/local/bin/vera && \
     rm -rf /tmp/*
 
