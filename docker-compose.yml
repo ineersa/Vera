@@ -6,6 +6,9 @@
 # Show CLI help (default command):
 #   docker compose run --rm vera
 #
+# On macOS, if `docker compose run` hangs after command output, disable TTY:
+#   docker compose run --rm -T vera --version
+#
 # Run one-off Vera commands:
 #   docker compose run --rm vera index /workspace
 #   docker compose run --rm vera search "authentication logic"
@@ -28,7 +31,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["--help"]
+    entrypoint: ["vera"]
+    command: ["help"]
+    stdin_open: false
+    tty: false
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

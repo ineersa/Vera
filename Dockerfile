@@ -1,6 +1,6 @@
 # Vera Docker image (release binary, CLI mode)
 # Build:  docker build -t vera:local .
-# Run:    docker run --rm -v $(pwd):/workspace vera:local --help
+# Run:    docker run --rm -v $(pwd):/workspace vera:local help
 
 FROM debian:trixie-slim AS downloader
 
@@ -34,4 +34,4 @@ COPY --from=downloader /usr/local/bin/vera /usr/local/bin/vera
 WORKDIR /workspace
 
 ENTRYPOINT ["vera"]
-CMD ["--help"]
+CMD ["help"]
