@@ -7,6 +7,7 @@ STATE_DIR="${VERA_STATE_DIR:-$PWD/docker-data/vera-home}"
 
 mkdir -p "${STATE_DIR}"
 
+exec </dev/null
 exec docker run --rm \
   --add-host=host.docker.internal:host-gateway \
   -e VERA_NO_UPDATE_CHECK=1 \
