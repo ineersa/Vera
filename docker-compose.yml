@@ -1,4 +1,4 @@
-# Vera CLI container (no MCP default command)
+# Vera CLI-only container (MCP explicitly disabled)
 #
 # Build image:
 #   docker compose build
@@ -8,6 +8,9 @@
 #
 # On macOS, if `docker compose run` hangs after command output, disable TTY:
 #   docker compose run --rm -T vera --version
+#
+# MCP is blocked in this service:
+#   docker compose run --rm vera mcp   # exits with an error
 #
 # Run one-off Vera commands:
 #   docker compose run --rm vera index /workspace
@@ -31,7 +34,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    entrypoint: ["vera"]
+    entrypoint:
+      [
+        "/bin/sh",
+        "-ec",
+        "if [ \"$${1:-}\" = \"mcp\" ]; then echo \"Error: MCP is disabled in this docker-compose service. Use Vera CLI commands only.\" >&2; exit 64; fi; exec vera \"$$@\"",
+        "--",
+      ]
     command: ["help"]
     stdin_open: false
     tty: false

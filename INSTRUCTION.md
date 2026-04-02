@@ -277,41 +277,54 @@ If you do not want to depend on `PATH`, replace `"command": "vera"` with the abs
 
 MCP tools exposed by Vera: `search_code`, `get_overview`, `regex_search`.
 
-## 9) Docker (API mode, local build)
+## 9) Docker (API mode, CLI-only, local build)
 
 When you can't run the native binary (macOS Gatekeeper, corporate proxy blocking cargo, etc.), run Vera inside Docker.
+
+This Docker setup is CLI-only. `mcp` is intentionally blocked.
 
 ### Build
 
 ```bash
-docker compose build
+docker compose build --no-cache vera
 # or plain docker:
 docker build -t vera:local .
 ```
 
-### Run MCP server (compose)
+### Default run (compose)
 
 ```bash
-docker compose run --rm vera mcp
+docker compose run --rm -T vera
 ```
+
+That runs `vera help` and exits.
 
 ### One-off CLI commands (compose)
 
 ```bash
-docker compose run --rm vera --version
-docker compose run --rm vera index /workspace
-docker compose run --rm vera search "authentication logic"
-docker compose run --rm vera overview
+docker compose run --rm -T vera --version
+docker compose run --rm -T vera index /workspace
+docker compose run --rm -T vera search "authentication logic"
+docker compose run --rm -T vera overview
 ```
 
-### Run MCP server (plain docker)
+### Plain docker CLI commands
 
 ```bash
-docker run --rm -i \
+docker run --rm \
     --add-host=host.docker.internal:host-gateway \
     -v $(pwd):/workspace \
     -v ./docker-data/vera-home:/root/.vera \
-    vera:local
+    vera:local --version
+```
+
+### MCP is blocked in Docker
+
+These now fail fast by design:
+
+```bash
+docker compose run --rm vera mcp
+docker run --rm vera:local mcp
 ```
 
 ### One-time API key setup (persisted, no docker env vars needed)
@@ -319,22 +332,9 @@ docker run --rm -i \
 Run once per `docker-data/vera-home` directory:
 
 ```bash
-docker compose run --rm vera config set embedding_api.api_key not-needed
-docker compose run --rm vera config set reranker_api.api_key not-needed
-docker compose run --rm vera config set completion_api.api_key not-needed
-```
-
-### MCP client config (Docker)
-
-```json
-{
-  "mcpServers": {
-    "vera": {
-      "command": "docker",
-      "args": ["compose", "-f", "/absolute/path/to/docker-compose.yml", "run", "--rm", "vera"]
-    }
-  }
-}
+docker compose run --rm -T vera config set embedding_api.api_key not-needed
+docker compose run --rm -T vera config set reranker_api.api_key not-needed
+docker compose run --rm -T vera config set completion_api.api_key not-needed
 ```
 
 Notes:

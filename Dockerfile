@@ -30,8 +30,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=downloader /usr/local/bin/vera /usr/local/bin/vera
+COPY docker/vera-cli-entrypoint.sh /usr/local/bin/vera-cli-entrypoint
+
+RUN chmod +x /usr/local/bin/vera-cli-entrypoint
 
 WORKDIR /workspace
 
-ENTRYPOINT ["vera"]
+ENTRYPOINT ["/usr/local/bin/vera-cli-entrypoint"]
 CMD ["help"]
