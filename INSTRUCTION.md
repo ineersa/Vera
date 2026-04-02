@@ -264,8 +264,79 @@ If you do not want to depend on `PATH`, replace `"command": "vera"` with the abs
 
 MCP tools exposed by Vera: `search_code`, `get_overview`, `regex_search`.
 
-## 9) Common issues
+## 9) Docker (API mode, local build)
 
+When you can't run the native binary (macOS Gatekeeper, corporate proxy blocking cargo, etc.), run Vera inside Docker.
+
+### Build
+
+```bash
+docker compose build
+# or plain docker:
+docker build -t vera:local .
+```
+
+### Run MCP server (compose)
+
+```bash
+docker compose run --rm vera mcp
+```
+
+### One-off CLI commands (compose)
+
+```bash
+docker compose run --rm vera --version
+docker compose run --rm vera index /workspace
+docker compose run --rm vera search "authentication logic"
+docker compose run --rm vera overview
+```
+
+### Run MCP server (plain docker)
+
+```bash
+docker run --rm -i \
+    --add-host=host.docker.internal:host-gateway \
+    -v $(pwd):/workspace \
+    -v vera-config:/root/.vera \
+    -e EMBEDDING_MODEL_BASE_URL=http://host.docker.internal:8059/v1 \
+    -e EMBEDDING_MODEL_API_KEY=not-needed \
+    -e EMBEDDING_MODEL_ID=coderankembed-q8_0.gguf \
+    -e "EMBEDDING_MODEL_QUERY_PREFIX=Represent this query for searching relevant code:" \
+    -e RERANKER_MODEL_BASE_URL=http://host.docker.internal:8060/v1 \
+    -e RERANKER_MODEL_API_KEY=not-needed \
+    -e RERANKER_MODEL_ID=bge-reranker-base-q8_0.gguf \
+    -e RERANKER_MAX_DOCS_PER_REQUEST=8 \
+    -e RERANKER_MAX_DOCUMENT_CHARS=1200 \
+    -e VERA_COMPLETION_BASE_URL=http://host.docker.internal:8052/v1 \
+    -e VERA_COMPLETION_MODEL_ID=flash \
+    -e VERA_COMPLETION_API_KEY=not-needed \
+    vera:local
+```
+
+### MCP client config (Docker)
+
+```json
+{
+  "mcpServers": {
+    "vera": {
+      "command": "docker",
+      "args": ["compose", "-f", "/absolute/path/to/docker-compose.yml", "run", "--rm", "vera"]
+    }
+  }
+}
+```
+
+Notes:
+
+- `host.docker.internal` routes to the host machine from inside the container so Vera can reach your llama.cpp servers
+- `vera-config` named volume persists `/root/.vera` (config) across container restarts
+- Index data lives at `/workspace/.vera/` on the mounted project volume, so it persists too
+- On macOS Docker Desktop, `host.docker.internal` works natively; on Linux it needs `--add-host` (included in compose via `extra_hosts`)
+
+## 10) Common issues
+
+- Docker container can't reach llama.cpp servers:
+  - verify services are bound to `0.0.0.0` (not just `127.0.0.1`) so Docker can reach them via `host.docker.internal`
 - `input (...) larger than max context size` during index:
   - lower `indexing.max_embedding_chars` and/or increase excludes
 - Reranker context errors:
