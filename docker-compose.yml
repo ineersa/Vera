@@ -1,43 +1,34 @@
-# Vera MCP server (API mode)
+# Vera CLI container (no MCP default command)
 #
-# Build & run:
+# Build image:
 #   docker compose build
-#   docker compose run --rm vera mcp
 #
-# One-off CLI commands:
+# Show CLI help (default command):
+#   docker compose run --rm vera
+#
+# Run one-off Vera commands:
 #   docker compose run --rm vera index /workspace
 #   docker compose run --rm vera search "authentication logic"
 #   docker compose run --rm vera overview
 #
 # Equivalent plain docker commands:
 #   docker build -t vera:local .
-#   docker run --rm -i \
+#   docker run --rm \
 #     --add-host=host.docker.internal:host-gateway \
 #     -v $(pwd):/workspace \
 #     -v ./docker-data/vera-home:/root/.vera \
-#     vera:local
+#     vera:local --help
 #
-# One-time key setup (persists to ./docker-data/vera-home/credentials.json):
-#   docker compose run --rm vera config set embedding_api.api_key not-needed
-#   docker compose run --rm vera config set reranker_api.api_key not-needed
-#   docker compose run --rm vera config set completion_api.api_key not-needed
-#
-# MCP client config (Claude Desktop, Cursor, etc.):
-#   {
-#     "mcpServers": {
-#       "vera": {
-#         "command": "docker",
-#         "args": ["compose", "-f", "/absolute/path/to/docker-compose.yml", "run", "--rm", "vera"]
-#       }
-#     }
-#   }
+# Optional setup (persists under ./docker-data/vera-home):
+#   docker compose run --rm vera setup
+#   docker compose run --rm vera backend --api
 
 services:
   vera:
     build:
       context: .
       dockerfile: Dockerfile
-    stdin_open: true
+    command: ["--help"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
