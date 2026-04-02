@@ -2,6 +2,7 @@ secrets.env
 .env
 .env.*
 !.env.example
+docker-data/vera-home/credentials.json
 /AGENTS.md
 response.md
 .junie/

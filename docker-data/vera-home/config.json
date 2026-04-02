@@ -1,0 +1,52 @@
+{
+  "local_mode": false,
+  "backend": "api",
+  "embedding_api": {
+    "base_url": "http://host.docker.internal:8059/v1",
+    "model_id": "coderankembed-q8_0.gguf"
+  },
+  "reranker_api": {
+    "base_url": "http://host.docker.internal:8060/v1",
+    "model_id": "bge-reranker-base-q8_0.gguf"
+  },
+  "core_config": {
+    "indexing": {
+      "max_chunk_lines": 80,
+      "default_excludes": [
+        ".git",
+        ".vera",
+        "node_modules",
+        "target",
+        "build",
+        "dist",
+        "__pycache__",
+        ".venv",
+        ".github",
+        "deptrac.yaml",
+        "UPGRADE.md",
+        "reference.php",
+        "vendor"
+      ],
+      "max_file_size_bytes": 1000000,
+      "extra_excludes": [],
+      "no_ignore": false,
+      "no_default_excludes": false,
+      "max_embedding_chars": 2000
+    },
+    "retrieval": {
+      "default_limit": 10,
+      "rrf_k": 60.0,
+      "rerank_candidates": 50,
+      "reranking_enabled": true
+    },
+    "embedding": {
+      "batch_size": 4,
+      "max_concurrent_requests": 1,
+      "timeout_secs": 60,
+      "max_retries": 3,
+      "max_stored_dim": 1024,
+      "gpu_mem_limit_mb": 0,
+      "low_vram": false
+    }
+  }
+}

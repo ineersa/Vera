@@ -14,7 +14,7 @@
 #   docker run --rm -i \
 #     --add-host=host.docker.internal:host-gateway \
 #     -v $(pwd):/workspace \
-#     -v vera-config:/root/.vera \
+#     -v ./docker-data/vera-home:/root/.vera \
 #     -e EMBEDDING_MODEL_BASE_URL=http://host.docker.internal:8059/v1 \
 #     -e EMBEDDING_MODEL_API_KEY=not-needed \
 #     -e EMBEDDING_MODEL_ID=coderankembed-q8_0.gguf \
@@ -62,7 +62,4 @@ services:
       - VERA_COMPLETION_API_KEY=not-needed
     volumes:
       - .:/workspace
-      - vera-config:/root/.vera
-
-volumes:
-  vera-config:
+      - ./docker-data/vera-home:/root/.vera

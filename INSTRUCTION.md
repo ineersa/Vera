@@ -297,7 +297,7 @@ docker compose run --rm vera overview
 docker run --rm -i \
     --add-host=host.docker.internal:host-gateway \
     -v $(pwd):/workspace \
-    -v vera-config:/root/.vera \
+    -v ./docker-data/vera-home:/root/.vera \
     -e EMBEDDING_MODEL_BASE_URL=http://host.docker.internal:8059/v1 \
     -e EMBEDDING_MODEL_API_KEY=not-needed \
     -e EMBEDDING_MODEL_ID=coderankembed-q8_0.gguf \
@@ -329,7 +329,8 @@ docker run --rm -i \
 Notes:
 
 - `host.docker.internal` routes to the host machine from inside the container so Vera can reach your llama.cpp servers
-- `vera-config` named volume persists `/root/.vera` (config) across container restarts
+- Config and models are at `./docker-data/vera-home/` on the host, mounted to `/root/.vera` in the container — `config.json` is pre-baked with API mode and tuned settings, edit it directly on the host if needed
+- `docker-data/vera-home/credentials.json` is gitignored to prevent accidental credential commits
 - Index data lives at `/workspace/.vera/` on the mounted project volume, so it persists too
 - On macOS Docker Desktop, `host.docker.internal` works natively; on Linux it needs `--add-host` (included in compose via `extra_hosts`)
 
