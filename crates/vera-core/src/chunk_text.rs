@@ -676,4 +676,12 @@ pub fn authenticate(user: &str, password: &str) -> Result<Token> {\n\
             .expect("Calls metadata should be present");
         assert!(!calls_line.contains(&"a".repeat(120)));
     }
+
+    #[test]
+    fn truncate_at_line_boundary_handles_multibyte_utf8() {
+        let text = "first line\n漢字漢字";
+        let max_bytes = "first line\n".len() + 1;
+
+        assert_eq!(truncate_at_line_boundary(text, max_bytes), "first line");
+    }
 }
