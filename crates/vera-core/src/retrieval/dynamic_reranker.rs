@@ -41,10 +41,22 @@ pub async fn create_dynamic_reranker(
         }
         InferenceBackend::Api => match RerankerConfig::from_env() {
             Ok(cfg) => {
-                let cfg = cfg
+                let mut cfg = cfg
                     .with_timeout(Duration::from_secs(30))
-                    .with_max_retries(2)
-                    .with_max_docs_per_request(config.retrieval.max_rerank_batch);
+                    .with_max_retries(2);
+
+                let max_docs_per_request = if config.retrieval.reranker_max_docs_per_request > 0 {
+                    config.retrieval.reranker_max_docs_per_request
+                } else {
+                    config.retrieval.max_rerank_batch
+                };
+                cfg = cfg.with_max_docs_per_request(max_docs_per_request);
+
+                if config.retrieval.reranker_max_document_tokens > 0 {
+                    cfg =
+                        cfg.with_max_document_tokens(config.retrieval.reranker_max_document_tokens);
+                }
+
                 let p = ApiReranker::new(cfg)
                     .map_err(|err| anyhow::anyhow!("failed to init reranker: {err}"))?;
                 Ok(Some(DynamicReranker::Api(p)))

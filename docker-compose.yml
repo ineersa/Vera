@@ -15,19 +15,12 @@
 #     --add-host=host.docker.internal:host-gateway \
 #     -v $(pwd):/workspace \
 #     -v ./docker-data/vera-home:/root/.vera \
-#     -e EMBEDDING_MODEL_BASE_URL=http://host.docker.internal:8059/v1 \
-#     -e EMBEDDING_MODEL_API_KEY=not-needed \
-#     -e EMBEDDING_MODEL_ID=coderankembed-q8_0.gguf \
-#     -e 'EMBEDDING_MODEL_QUERY_PREFIX=Represent this query for searching relevant code:' \
-#     -e RERANKER_MODEL_BASE_URL=http://host.docker.internal:8060/v1 \
-#     -e RERANKER_MODEL_API_KEY=not-needed \
-#     -e RERANKER_MODEL_ID=bge-reranker-base-q8_0.gguf \
-#     -e RERANKER_MAX_DOCS_PER_REQUEST=8 \
-#     -e RERANKER_MAX_DOCUMENT_CHARS=1200 \
-#     -e VERA_COMPLETION_BASE_URL=http://host.docker.internal:8052/v1 \
-#     -e VERA_COMPLETION_MODEL_ID=flash \
-#     -e VERA_COMPLETION_API_KEY=not-needed \
 #     vera:local
+#
+# One-time key setup (persists to ./docker-data/vera-home/credentials.json):
+#   docker compose run --rm vera config set embedding_api.api_key not-needed
+#   docker compose run --rm vera config set reranker_api.api_key not-needed
+#   docker compose run --rm vera config set completion_api.api_key not-needed
 #
 # MCP client config (Claude Desktop, Cursor, etc.):
 #   {
@@ -47,19 +40,6 @@ services:
     stdin_open: true
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    environment:
-      - EMBEDDING_MODEL_BASE_URL=http://host.docker.internal:8059/v1
-      - EMBEDDING_MODEL_API_KEY=not-needed
-      - EMBEDDING_MODEL_ID=coderankembed-q8_0.gguf
-      - "EMBEDDING_MODEL_QUERY_PREFIX=Represent this query for searching relevant code:"
-      - RERANKER_MODEL_BASE_URL=http://host.docker.internal:8060/v1
-      - RERANKER_MODEL_API_KEY=not-needed
-      - RERANKER_MODEL_ID=bge-reranker-base-q8_0.gguf
-      - RERANKER_MAX_DOCS_PER_REQUEST=8
-      - RERANKER_MAX_DOCUMENT_CHARS=1200
-      - VERA_COMPLETION_BASE_URL=http://host.docker.internal:8052/v1
-      - VERA_COMPLETION_MODEL_ID=flash
-      - VERA_COMPLETION_API_KEY=not-needed
     volumes:
       - .:/workspace
       - ./docker-data/vera-home:/root/.vera

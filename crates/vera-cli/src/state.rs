@@ -20,6 +20,8 @@ pub struct StoredConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reranker_api: Option<ApiEndpointConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_api: Option<CompletionApiConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub core_config: Option<vera_core::config::VeraConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_embedding_model: Option<vera_core::local_models::LocalEmbeddingModelConfig>,
@@ -32,11 +34,39 @@ pub struct ApiEndpointConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CompletionApiConfig {
+    pub base_url: String,
+    pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(default = "default_completion_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_completion_max_tokens")]
+    pub max_tokens: u32,
+    #[serde(default = "default_completion_max_alternatives")]
+    pub max_alternatives: usize,
+}
+
+fn default_completion_timeout_secs() -> u64 {
+    120
+}
+
+fn default_completion_max_tokens() -> u32 {
+    16_384
+}
+
+fn default_completion_max_alternatives() -> usize {
+    4
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StoredSecrets {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding_api_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reranker_api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -64,6 +94,14 @@ pub fn load_saved_config() -> Result<StoredConfig> {
 
 pub fn load_saved_secrets() -> Result<StoredSecrets> {
     load_json_file(&credentials_path()?)
+}
+
+pub fn save_saved_config(config: &StoredConfig) -> Result<()> {
+    save_config(config)
+}
+
+pub fn save_saved_secrets(secrets: &StoredSecrets) -> Result<()> {
+    save_secrets(secrets)
 }
 
 pub fn load_install_provenance() -> Result<InstallProvenance> {
@@ -202,7 +240,52 @@ fn apply_saved_env_impl(force: bool) -> Result<()> {
         set_env_value("RERANKER_MODEL_API_KEY", api_key, force);
     }
 
+    if let Some(core_config) = config.core_config.as_ref() {
+        let max_docs = (core_config.retrieval.reranker_max_docs_per_request > 0).then(|| {
+            core_config
+                .retrieval
+                .reranker_max_docs_per_request
+                .to_string()
+        });
+        let max_tokens = (core_config.retrieval.reranker_max_document_tokens > 0).then(|| {
+            core_config
+                .retrieval
+                .reranker_max_document_tokens
+                .to_string()
+        });
+        set_optional_env_value("RERANKER_MAX_DOCS_PER_REQUEST", max_docs.as_deref(), force);
+        set_optional_env_value("RERANKER_MAX_DOCUMENT_TOKENS", max_tokens.as_deref(), force);
+    }
+
     apply_local_embedding_env(config.local_embedding_model.as_ref(), force);
+
+    if let Some(completion) = config.completion_api.as_ref() {
+        set_env_value("VERA_COMPLETION_BASE_URL", &completion.base_url, force);
+        set_env_value("VERA_COMPLETION_MODEL_ID", &completion.model_id, force);
+        set_env_value(
+            "VERA_COMPLETION_TIMEOUT_SECS",
+            &completion.timeout_secs.to_string(),
+            force,
+        );
+        set_env_value(
+            "VERA_COMPLETION_MAX_TOKENS",
+            &completion.max_tokens.to_string(),
+            force,
+        );
+        set_env_value(
+            "VERA_COMPLETION_MAX_ALTERNATIVES",
+            &completion.max_alternatives.to_string(),
+            force,
+        );
+    }
+    let completion_key = config
+        .completion_api
+        .as_ref()
+        .and_then(|c| c.api_key.as_deref())
+        .or(secrets.completion_api_key.as_deref());
+    if let Some(key) = completion_key {
+        set_env_value("VERA_COMPLETION_API_KEY", key, force);
+    }
 
     Ok(())
 }
@@ -399,6 +482,7 @@ mod tests {
         assert!(config.install_method.is_none());
         assert!(config.embedding_api.is_none());
         assert!(config.reranker_api.is_none());
+        assert!(config.completion_api.is_none());
         assert!(config.core_config.is_none());
         assert!(config.local_embedding_model.is_none());
     }
@@ -408,6 +492,7 @@ mod tests {
         let secrets = StoredSecrets::default();
         assert!(secrets.embedding_api_key.is_none());
         assert!(secrets.reranker_api_key.is_none());
+        assert!(secrets.completion_api_key.is_none());
     }
 
     #[test]

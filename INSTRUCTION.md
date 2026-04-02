@@ -106,7 +106,7 @@ These are our current tuned values:
 ```bash
 vera config set indexing.max_chunk_lines 80
 vera config set indexing.default_excludes '[".git",".vera","node_modules","target","build","dist","__pycache__",".venv",".github","deptrac.yaml","UPGRADE.md","reference.php","vendor"]'
-vera config set indexing.max_embedding_chars 2000
+vera config set indexing.max_chunk_bytes 2000
 vera config set embedding.batch_size 4
 vera config set embedding.max_concurrent_requests 1
 ```
@@ -126,6 +126,13 @@ If you want to mirror exactly, this is the current file:
   "reranker_api": {
     "base_url": "http://localhost:8060/v1",
     "model_id": "bge-reranker-base-q8_0.gguf"
+  },
+  "completion_api": {
+    "base_url": "http://localhost:8061/v1",
+    "model_id": "flash",
+    "timeout_secs": 120,
+    "max_tokens": 16384,
+    "max_alternatives": 4
   },
   "core_config": {
     "indexing": {
@@ -149,13 +156,19 @@ If you want to mirror exactly, this is the current file:
       "extra_excludes": [],
       "no_ignore": false,
       "no_default_excludes": false,
-      "max_embedding_chars": 2000
+      "max_chunk_bytes": 2000,
+      "max_chunk_tokens": 0,
+      "chunk_overlap_lines": 2
     },
     "retrieval": {
       "default_limit": 10,
       "rrf_k": 60.0,
       "rerank_candidates": 50,
-      "reranking_enabled": true
+      "reranking_enabled": true,
+      "max_rerank_batch": 20,
+      "max_output_chars": 12000,
+      "reranker_max_docs_per_request": 8,
+      "reranker_max_document_tokens": 300
     },
     "embedding": {
       "batch_size": 4,
@@ -298,19 +311,17 @@ docker run --rm -i \
     --add-host=host.docker.internal:host-gateway \
     -v $(pwd):/workspace \
     -v ./docker-data/vera-home:/root/.vera \
-    -e EMBEDDING_MODEL_BASE_URL=http://host.docker.internal:8059/v1 \
-    -e EMBEDDING_MODEL_API_KEY=not-needed \
-    -e EMBEDDING_MODEL_ID=coderankembed-q8_0.gguf \
-    -e "EMBEDDING_MODEL_QUERY_PREFIX=Represent this query for searching relevant code:" \
-    -e RERANKER_MODEL_BASE_URL=http://host.docker.internal:8060/v1 \
-    -e RERANKER_MODEL_API_KEY=not-needed \
-    -e RERANKER_MODEL_ID=bge-reranker-base-q8_0.gguf \
-    -e RERANKER_MAX_DOCS_PER_REQUEST=8 \
-    -e RERANKER_MAX_DOCUMENT_CHARS=1200 \
-    -e VERA_COMPLETION_BASE_URL=http://host.docker.internal:8052/v1 \
-    -e VERA_COMPLETION_MODEL_ID=flash \
-    -e VERA_COMPLETION_API_KEY=not-needed \
     vera:local
+```
+
+### One-time API key setup (persisted, no docker env vars needed)
+
+Run once per `docker-data/vera-home` directory:
+
+```bash
+docker compose run --rm vera config set embedding_api.api_key not-needed
+docker compose run --rm vera config set reranker_api.api_key not-needed
+docker compose run --rm vera config set completion_api.api_key not-needed
 ```
 
 ### MCP client config (Docker)
@@ -329,7 +340,7 @@ docker run --rm -i \
 Notes:
 
 - `host.docker.internal` routes to the host machine from inside the container so Vera can reach your llama.cpp servers
-- Config and models are at `./docker-data/vera-home/` on the host, mounted to `/root/.vera` in the container — `config.json` is pre-baked with API mode and tuned settings, edit it directly on the host if needed
+- Config and models are at `./docker-data/vera-home/` on the host, mounted to `/root/.vera` in the container — `config.json` is pre-baked with API mode and tuned settings, and keys are stored in `credentials.json`
 - `docker-data/vera-home/credentials.json` is gitignored to prevent accidental credential commits
 - Index data lives at `/workspace/.vera/` on the mounted project volume, so it persists too
 - On macOS Docker Desktop, `host.docker.internal` works natively; on Linux it needs `--add-host` (included in compose via `extra_hosts`)
@@ -339,13 +350,13 @@ Notes:
 - Docker container can't reach llama.cpp servers:
   - verify services are bound to `0.0.0.0` (not just `127.0.0.1`) so Docker can reach them via `host.docker.internal`
 - `input (...) larger than max context size` during index:
-  - lower `indexing.max_embedding_chars` and/or increase excludes
+  - lower `indexing.max_chunk_bytes` (or set `indexing.max_chunk_tokens`) and/or increase excludes
 - Reranker context errors:
-  - ensure `RERANKER_MAX_DOCS_PER_REQUEST` and `RERANKER_MAX_DOCUMENT_CHARS` are set
+  - set `reranker.max_docs_per_request` and `reranker.max_document_chars` (or `reranker.max_document_tokens`) via `vera config set`
 - `vera search --deep` behaves like normal search:
-  - ensure `VERA_COMPLETION_BASE_URL` and `VERA_COMPLETION_MODEL_ID` are set
+  - ensure `completion_api.base_url` and `completion_api.model_id` are set (`vera config set ...`)
 - `vera search --deep` fails with `failed to generate deep-search query candidates`:
   - ensure completion model responds with JSON content (array or object containing rewrite strings) on OpenAI-compatible `/chat/completions`
-  - reasoning-heavy models often need larger budgets: increase `VERA_COMPLETION_MAX_TOKENS` (e.g. `16384`) and `VERA_COMPLETION_TIMEOUT_SECS`
+  - reasoning-heavy models often need larger budgets: increase `completion_api.max_tokens` (e.g. `16384`) and `completion_api.timeout_secs`
 - No `.vera` in expected repo:
   - run `vera index .` from the repo root (or pass absolute repo path)

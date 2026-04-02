@@ -9,6 +9,13 @@
     "base_url": "http://host.docker.internal:8060/v1",
     "model_id": "bge-reranker-base-q8_0.gguf"
   },
+  "completion_api": {
+    "base_url": "http://host.docker.internal:8052/v1",
+    "model_id": "flash",
+    "timeout_secs": 120,
+    "max_tokens": 16384,
+    "max_alternatives": 4
+  },
   "core_config": {
     "indexing": {
       "max_chunk_lines": 80,
@@ -31,13 +38,19 @@
       "extra_excludes": [],
       "no_ignore": false,
       "no_default_excludes": false,
-      "max_embedding_chars": 2000
+      "max_chunk_bytes": 24576,
+      "max_chunk_tokens": 0,
+      "chunk_overlap_lines": 2
     },
     "retrieval": {
       "default_limit": 10,
       "rrf_k": 60.0,
       "rerank_candidates": 50,
-      "reranking_enabled": true
+      "reranking_enabled": true,
+      "max_rerank_batch": 20,
+      "max_output_chars": 12000,
+      "reranker_max_docs_per_request": 8,
+      "reranker_max_document_tokens": 300
     },
     "embedding": {
       "batch_size": 4,

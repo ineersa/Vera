@@ -590,12 +590,26 @@ enum Commands {
                        retrieval.rerank_candidates    Reranker candidate count (default: 50)\n  \
                        retrieval.reranking_enabled    Enable reranking (default: true)\n  \
                        retrieval.max_rerank_batch     Max docs per reranker API request (default: 20, 0 = no batching)\n  \
+                       retrieval.reranker_max_docs_per_request  Explicit reranker docs/request override (0 = use max_rerank_batch)\n  \
+                       retrieval.reranker_max_document_tokens    Max tokens per reranker document window (0 = env/default)\n  \
                        retrieval.max_output_chars     Total output char budget (default: 12000)\n  \
-                      embedding.batch_size           Embedding batch size (default: 128)\n  \
-                      embedding.max_concurrent_requests  Concurrent API requests (default: 8)\n  \
-                      embedding.timeout_secs         API timeout (default: 60)\n  \
-                      embedding.max_retries          API retry count (default: 3)\n  \
-                      embedding.max_stored_dim       Vector dimensionality (default: 1024)\n\n\
+                       embedding.batch_size           Embedding batch size (default: 128)\n  \
+                       embedding.max_concurrent_requests  Concurrent API requests (default: 8)\n  \
+                       embedding.timeout_secs         API timeout (default: 60)\n  \
+                       embedding.max_retries          API retry count (default: 3)\n  \
+                       embedding.max_stored_dim       Vector dimensionality (default: 1024)\n  \
+                       embedding_api.base_url         Embedding endpoint URL (saved to config.json)\n  \
+                       embedding_api.model_id         Embedding model id (saved to config.json)\n  \
+                       embedding_api.api_key          Embedding API key (saved to credentials.json)\n  \
+                       reranker_api.base_url          Reranker endpoint URL (saved to config.json)\n  \
+                       reranker_api.model_id          Reranker model id (saved to config.json)\n  \
+                       reranker_api.api_key           Reranker API key (saved to credentials.json)\n  \
+                       completion_api.base_url        Deep-search completion endpoint URL\n  \
+                       completion_api.model_id        Deep-search completion model id\n  \
+                       completion_api.api_key         Completion API key\n  \
+                       completion_api.timeout_secs    Completion timeout in seconds\n  \
+                       completion_api.max_tokens      Completion max output tokens\n  \
+                       completion_api.max_alternatives  Deep-search rewrite candidates\n\n\
                       Examples:\n  \
                       vera config                                  # Show all settings\n  \
                       vera config show                             # Same as above\n  \

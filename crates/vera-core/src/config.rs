@@ -130,6 +130,15 @@ pub struct RetrievalConfig {
     /// 0 means unlimited.
     #[serde(default = "default_max_output_chars")]
     pub max_output_chars: usize,
+    /// Maximum documents per reranker API call. When non-zero, overrides
+    /// `RERANKER_MAX_DOCS_PER_REQUEST`. 0 = use env var or default.
+    #[serde(default)]
+    pub reranker_max_docs_per_request: usize,
+    /// Maximum estimated tokens per formatted reranker document. When non-zero,
+    /// overrides `RERANKER_MAX_DOCUMENT_TOKENS` / `RERANKER_MAX_DOCUMENT_CHARS`.
+    /// 0 = use env var or default.
+    #[serde(default)]
+    pub reranker_max_document_tokens: usize,
 }
 
 fn default_max_output_chars() -> usize {
@@ -152,6 +161,8 @@ impl Default for RetrievalConfig {
             reranking_enabled: true,
             max_rerank_batch: default_max_rerank_batch(),
             max_output_chars: 12_000,
+            reranker_max_docs_per_request: 8,
+            reranker_max_document_tokens: 300,
         }
     }
 }
@@ -577,11 +588,9 @@ mod tests {
     fn default_excludes_contains_common_dirs() {
         let config = IndexingConfig::default();
         assert!(config.default_excludes.contains(&".git".to_string()));
-        assert!(
-            config
-                .default_excludes
-                .contains(&"node_modules".to_string())
-        );
+        assert!(config
+            .default_excludes
+            .contains(&"node_modules".to_string()));
         assert!(config.default_excludes.contains(&"target".to_string()));
     }
 
