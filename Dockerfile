@@ -1,40 +1,40 @@
-# Vera Docker image (release binary, CLI mode)
-# Build:  docker build -t vera:local .
-# Run:    docker run --rm -v $(pwd):/workspace vera:local help
+# Minimal Vera CLI image
+# Build: docker build -t vera:local .
+# Run:   docker run --rm -v "$(pwd)":/workspace vera:local --version
 
-FROM debian:trixie-slim AS downloader
+FROM ubuntu:24.04 AS downloader
+
+ARG VERA_VERSION=v0.11.5
+ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl jq && \
+    ca-certificates curl tar && \
     rm -rf /var/lib/apt/lists/*
 
-ARG TARGET=x86_64-unknown-linux-musl
-ARG REPO=ineersa/Vera
-
 WORKDIR /tmp
-RUN ARCHIVE="vera-${TARGET}.tar.gz" && \
-    RELEASE_URL=$(curl -sL "https://api.github.com/repos/${REPO}/releases/latest" \
-      | jq -r ".assets[] | select(.name == \"${ARCHIVE}\") | .browser_download_url") && \
-    if [ -z "$RELEASE_URL" ]; then echo "ERROR: ${ARCHIVE} not found in latest release" >&2; exit 1; fi && \
-    echo "Downloading ${RELEASE_URL}..." && \
-    curl -sL "$RELEASE_URL" -o "$ARCHIVE" && \
-    tar xzf "$ARCHIVE" && \
-    mv "vera-${TARGET}/vera" /usr/local/bin/vera && \
-    chmod +x /usr/local/bin/vera && \
-    rm -rf /tmp/*
+RUN case "${TARGETARCH}" in \
+      amd64) TARGET="x86_64-unknown-linux-gnu" ;; \
+      arm64) TARGET="aarch64-unknown-linux-gnu" ;; \
+      *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    ARCHIVE="vera-${TARGET}.tar.gz" && \
+    URL="https://github.com/ineersa/Vera/releases/download/${VERA_VERSION}/${ARCHIVE}" && \
+    curl -fsSL "${URL}" -o "/tmp/${ARCHIVE}" && \
+    tar -xzf "/tmp/${ARCHIVE}" -C /tmp && \
+    mv "/tmp/vera-${TARGET}/vera" /usr/local/bin/vera && \
+    chmod +x /usr/local/bin/vera
 
-FROM debian:trixie-slim
+FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=downloader /usr/local/bin/vera /usr/local/bin/vera
-COPY docker/vera-cli-entrypoint.sh /usr/local/bin/vera-cli-entrypoint
 
-RUN chmod +x /usr/local/bin/vera-cli-entrypoint
+ENV VERA_NO_UPDATE_CHECK=1
 
 WORKDIR /workspace
 
-ENTRYPOINT ["/usr/local/bin/vera-cli-entrypoint"]
+ENTRYPOINT ["vera"]
 CMD ["help"]

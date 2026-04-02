@@ -281,50 +281,29 @@ MCP tools exposed by Vera: `search_code`, `get_overview`, `regex_search`.
 
 When you can't run the native binary (macOS Gatekeeper, corporate proxy blocking cargo, etc.), run Vera inside Docker.
 
-This Docker setup is CLI-only. `mcp` is intentionally blocked.
+This Docker setup is CLI-only and keeps everything in a single `docker run` wrapper.
 
-### Build
+### Build image
 
 ```bash
-docker compose build --no-cache vera
-# or plain docker:
-docker build -t vera:local .
+docker build -t vera-vera .
 ```
 
-### Default run (compose)
+### Run Vera via wrapper script
+
+The repo includes `docker-data/vera-docker.sh`, which runs `docker run` with the right mounts.
 
 ```bash
-docker compose run --rm -T vera
+./docker-data/vera-docker.sh --version
+./docker-data/vera-docker.sh index /workspace
+./docker-data/vera-docker.sh search "authentication logic"
+./docker-data/vera-docker.sh overview
 ```
 
-That runs `vera help` and exits.
-
-### One-off CLI commands (compose)
+Optional workspace override:
 
 ```bash
-docker compose run --rm -T vera --version
-docker compose run --rm -T vera index /workspace
-docker compose run --rm -T vera search "authentication logic"
-docker compose run --rm -T vera overview
-```
-
-### Plain docker CLI commands
-
-```bash
-docker run --rm \
-    --add-host=host.docker.internal:host-gateway \
-    -v $(pwd):/workspace \
-    -v ./docker-data/vera-home:/root/.vera \
-    vera:local --version
-```
-
-### MCP is blocked in Docker
-
-These now fail fast by design:
-
-```bash
-docker compose run --rm vera mcp
-docker run --rm vera:local mcp
+VERA_WORKSPACE=/absolute/path/to/repo ./docker-data/vera-docker.sh search "auth"
 ```
 
 ### One-time API key setup (persisted, no docker env vars needed)
@@ -332,18 +311,17 @@ docker run --rm vera:local mcp
 Run once per `docker-data/vera-home` directory:
 
 ```bash
-docker compose run --rm -T vera config set embedding_api.api_key not-needed
-docker compose run --rm -T vera config set reranker_api.api_key not-needed
-docker compose run --rm -T vera config set completion_api.api_key not-needed
+./docker-data/vera-docker.sh config set embedding_api.api_key not-needed
+./docker-data/vera-docker.sh config set reranker_api.api_key not-needed
+./docker-data/vera-docker.sh config set completion_api.api_key not-needed
 ```
 
 Notes:
 
 - `host.docker.internal` routes to the host machine from inside the container so Vera can reach your llama.cpp servers
-- Config and models are at `./docker-data/vera-home/` on the host, mounted to `/root/.vera` in the container — `config.json` is pre-baked with API mode and tuned settings, and keys are stored in `credentials.json`
+- Config and models are at `./docker-data/vera-home/` on the host, mounted to `/root/.vera` in the container
 - `docker-data/vera-home/credentials.json` is gitignored to prevent accidental credential commits
 - Index data lives at `/workspace/.vera/` on the mounted project volume, so it persists too
-- On macOS Docker Desktop, `host.docker.internal` works natively; on Linux it needs `--add-host` (included in compose via `extra_hosts`)
 
 ## 10) Common issues
 
