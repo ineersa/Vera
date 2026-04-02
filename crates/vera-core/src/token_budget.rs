@@ -153,10 +153,20 @@ pub fn split_text_with_token_overlap(
         let line_tokens = line_token_counts(&lines);
         let windows = line_windows_by_tokens(&line_tokens, window_tokens, overlap_tokens);
         if !windows.is_empty() {
-            return windows
-                .into_iter()
-                .map(|(start, end)| lines[start..end].join("\n"))
-                .collect();
+            let mut split = Vec::new();
+            for (start, end) in windows {
+                let segment = lines[start..end].join("\n");
+                if estimate_tokens(&segment) > window_tokens {
+                    split.extend(split_single_line_with_overlap(
+                        &segment,
+                        window_tokens,
+                        overlap_tokens,
+                    ));
+                } else {
+                    split.push(segment);
+                }
+            }
+            return split;
         }
     }
 
@@ -199,35 +209,64 @@ fn split_single_line_with_overlap(
     window_tokens: usize,
     overlap_tokens: usize,
 ) -> Vec<String> {
-    let window_bytes = window_tokens
-        .saturating_mul(CHARS_PER_TOKEN_ESTIMATE)
-        .max(1)
-        .min(text.len().max(1));
-    let overlap_bytes = overlap_tokens
-        .saturating_mul(CHARS_PER_TOKEN_ESTIMATE)
-        .min(window_bytes.saturating_sub(1));
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+
+    let window_tokens = window_tokens.max(1);
+    let spans = estimated_token_spans(text);
+    if spans.is_empty() {
+        return vec![text.to_string()];
+    }
 
     let mut windows = Vec::new();
     let mut start = 0usize;
 
-    while start < text.len() {
-        let mut end = (start + window_bytes).min(text.len());
-        while end > start && !text.is_char_boundary(end) {
-            end -= 1;
+    while start < spans.len() {
+        let mut end = start;
+        let mut used = 0usize;
+
+        while end < spans.len() {
+            let next = used.saturating_add(spans[end].weight);
+            if next > window_tokens && end > start {
+                break;
+            }
+
+            used = next;
+            end += 1;
         }
+
         if end == start {
-            end = next_char_boundary(text, start + 1);
+            end += 1;
         }
 
-        windows.push(text[start..end].to_string());
+        let start_byte = spans[start].start;
+        let end_byte = spans[end - 1].end;
+        windows.push(text[start_byte..end_byte].to_string());
 
-        if end >= text.len() {
+        if end >= spans.len() {
             break;
         }
 
-        let mut next_start = end.saturating_sub(overlap_bytes);
-        while next_start > 0 && !text.is_char_boundary(next_start) {
+        if overlap_tokens == 0 {
+            start = end;
+            continue;
+        }
+
+        let mut next_start = end;
+        let mut overlap_used = 0usize;
+        while next_start > start {
+            let candidate = overlap_used.saturating_add(spans[next_start - 1].weight);
+            if candidate > overlap_tokens && overlap_used > 0 {
+                break;
+            }
+
+            overlap_used = candidate;
             next_start -= 1;
+
+            if overlap_used >= overlap_tokens {
+                break;
+            }
         }
 
         start = if next_start <= start { end } else { next_start };
@@ -236,12 +275,61 @@ fn split_single_line_with_overlap(
     windows
 }
 
-fn next_char_boundary(text: &str, mut idx: usize) -> usize {
-    idx = idx.min(text.len());
-    while idx < text.len() && !text.is_char_boundary(idx) {
-        idx += 1;
+#[derive(Debug, Clone, Copy)]
+struct TokenSpan {
+    start: usize,
+    end: usize,
+    weight: usize,
+}
+
+fn estimated_token_spans(text: &str) -> Vec<TokenSpan> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    if chars.is_empty() {
+        return Vec::new();
     }
-    idx
+
+    let mut spans = Vec::new();
+    let mut i = 0usize;
+    while i < chars.len() {
+        let (start, ch) = chars[i];
+        let end = chars.get(i + 1).map(|(idx, _)| *idx).unwrap_or(text.len());
+
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            let mut j = i + 1;
+            while j < chars.len() {
+                let (_, next_ch) = chars[j];
+                if next_ch.is_ascii_alphanumeric() || next_ch == '_' {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+
+            let run_end = chars.get(j).map(|(idx, _)| *idx).unwrap_or(text.len());
+            let mut cursor = start;
+            while cursor < run_end {
+                let segment_end = (cursor + CHARS_PER_TOKEN_ESTIMATE).min(run_end);
+                spans.push(TokenSpan {
+                    start: cursor,
+                    end: segment_end,
+                    weight: 1,
+                });
+                cursor = segment_end;
+            }
+
+            i = j;
+            continue;
+        }
+
+        spans.push(TokenSpan {
+            start,
+            end,
+            weight: if ch.is_whitespace() { 0 } else { 1 },
+        });
+        i += 1;
+    }
+
+    spans
 }
 
 #[cfg(test)]
@@ -277,7 +365,27 @@ mod tests {
         let windows = split_text_with_token_overlap(&text, 120, 20);
         assert!(windows.len() > 1);
         for window in &windows {
-            assert!(estimate_tokens(window) <= 160);
+            assert!(estimate_tokens(window) <= 120);
+        }
+    }
+
+    #[test]
+    fn split_text_with_overlap_splits_punctuation_dense_line() {
+        let text = "{".repeat(2000);
+        let windows = split_text_with_token_overlap(&text, 120, 20);
+        assert!(windows.len() > 1);
+        for window in &windows {
+            assert!(estimate_tokens(window) <= 120);
+        }
+    }
+
+    #[test]
+    fn split_text_with_overlap_handles_oversized_line_in_multiline_text() {
+        let text = format!("header\n{}\nfooter", "{".repeat(2000));
+        let windows = split_text_with_token_overlap(&text, 120, 20);
+        assert!(windows.len() > 2);
+        for window in &windows {
+            assert!(estimate_tokens(window) <= 120);
         }
     }
 }

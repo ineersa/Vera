@@ -49,8 +49,8 @@
       "reranking_enabled": true,
       "max_rerank_batch": 20,
       "max_output_chars": 12000,
-      "reranker_max_docs_per_request": 8,
-      "reranker_max_document_tokens": 300
+      "reranker_max_docs_per_request": 1,
+      "reranker_max_document_tokens": 400
     },
     "embedding": {
       "batch_size": 4,

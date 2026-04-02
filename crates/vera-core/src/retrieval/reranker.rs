@@ -245,8 +245,8 @@ impl ApiReranker {
             match self.send_request(&url, &body).await {
                 Ok(scores) => return Ok(scores),
                 Err(e) => {
-                    // Don't retry auth errors.
-                    if matches!(e, RerankerError::AuthError { .. }) {
+                    // Retry only transient errors (network, 429, 5xx, parse).
+                    if !is_retryable_reranker_error(&e) {
                         return Err(e);
                     }
                     warn!(
@@ -397,7 +397,7 @@ impl ApiReranker {
                                     score.index += base_index + start;
                                 }
                                 recovered = Some(scores);
-                                warn!(
+                                debug!(
                                     budget,
                                     document_index = base_index + start,
                                     "reranker context overflow recovered by shrinking single document"
@@ -702,6 +702,16 @@ fn is_context_limit_error(err: &RerankerError) -> bool {
                 || m.contains("too large to process")
         }
         _ => false,
+    }
+}
+
+fn is_retryable_reranker_error(err: &RerankerError) -> bool {
+    match err {
+        RerankerError::AuthError { .. } => false,
+        RerankerError::RateLimitError { .. } => true,
+        RerankerError::ConnectionError { .. } => true,
+        RerankerError::ResponseError { .. } => true,
+        RerankerError::ApiError { status, .. } => *status >= 500,
     }
 }
 
