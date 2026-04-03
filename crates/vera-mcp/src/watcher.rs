@@ -4,11 +4,11 @@
 //! index updates after a debounce period. This keeps the index fresh
 //! without requiring manual update calls.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
 use anyhow::Context;
 use notify_debouncer_mini::{DebouncedEventKind, new_debouncer};
@@ -60,8 +60,9 @@ fn start_watching_internal(repo_path: &Path, progress_logs: bool) -> Result<Watc
 
     let updating = Arc::new(AtomicBool::new(false));
     let updating_clone = updating.clone();
-    let warmed_up = Arc::new(AtomicBool::new(false));
-    let warmed_up_clone = warmed_up.clone();
+    let watcher_started_at = SystemTime::now();
+    let seen_mtimes = Arc::new(Mutex::new(HashMap::<PathBuf, SystemTime>::new()));
+    let seen_mtimes_clone = seen_mtimes.clone();
     let repo_clone = repo_path.clone();
     let ignored_dirs = vec![repo_path.join(".vera"), repo_path.join(".git")];
 
@@ -81,27 +82,27 @@ fn start_watching_internal(repo_path: &Path, progress_logs: bool) -> Result<Watc
                 return;
             }
 
-            let indexable_changes = match filter_indexable_changes(&repo_clone, &relevant_changes) {
+            let material_changes = {
+                let mut seen = seen_mtimes_clone
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                filter_material_changes(&relevant_changes, watcher_started_at, &mut seen)
+            };
+            if material_changes.is_empty() {
+                return;
+            }
+
+            let indexable_changes = match filter_indexable_changes(&repo_clone, &material_changes) {
                 Ok(paths) => paths,
                 Err(error) => {
                     warn!(error = %error, "failed to apply index ignore rules for watcher changes");
-                    relevant_changes.clone()
+                    material_changes.clone()
                 }
             };
 
             if indexable_changes.is_empty() {
                 if progress_logs {
                     eprintln!("[watch] changes ignored by indexing rules");
-                }
-                return;
-            }
-
-            if !warmed_up_clone.swap(true, Ordering::SeqCst) && indexable_changes.len() > 50 {
-                if progress_logs {
-                    eprintln!(
-                        "[watch] initial watcher sync observed {} paths; waiting for new file changes",
-                        indexable_changes.len()
-                    );
                 }
                 return;
             }
@@ -219,6 +220,63 @@ fn collect_relevant_changes(
         unique.insert(event.path.clone());
     }
     unique.into_iter().collect()
+}
+
+fn filter_material_changes(
+    changed_paths: &[PathBuf],
+    watcher_started_at: SystemTime,
+    seen_mtimes: &mut HashMap<PathBuf, SystemTime>,
+) -> Vec<PathBuf> {
+    let mut material = Vec::new();
+
+    for path in changed_paths {
+        if !path.exists() {
+            seen_mtimes.remove(path);
+            material.push(path.clone());
+            continue;
+        }
+
+        let metadata = match std::fs::metadata(path) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                material.push(path.clone());
+                continue;
+            }
+        };
+
+        if metadata.is_dir() {
+            continue;
+        }
+        if !metadata.is_file() {
+            continue;
+        }
+
+        let modified = match metadata.modified() {
+            Ok(modified) => modified,
+            Err(_) => {
+                material.push(path.clone());
+                continue;
+            }
+        };
+
+        match seen_mtimes.get(path) {
+            Some(previous) if *previous >= modified => {}
+            Some(_) => {
+                seen_mtimes.insert(path.clone(), modified);
+                material.push(path.clone());
+            }
+            None => {
+                // Seed baseline mtimes for pre-existing files so startup/access
+                // notifications don't trigger a full incremental update cycle.
+                seen_mtimes.insert(path.clone(), modified);
+                if modified > watcher_started_at {
+                    material.push(path.clone());
+                }
+            }
+        }
+    }
+
+    material
 }
 
 fn filter_indexable_changes(
@@ -558,5 +616,67 @@ mod tests {
         let filtered = filter_indexable_changes_with_sets(&repo, &changed, &discoverable, &indexed);
 
         assert_eq!(filtered, vec![deleted_dir]);
+    }
+
+    #[test]
+    fn filter_material_changes_ignores_existing_files_older_than_start() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let repo = temp.path().to_path_buf();
+
+        fs::create_dir_all(repo.join("src")).unwrap();
+        let file = repo.join("src/main.rs");
+        fs::write(&file, "fn main() {}\n").unwrap();
+
+        let watcher_started_at = SystemTime::now() + Duration::from_secs(1);
+        let mut seen = HashMap::new();
+        let filtered =
+            filter_material_changes(std::slice::from_ref(&file), watcher_started_at, &mut seen);
+
+        assert!(filtered.is_empty());
+        assert!(seen.contains_key(&file));
+    }
+
+    #[test]
+    fn filter_material_changes_skips_repeated_same_mtime_events() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let repo = temp.path().to_path_buf();
+
+        fs::create_dir_all(repo.join("src")).unwrap();
+        let file = repo.join("src/main.rs");
+        fs::write(&file, "fn main() {}\n").unwrap();
+
+        let mut seen = HashMap::new();
+        let first = filter_material_changes(
+            std::slice::from_ref(&file),
+            SystemTime::UNIX_EPOCH,
+            &mut seen,
+        );
+        let second = filter_material_changes(
+            std::slice::from_ref(&file),
+            SystemTime::UNIX_EPOCH,
+            &mut seen,
+        );
+
+        assert_eq!(first, vec![file]);
+        assert!(second.is_empty());
+    }
+
+    #[test]
+    fn filter_material_changes_ignores_existing_directories_but_keeps_deletions() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let repo = temp.path().to_path_buf();
+
+        let existing_dir = repo.join("src");
+        fs::create_dir_all(&existing_dir).unwrap();
+        let deleted_file = repo.join("src/deleted.rs");
+
+        let mut seen = HashMap::new();
+        let filtered = filter_material_changes(
+            &[existing_dir, deleted_file.clone()],
+            SystemTime::UNIX_EPOCH,
+            &mut seen,
+        );
+
+        assert_eq!(filtered, vec![deleted_file]);
     }
 }

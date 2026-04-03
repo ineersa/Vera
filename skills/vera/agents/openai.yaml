@@ -1,7 +1,0 @@
-interface:
-  display_name: "Vera"
-  short_description: "Repository discovery with overview, semantic search, and regex search"
-  default_prompt: "Use $vera for repo discovery: run overview first if needed, then search for concepts and grep for exact patterns."
-
-policy:
-  allow_implicit_invocation: true

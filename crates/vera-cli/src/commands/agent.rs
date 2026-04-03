@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use clap::ValueEnum;
 use serde::Serialize;
 
@@ -999,13 +999,13 @@ const AGENTS_MD_SNIPPET: &str = r#"## Code Search
 Use Vera before opening many files or running broad text search when you need to find where logic lives or how a feature works.
 
 - `vera search "query"` for semantic code search. Describe behavior: "JWT validation", not "auth".
-- `vera grep "pattern"` for exact text or regex
+- `vera search "query" --path "src/**"` to narrow to a directory/file glob
+- `vera grep "pattern"` for exact text or regex (`vera grep` has no `--path` flag)
 - `vera references <symbol>` for callers and callees
 - `vera overview` for a project summary (languages, entry points, hotspots)
 - `vera search --deep "query"` for RAG-fusion query expansion + merged ranking
-- Narrow results with `--lang`, `--path`, `--type`, or `--scope docs`
-- `vera watch .` to auto-update the index, or `vera update .` after edits (`vera index .` if `.vera/` is missing)
-- For detailed usage, query patterns, and troubleshooting, read the Vera skill file installed by `vera agent install`
+- Use `--lang` and `--type` with `vera search`; use `--scope docs` for search/grep in documentation
+- Run `vera update .` after major edits (`vera index .` if `.vera/` is missing)
 "#;
 
 #[derive(Debug, Clone, Copy)]
@@ -1081,7 +1081,6 @@ fn find_agent_configs(cwd: &Path) -> Vec<DetectedAgentConfig> {
                         || lower.contains("vera update")
                         || lower.contains("vera references")
                         || lower.contains("vera overview")
-                        || lower.contains("vera watch")
                 })
                 .unwrap_or(false);
 
@@ -1271,16 +1270,12 @@ mod tests {
             resolve_locations_with_roots(AgentClient::Codex, AgentScope::All, cwd, home).unwrap();
 
         assert_eq!(locations.len(), 2);
-        assert!(
-            locations
-                .iter()
-                .any(|location| location.scope == AgentScope::Global)
-        );
-        assert!(
-            locations
-                .iter()
-                .any(|location| location.scope == AgentScope::Project)
-        );
+        assert!(locations
+            .iter()
+            .any(|location| location.scope == AgentScope::Global));
+        assert!(locations
+            .iter()
+            .any(|location| location.scope == AgentScope::Project));
     }
 
     #[test]

@@ -1,82 +1,125 @@
 ---
 name: vera
-description: Repository discovery skill focused on `vera overview`, `vera search`, and `vera grep`.
+description: Practical repository discovery skill for finding where logic lives and how code flows.
 ---
 
 # Vera
 
 Use this skill for codebase discovery only.
 
-## Load This Skill When
+## When To Use
 
-- The user asks where logic lives ("where is X implemented", "how does Y work").
-- The user asks for architecture orientation in an unfamiliar repo.
-- The user asks for exact text/pattern matches (imports, TODOs, regex).
+Load this skill when the user asks questions like:
 
-Do not load this skill for build, test, deployment, or refactor tasks unless search/discovery is part of the request.
+- where logic is implemented
+- how behavior flows across files
+- who calls a function, or what a function calls
+- where an exact token/import/pattern appears
+- how database/auth/config/cache logic is organized
 
-## Tool Selection
+Do not load this skill for build/test/deploy/refactor work unless discovery is part of the task.
+
+## Operating Rules
+
+- Run Vera from repository root (the directory that owns `.vera/`).
+- If the agent is inside a subdirectory, run commands with repo root as the working directory.
+- Do not run probe noise (`which vera`, `command -v vera`, `vera --version`, `pwd`, `ls`) unless the user explicitly asks for install/debug diagnostics.
+- Start with one focused query, then narrow with flags instead of running many broad commands.
+- Use `--path` with `vera search` for scope control; avoid changing into many subdirectories.
+
+## Command Choice
+
+### `vera search`
+
+Default command for conceptual discovery.
+
+```sh
+vera search "where is authentication middleware implemented"
+vera search "database connection configuration" --path "src/**"
+vera search "convert API errors to user-facing errors" --lang rust --limit 5
+```
+
+### `vera grep`
+
+Use for exact strings/regex.
+
+```sh
+vera grep "TODO|FIXME" -i
+vera grep "DATABASE_URL|DB_HOST" -i
+vera grep "SELECT\s+.+\s+FROM\s+users" -i
+```
+
+`vera grep` currently does not support `--path`. For path-scoped searching, use `vera search ... --path "..."`.
+
+### `vera references`
+
+Use for call graph navigation.
+
+```sh
+vera references createUser
+vera references createUser --callees
+```
 
 ### `vera overview`
 
-Use when you need fast orientation before searching.
-
-Good for:
-- first pass on unfamiliar repositories
-- understanding language/directory layout
-- finding likely areas to search next
+Use once for unfamiliar repos or architecture-orientation questions.
 
 ```sh
 vera overview
 ```
 
-### `vera search`
+## Practical Workflows
 
-Use for conceptual or behavioral code search.
+### General Discovery Loop
 
-Good for:
-- "how is auth handled"
-- "where do API errors get converted"
-- "where is config loaded"
+1. Optional orientation: `vera overview` (only if needed).
+2. Run one targeted `vera search` for the user question.
+3. Run `vera grep` only when exact syntax/token confirmation is needed.
+4. Use `vera references` for caller/callee tracing.
+5. Return top matches with file paths and why each match is relevant.
 
-```sh
-vera search "authentication middleware"
-vera search "api error conversion" --limit 5
-vera search "config loading" --lang php --path "src/**"
-```
+### Database Exploration Playbook
 
-### `vera grep`
+Use this sequence when exploring DB logic.
 
-Use for exact string and regex matching.
-
-Good for:
-- exact identifiers
-- import/include lines
-- TODO/FIXME scans
-- strict syntax patterns
+1. Find DB bootstrap/config:
 
 ```sh
-vera grep "TODO|FIXME" -i
-vera grep "use Symfony\\\\AI\\\\" --context 1
-vera grep "function\s+handle\(" --path "src/**"
+vera search "database client initialization"
+vera search "load database connection from env"
 ```
 
-## Practical Search Loop
+2. Find models, repositories, migrations, schema:
 
-1. Run `vera overview` once if the repo is unfamiliar.
-2. Use `vera search` for intent/behavior questions.
-3. Use `vera grep` for exact tokens/patterns.
-4. Narrow with `--lang`, `--path`, `--scope`, `--limit`.
-5. Return top matches with file path and why each match is relevant.
+```sh
+vera search "user repository" --path "src/**"
+vera search "CREATE TABLE users" --path "**/*.sql"
+vera search "schema migration prisma typeorm sequelize knex diesel sqlx" --path "src/**"
+```
 
-## Notes
+3. Trace read/write paths for a specific entity:
 
-- Prefer `vera search` over regex for conceptual questions.
-- Prefer `vera grep` over semantic search for exact syntax/token checks.
-- If Vera reports no index, ask the user to run `vera index .` in the repo root.
+```sh
+vera search "create user" --path "src/**"
+vera search "update user" --path "src/**"
+vera references createUser
+vera references createUser --callees
+```
 
-## Copy-Paste Agent Template
+4. Verify transaction and safety handling:
 
-For a project-level `AGENTS.md` snippet that tells agents when to load this skill, use:
+```sh
+vera search "transaction begin commit rollback" --path "src/**"
+vera grep "SELECT|INSERT|UPDATE|DELETE" -i
+```
 
-- `references/agents.md`
+### Find Specific Things Fast
+
+- Specific symbol: `vera grep "parse_config"`
+- Specific file area: `vera search "rate limit middleware" --path "src/http/**"`
+- Specific behavior: `vera search "retry on database timeout" --lang go`
+
+## Failure Handling
+
+- If Vera says no index in current directory, rerun from repo root.
+- If still missing, run `vera index .` at repo root and retry the same query.

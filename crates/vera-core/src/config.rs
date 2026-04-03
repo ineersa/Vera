@@ -588,9 +588,11 @@ mod tests {
     fn default_excludes_contains_common_dirs() {
         let config = IndexingConfig::default();
         assert!(config.default_excludes.contains(&".git".to_string()));
-        assert!(config
-            .default_excludes
-            .contains(&"node_modules".to_string()));
+        assert!(
+            config
+                .default_excludes
+                .contains(&"node_modules".to_string())
+        );
         assert!(config.default_excludes.contains(&"target".to_string()));
     }
 
