@@ -103,11 +103,24 @@ pub struct RetrievalConfig {
     /// Truncates at a newline boundary. 0 means no truncation.
     #[serde(default = "default_max_rerank_doc_chars")]
     pub max_rerank_doc_chars: usize,
+    /// Controls how much metadata is prepended to each reranker document.
+    ///
+    /// - `full`: rich metadata (symbol, path tokens, role, lines)
+    /// - `none`: raw chunk content only
+    /// - `non_docs`: full metadata except for explicit docs-scope queries
+    /// - `light`: only source path + breadcrumb
+    #[serde(default = "default_rerank_metadata_mode")]
+    pub rerank_metadata_mode: RerankMetadataMode,
     /// Total character budget for search output. Results are progressively
     /// truncated so the combined output stays within this limit.
     /// 0 means unlimited.
     #[serde(default = "default_max_output_chars")]
     pub max_output_chars: usize,
+    /// When enabled, identifier-like short queries (up to 4 terms) use a
+    /// reduced retrieval budget: BM25/vector/rerank candidate pools and RRF k
+    /// are each scaled down by 50%.
+    #[serde(default = "default_adaptive_exact_query_tuning")]
+    pub adaptive_exact_query_tuning: bool,
     /// When true, any retrieval-stage failure aborts the search instead of
     /// degrading to partial fallbacks.
     #[serde(default = "default_fail_on_stage_error")]
@@ -116,6 +129,66 @@ pub struct RetrievalConfig {
 
 fn default_max_output_chars() -> usize {
     12_000
+}
+
+/// How much metadata to include in each reranker candidate document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RerankMetadataMode {
+    /// Include all available metadata fields.
+    Full,
+    /// Send only chunk content (no metadata wrapper).
+    None,
+    /// Include full metadata unless query scope is explicitly `docs`.
+    NonDocs,
+    /// Include only light metadata (`source` and breadcrumb-like path).
+    Light,
+}
+
+impl fmt::Display for RerankMetadataMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Full => "full",
+            Self::None => "none",
+            Self::NonDocs => "non_docs",
+            Self::Light => "light",
+        };
+        write!(f, "{value}")
+    }
+}
+
+impl FromStr for RerankMetadataMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "full" => Ok(Self::Full),
+            "none" | "off" | "no" => Ok(Self::None),
+            "non_docs" | "non-docs" | "non_docs_only" | "non-docs-only" => Ok(Self::NonDocs),
+            "light" => Ok(Self::Light),
+            other => Err(format!(
+                "invalid rerank metadata mode '{other}' (expected one of: full, none, non_docs, light)"
+            )),
+        }
+    }
+}
+
+fn default_rerank_metadata_mode() -> RerankMetadataMode {
+    std::env::var("VERA_RERANK_METADATA_MODE")
+        .ok()
+        .and_then(|value| RerankMetadataMode::from_str(&value).ok())
+        .unwrap_or(RerankMetadataMode::Full)
+}
+
+fn default_adaptive_exact_query_tuning() -> bool {
+    std::env::var("VERA_ADAPTIVE_EXACT_QUERY_TUNING")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
 }
 
 fn default_fail_on_stage_error() -> bool {
@@ -169,7 +242,9 @@ impl Default for RetrievalConfig {
             reranking_enabled: true,
             max_rerank_batch: default_max_rerank_batch(),
             max_rerank_doc_chars: default_max_rerank_doc_chars(),
+            rerank_metadata_mode: default_rerank_metadata_mode(),
             max_output_chars: 12_000,
+            adaptive_exact_query_tuning: default_adaptive_exact_query_tuning(),
             fail_on_stage_error: default_fail_on_stage_error(),
         }
     }
@@ -559,16 +634,66 @@ mod tests {
 
     #[test]
     fn default_config_is_valid() {
+        let _guard = env_lock().lock().unwrap();
+        remove_env("VERA_ADAPTIVE_EXACT_QUERY_TUNING");
+        remove_env("VERA_FAIL_ON_STAGE_ERROR");
         let config = VeraConfig::default();
         assert!(config.indexing.max_chunk_lines > 0);
         assert!(config.retrieval.default_limit > 0);
         assert!(config.retrieval.rrf_k > 0.0);
         assert!(config.retrieval.max_rerank_batch > 0);
         assert!(config.retrieval.max_rerank_doc_chars > 0);
+        assert_eq!(
+            config.retrieval.rerank_metadata_mode,
+            RerankMetadataMode::Full
+        );
         assert_eq!(config.retrieval.max_bm25_candidates, 0);
         assert_eq!(config.retrieval.max_vector_candidates, 0);
+        assert!(!config.retrieval.adaptive_exact_query_tuning);
         assert!(!config.retrieval.fail_on_stage_error);
         assert!(config.embedding.batch_size > 0);
+    }
+
+    #[test]
+    fn rerank_metadata_mode_reads_env_toggle() {
+        let _guard = env_lock().lock().unwrap();
+        set_env("VERA_RERANK_METADATA_MODE", "light");
+        let config = VeraConfig::default();
+        assert_eq!(
+            config.retrieval.rerank_metadata_mode,
+            RerankMetadataMode::Light
+        );
+        remove_env("VERA_RERANK_METADATA_MODE");
+    }
+
+    #[test]
+    fn rerank_metadata_mode_parses_aliases() {
+        assert_eq!(
+            RerankMetadataMode::from_str("non-docs").unwrap(),
+            RerankMetadataMode::NonDocs
+        );
+        assert_eq!(
+            RerankMetadataMode::from_str("none").unwrap(),
+            RerankMetadataMode::None
+        );
+        assert_eq!(
+            RerankMetadataMode::from_str("full").unwrap(),
+            RerankMetadataMode::Full
+        );
+    }
+
+    #[test]
+    fn rerank_metadata_mode_rejects_invalid_values() {
+        assert!(RerankMetadataMode::from_str("verbose").is_err());
+    }
+
+    #[test]
+    fn adaptive_exact_query_tuning_reads_env_toggle() {
+        let _guard = env_lock().lock().unwrap();
+        set_env("VERA_ADAPTIVE_EXACT_QUERY_TUNING", "true");
+        let config = VeraConfig::default();
+        assert!(config.retrieval.adaptive_exact_query_tuning);
+        remove_env("VERA_ADAPTIVE_EXACT_QUERY_TUNING");
     }
 
     #[test]

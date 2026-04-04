@@ -62,13 +62,22 @@ pub fn execute_search(
     let rrf_k = query_params.rrf_k;
     let bm25_candidates =
         effective_bm25_candidates(query, fetch_limit, config.retrieval.max_bm25_candidates);
-    let vector_candidates = effective_vector_candidates(
+    let mut vector_candidates = effective_vector_candidates(
         fetch_limit,
         query_params,
         config.retrieval.max_vector_candidates,
     );
-    let rerank_candidates =
+    let mut rerank_candidates =
         effective_rerank_candidates(config.retrieval.rerank_candidates, result_limit);
+
+    if config.retrieval.adaptive_exact_query_tuning
+        && should_reduce_exact_query_budget(query, query_type)
+    {
+        // Keep lexical recall and identifier fusion behavior stable.
+        // Only trim vector/rerank pools for short exact queries.
+        vector_candidates = scale_candidate_count(vector_candidates, 0.75, 1);
+        rerank_candidates = scale_candidate_count(rerank_candidates, 0.5, result_limit.max(1));
+    }
 
     let rt = tokio::runtime::Runtime::new()?;
 
@@ -171,11 +180,10 @@ pub fn execute_search(
 
     let provider = crate::embedding::CachedEmbeddingProvider::new(provider, 512);
 
-    let should_skip_reranker = should_skip_reranking(query, filters);
     let mut reranker_error: Option<String> = None;
 
     // Create optional reranker.
-    let reranker = if config.retrieval.reranking_enabled && !should_skip_reranker {
+    let reranker = if config.retrieval.reranking_enabled {
         match rt.block_on(crate::retrieval::create_dynamic_reranker(config, backend)) {
             Ok(Some(reranker)) => Some(reranker),
             Ok(None) => {
@@ -228,6 +236,8 @@ pub fn execute_search(
             rerank_candidates,
             bm25_candidates,
             vector_candidates,
+            config.retrieval.rerank_metadata_mode,
+            filters.scope,
             fail_on_stage_error,
         ))?
     } else {
@@ -320,12 +330,18 @@ fn apply_candidate_cap(base: usize, max_candidates: usize) -> usize {
     base.min(max_candidates).max(1)
 }
 
-fn should_skip_reranking(query: &str, filters: &SearchFilters) -> bool {
-    let word_count = query.split_whitespace().count();
-    filters.path_glob.is_some()
-        || filters.symbol_type.is_some()
-        || is_path_weighted_query(query)
-        || (matches!(classify_query(query), QueryType::Identifier) && word_count <= 2)
+fn should_reduce_exact_query_budget(query: &str, query_type: QueryType) -> bool {
+    query_type == QueryType::Identifier
+        && !query.trim().is_empty()
+        && query.split_whitespace().count() <= 4
+}
+
+fn scale_candidate_count(base: usize, ratio: f64, floor: usize) -> usize {
+    if base == 0 {
+        return floor.max(1);
+    }
+    let scaled = ((base as f64) * ratio).ceil() as usize;
+    scaled.max(floor.max(1))
 }
 
 fn run_bm25_only(
@@ -669,16 +685,30 @@ mod tests {
     }
 
     #[test]
-    fn exact_identifier_queries_skip_reranking() {
-        assert!(should_skip_reranking("Config", &SearchFilters::default()));
-        assert!(should_skip_reranking(
-            "src/config.ts",
-            &SearchFilters::default()
+    fn exact_identifier_queries_reduce_budget_when_enabled() {
+        assert!(should_reduce_exact_query_budget(
+            "Config",
+            QueryType::Identifier
         ));
-        assert!(!should_skip_reranking(
+        assert!(should_reduce_exact_query_budget(
+            "Request Stack Trace",
+            QueryType::Identifier
+        ));
+        assert!(!should_reduce_exact_query_budget(
             "how are HTTP errors handled",
-            &SearchFilters::default()
+            QueryType::NaturalLanguage
         ));
+        assert!(!should_reduce_exact_query_budget(
+            "how does authentication middleware validate incoming requests",
+            QueryType::Identifier
+        ));
+    }
+
+    #[test]
+    fn budget_scaling_keeps_expected_floors() {
+        assert_eq!(scale_candidate_count(80, 0.75, 1), 60);
+        assert_eq!(scale_candidate_count(50, 0.5, 5), 25);
+        assert_eq!(scale_candidate_count(5, 0.5, 10), 10);
     }
 
     #[test]

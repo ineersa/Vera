@@ -593,11 +593,13 @@ enum Commands {
                        retrieval.rerank_candidates    Reranker candidate count (default: 50)\n  \
                        retrieval.max_bm25_candidates  Hard cap BM25 candidates (default: 0=off)\n  \
                        retrieval.max_vector_candidates Hard cap vector candidates (default: 0=off)\n  \
-                       retrieval.reranking_enabled    Enable reranking (default: true)\n  \
-                       retrieval.max_rerank_batch     Max docs per reranker request (default: 20)\n  \
-                       retrieval.max_rerank_doc_chars Max chars per reranker document (default: 4800)\n  \
-                       retrieval.max_output_chars     Total output char budget (default: 12000)\n  \
-                       embedding.batch_size           Embedding batch size (default: 128)\n  \
+                        retrieval.reranking_enabled    Enable reranking (default: true)\n  \
+                         retrieval.max_rerank_batch     Max docs per reranker request (default: 20)\n  \
+                         retrieval.max_rerank_doc_chars Max chars per reranker document (default: 4800)\n  \
+                         retrieval.rerank_metadata_mode Reranker metadata mode (full|none|non_docs|light)\n  \
+                         retrieval.adaptive_exact_query_tuning Reduce exact-query vector/rerank pools\n  \
+                         retrieval.max_output_chars     Total output char budget (default: 12000)\n  \
+                        embedding.batch_size           Embedding batch size (default: 128)\n  \
                        embedding.max_concurrent_requests  Concurrent API requests (default: 8)\n  \
                        embedding.timeout_secs         API timeout (default: 60)\n  \
                        embedding.max_retries          API retry count (default: 3)\n  \
@@ -1206,6 +1208,13 @@ mod tests {
         assert!(
             commands::config::get_config_value(&config, "retrieval.max_rerank_doc_chars").is_some()
         );
+        assert!(
+            commands::config::get_config_value(&config, "retrieval.rerank_metadata_mode").is_some()
+        );
+        assert!(
+            commands::config::get_config_value(&config, "retrieval.adaptive_exact_query_tuning")
+                .is_some()
+        );
         assert!(commands::config::get_config_value(&config, "embedding.batch_size").is_some());
         assert!(commands::config::get_config_value(&config, "embedding.max_stored_dim").is_some());
     }
@@ -1239,6 +1248,15 @@ mod tests {
         let val =
             commands::config::get_config_value(&config, "retrieval.max_rerank_doc_chars").unwrap();
         assert_eq!(val, serde_json::json!(4800));
+
+        let val =
+            commands::config::get_config_value(&config, "retrieval.rerank_metadata_mode").unwrap();
+        assert_eq!(val, serde_json::json!("full"));
+
+        let val =
+            commands::config::get_config_value(&config, "retrieval.adaptive_exact_query_tuning")
+                .unwrap();
+        assert_eq!(val, serde_json::json!(false));
 
         let val =
             commands::config::get_config_value(&config, "retrieval.max_bm25_candidates").unwrap();

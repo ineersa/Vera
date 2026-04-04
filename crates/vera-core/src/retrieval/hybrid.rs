@@ -15,13 +15,14 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow};
 use tracing::{debug, info, warn};
 
+use crate::config::RerankMetadataMode;
 use crate::embedding::EmbeddingProvider;
 use crate::retrieval::bm25::search_bm25;
 use crate::retrieval::query_classifier::{QueryType, classify_query};
 use crate::retrieval::ranking::is_path_weighted_query;
-use crate::retrieval::reranker::{Reranker, rerank_results};
+use crate::retrieval::reranker::{RerankFormatOptions, Reranker, rerank_results};
 use crate::retrieval::vector::search_vector;
-use crate::types::SearchResult;
+use crate::types::{SearchResult, SearchScope};
 
 /// Errors specific to hybrid search.
 #[derive(Debug, thiserror::Error)]
@@ -177,6 +178,8 @@ pub async fn search_hybrid(
 /// - `rerank_candidates` — Number of candidates to send to the reranker
 /// - `bm25_candidates` — Number of BM25 candidates to fetch (query-type-aware)
 /// - `vector_candidates` — Number of vector candidates to fetch (query-type-aware)
+/// - `rerank_metadata_mode` — Metadata payload policy for reranker documents
+/// - `scope` — Query scope used for scope-aware metadata policy
 #[allow(clippy::too_many_arguments)]
 pub async fn search_hybrid_reranked(
     index_dir: &Path,
@@ -189,6 +192,8 @@ pub async fn search_hybrid_reranked(
     rerank_candidates: usize,
     bm25_candidates: usize,
     vector_candidates: usize,
+    rerank_metadata_mode: RerankMetadataMode,
+    scope: Option<SearchScope>,
     fail_on_stage_error: bool,
 ) -> Result<(Vec<SearchResult>, HybridTimings), HybridSearchError> {
     let fetch_limit = rerank_candidates.max(limit);
@@ -211,7 +216,19 @@ pub async fn search_hybrid_reranked(
     }
 
     let rerank_start = Instant::now();
-    match rerank_results(reranker, query, &hybrid_results, rerank_candidates).await {
+    let format_options = RerankFormatOptions {
+        metadata_mode: rerank_metadata_mode,
+        scope,
+    };
+    match rerank_results(
+        reranker,
+        query,
+        &hybrid_results,
+        rerank_candidates,
+        format_options,
+    )
+    .await
+    {
         Ok(mut reranked) => {
             timings.reranking = Some(rerank_start.elapsed());
             info!(
@@ -754,6 +771,8 @@ mod tests {
             10,
             50,
             50,
+            RerankMetadataMode::Full,
+            None,
             false,
         )
         .await
@@ -801,6 +820,8 @@ mod tests {
             10,
             50,
             50,
+            RerankMetadataMode::Full,
+            None,
             false,
         )
         .await
@@ -837,6 +858,8 @@ mod tests {
             10,
             50,
             50,
+            RerankMetadataMode::Full,
+            None,
             true,
         )
         .await
@@ -872,6 +895,8 @@ mod tests {
             10,
             50,
             50,
+            RerankMetadataMode::Full,
+            None,
             false,
         )
         .await
@@ -909,6 +934,8 @@ mod tests {
             10,
             50,
             50,
+            RerankMetadataMode::Full,
+            None,
             true,
         )
         .await
@@ -929,7 +956,19 @@ mod tests {
         let reranker = MockReranker::new();
 
         let (results, _timings) = search_hybrid_reranked(
-            &index_dir, &provider, &reranker, "function", 2, 60.0, dim, 10, 50, 50, false,
+            &index_dir,
+            &provider,
+            &reranker,
+            "function",
+            2,
+            60.0,
+            dim,
+            10,
+            50,
+            50,
+            RerankMetadataMode::Full,
+            None,
+            false,
         )
         .await
         .unwrap();
@@ -1016,6 +1055,8 @@ mod tests {
             10,
             compute_bm25_candidates(id_query, 5),
             compute_vector_candidates(5, id_params.vector_candidate_multiplier),
+            RerankMetadataMode::Full,
+            None,
             false,
         )
         .await
@@ -1038,6 +1079,8 @@ mod tests {
             10,
             compute_bm25_candidates(nl_query, 5),
             compute_vector_candidates(5, nl_params.vector_candidate_multiplier),
+            RerankMetadataMode::Full,
+            None,
             false,
         )
         .await

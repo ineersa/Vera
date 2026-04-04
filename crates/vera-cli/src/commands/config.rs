@@ -211,6 +211,14 @@ fn print_human_config(config: &vera_core::config::VeraConfig, api: &EffectiveApi
         "    max_rerank_doc_chars      {}",
         config.retrieval.max_rerank_doc_chars
     );
+    println!(
+        "    rerank_metadata_mode      {}",
+        config.retrieval.rerank_metadata_mode
+    );
+    println!(
+        "    adaptive_exact_query_tuning {}",
+        config.retrieval.adaptive_exact_query_tuning
+    );
     println!();
     println!("  Embedding:");
     println!(
@@ -337,6 +345,12 @@ pub fn get_config_value(
         "VERA_MAX_RERANK_DOC_CHARS" => Some(serde_json::Value::Number(
             config.retrieval.max_rerank_doc_chars.into(),
         )),
+        "retrieval.rerank_metadata_mode" | "VERA_RERANK_METADATA_MODE" => {
+            serde_json::to_value(config.retrieval.rerank_metadata_mode).ok()
+        }
+        "retrieval.adaptive_exact_query_tuning" | "VERA_ADAPTIVE_EXACT_QUERY_TUNING" => Some(
+            serde_json::Value::Bool(config.retrieval.adaptive_exact_query_tuning),
+        ),
         "retrieval.max_output_chars" => Some(serde_json::Value::Number(
             config.retrieval.max_output_chars.into(),
         )),
@@ -539,6 +553,12 @@ fn set_config_value(
         }
         "VERA_MAX_RERANK_DOC_CHARS" => {
             config.retrieval.max_rerank_doc_chars = parse_value(key, value)?;
+        }
+        "retrieval.rerank_metadata_mode" | "VERA_RERANK_METADATA_MODE" => {
+            config.retrieval.rerank_metadata_mode = parse_value(key, value)?;
+        }
+        "retrieval.adaptive_exact_query_tuning" | "VERA_ADAPTIVE_EXACT_QUERY_TUNING" => {
+            config.retrieval.adaptive_exact_query_tuning = parse_value(key, value)?;
         }
         "retrieval.max_output_chars" => {
             config.retrieval.max_output_chars = parse_value(key, value)?;
