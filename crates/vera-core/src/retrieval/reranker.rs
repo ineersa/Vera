@@ -315,6 +315,7 @@ impl ApiReranker {
 fn default_max_rerank_batch() -> usize {
     std::env::var("VERA_MAX_RERANK_BATCH")
         .ok()
+        .or_else(|| std::env::var("RERANKER_MAX_DOCS_PER_REQUEST").ok())
         .and_then(|v| v.parse().ok())
         .unwrap_or(20)
 }

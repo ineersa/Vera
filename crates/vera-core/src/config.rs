@@ -108,15 +108,31 @@ pub struct RetrievalConfig {
     /// 0 means unlimited.
     #[serde(default = "default_max_output_chars")]
     pub max_output_chars: usize,
+    /// When true, any retrieval-stage failure aborts the search instead of
+    /// degrading to partial fallbacks.
+    #[serde(default = "default_fail_on_stage_error")]
+    pub fail_on_stage_error: bool,
 }
 
 fn default_max_output_chars() -> usize {
     12_000
 }
 
+fn default_fail_on_stage_error() -> bool {
+    std::env::var("VERA_FAIL_ON_STAGE_ERROR")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
 fn default_max_rerank_batch() -> usize {
     std::env::var("VERA_MAX_RERANK_BATCH")
         .ok()
+        .or_else(|| std::env::var("RERANKER_MAX_DOCS_PER_REQUEST").ok())
         .and_then(|v| v.parse().ok())
         .unwrap_or(20)
 }
@@ -154,6 +170,7 @@ impl Default for RetrievalConfig {
             max_rerank_batch: default_max_rerank_batch(),
             max_rerank_doc_chars: default_max_rerank_doc_chars(),
             max_output_chars: 12_000,
+            fail_on_stage_error: default_fail_on_stage_error(),
         }
     }
 }
@@ -550,7 +567,17 @@ mod tests {
         assert!(config.retrieval.max_rerank_doc_chars > 0);
         assert_eq!(config.retrieval.max_bm25_candidates, 0);
         assert_eq!(config.retrieval.max_vector_candidates, 0);
+        assert!(!config.retrieval.fail_on_stage_error);
         assert!(config.embedding.batch_size > 0);
+    }
+
+    #[test]
+    fn fail_on_stage_error_reads_env_toggle() {
+        let _guard = env_lock().lock().unwrap();
+        set_env("VERA_FAIL_ON_STAGE_ERROR", "true");
+        let config = VeraConfig::default();
+        assert!(config.retrieval.fail_on_stage_error);
+        remove_env("VERA_FAIL_ON_STAGE_ERROR");
     }
 
     #[test]

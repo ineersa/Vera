@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use tracing::{debug, info, warn};
 
 use crate::embedding::EmbeddingProvider;
@@ -69,13 +69,17 @@ pub struct HybridTimings {
     pub vector: Option<Duration>,
     pub fusion: Option<Duration>,
     pub reranking: Option<Duration>,
+    pub bm25_error: Option<String>,
+    pub vector_error: Option<String>,
+    pub fusion_error: Option<String>,
+    pub reranking_error: Option<String>,
 }
 
 /// Perform hybrid search combining BM25 and vector retrieval via RRF fusion.
 ///
 /// Runs BM25 and vector search, merges results using Reciprocal Rank Fusion,
-/// and returns the top results. If vector search fails (e.g., embedding API
-/// unavailable), falls back to BM25-only results with a warning.
+/// and returns the top results. Stage failures can either degrade to partial
+/// fallback results or fail fast depending on `fail_on_stage_error`.
 pub async fn search_hybrid(
     index_dir: &Path,
     provider: &impl EmbeddingProvider,
@@ -85,6 +89,7 @@ pub async fn search_hybrid(
     stored_dim: usize,
     bm25_candidates: usize,
     vector_candidates: usize,
+    fail_on_stage_error: bool,
 ) -> Result<(Vec<SearchResult>, HybridTimings), HybridSearchError> {
     let mut timings = HybridTimings::default();
 
@@ -112,21 +117,35 @@ pub async fn search_hybrid(
             Ok((fused, timings))
         }
         (Ok(bm25), Err(vec_err)) => {
+            if fail_on_stage_error {
+                return Err(HybridSearchError::PipelineError(anyhow!(
+                    "vector stage failed: {vec_err}"
+                )));
+            }
             warn!(
                 error = %vec_err,
                 "vector search failed, falling back to BM25-only results"
             );
             let mut results = bm25;
             results.truncate(limit);
+            timings.vector_error = Some(vec_err.to_string());
+            timings.fusion_error = Some("RRF skipped: vector stage unavailable".to_string());
             Ok((results, timings))
         }
         (Err(bm25_err), Ok(vector)) => {
+            if fail_on_stage_error {
+                return Err(HybridSearchError::PipelineError(anyhow!(
+                    "BM25 stage failed: {bm25_err}"
+                )));
+            }
             warn!(
                 error = %bm25_err,
                 "BM25 search failed, falling back to vector-only results"
             );
             let mut results = vector;
             results.truncate(limit);
+            timings.bm25_error = Some(bm25_err.to_string());
+            timings.fusion_error = Some("RRF skipped: BM25 stage unavailable".to_string());
             Ok((results, timings))
         }
         (Err(bm25_err), Err(vec_err)) => Err(HybridSearchError::BothFailed {
@@ -142,11 +161,10 @@ pub async fn search_hybrid(
 /// sends the top candidates to a cross-encoder reranker for more accurate
 /// relevance scoring.
 ///
-/// **Graceful degradation:**
-/// - If the reranker API is unavailable (timeout, 5xx, connection error),
-///   returns unreranked results with a warning logged to stderr.
-/// - If the embedding API is unavailable, falls back to BM25-only results
-///   (handled by the inner `search_hybrid` call).
+/// **Failure policy:**
+/// - With `fail_on_stage_error = false`, reranker or vector failures degrade
+///   to unreranked or BM25-only results.
+/// - With `fail_on_stage_error = true`, any stage failure returns an error.
 ///
 /// # Arguments
 /// - `index_dir` — Path to the `.vera` index directory
@@ -171,6 +189,7 @@ pub async fn search_hybrid_reranked(
     rerank_candidates: usize,
     bm25_candidates: usize,
     vector_candidates: usize,
+    fail_on_stage_error: bool,
 ) -> Result<(Vec<SearchResult>, HybridTimings), HybridSearchError> {
     let fetch_limit = rerank_candidates.max(limit);
 
@@ -183,6 +202,7 @@ pub async fn search_hybrid_reranked(
         stored_dim,
         bm25_candidates,
         vector_candidates,
+        fail_on_stage_error,
     )
     .await?;
 
@@ -205,13 +225,16 @@ pub async fn search_hybrid_reranked(
         }
         Err(rerank_err) => {
             timings.reranking = Some(rerank_start.elapsed());
+            if fail_on_stage_error {
+                return Err(HybridSearchError::PipelineError(anyhow!(
+                    "reranking stage failed: {rerank_err}"
+                )));
+            }
             warn!(
                 error = %rerank_err,
                 "reranker unavailable, returning unreranked results"
             );
-            eprintln!(
-                "Warning: reranker unavailable ({rerank_err}), returning unreranked results."
-            );
+            timings.reranking_error = Some(rerank_err.to_string());
             let mut results = hybrid_results;
             results.truncate(limit);
             Ok((results, timings))
@@ -731,6 +754,7 @@ mod tests {
             10,
             50,
             50,
+            false,
         )
         .await
         .unwrap();
@@ -777,6 +801,7 @@ mod tests {
             10,
             50,
             50,
+            false,
         )
         .await
         .unwrap();
@@ -785,6 +810,39 @@ mod tests {
             !results.is_empty(),
             "should return unreranked results when reranker fails"
         );
+    }
+
+    #[tokio::test]
+    async fn search_hybrid_reranked_fails_fast_on_reranker_failure() {
+        use crate::embedding::test_helpers::MockProvider;
+        use crate::retrieval::reranker::RerankerError;
+        use crate::retrieval::reranker::test_helpers::MockReranker;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (index_dir, dim) = setup_test_index(tmp.path()).await;
+
+        let provider = MockProvider::new(dim);
+        let reranker = MockReranker::failing(RerankerError::ConnectionError {
+            message: "reranker timeout".to_string(),
+        });
+
+        let err = search_hybrid_reranked(
+            &index_dir,
+            &provider,
+            &reranker,
+            "authenticate",
+            5,
+            60.0,
+            dim,
+            10,
+            50,
+            50,
+            true,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("reranking stage failed"));
     }
 
     #[tokio::test]
@@ -814,6 +872,7 @@ mod tests {
             10,
             50,
             50,
+            false,
         )
         .await
         .unwrap();
@@ -823,6 +882,39 @@ mod tests {
             !results.is_empty(),
             "should return BM25-only results when embedding API fails"
         );
+    }
+
+    #[tokio::test]
+    async fn search_hybrid_reranked_fails_fast_on_embedding_failure() {
+        use crate::embedding::EmbeddingError;
+        use crate::embedding::test_helpers::MockProvider;
+        use crate::retrieval::reranker::test_helpers::MockReranker;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (index_dir, dim) = setup_test_index(tmp.path()).await;
+
+        let provider = MockProvider::failing(EmbeddingError::ConnectionError {
+            message: "embedding API down".to_string(),
+        });
+        let reranker = MockReranker::new();
+
+        let err = search_hybrid_reranked(
+            &index_dir,
+            &provider,
+            &reranker,
+            "authenticate",
+            5,
+            60.0,
+            dim,
+            10,
+            50,
+            50,
+            true,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("vector stage failed"));
     }
 
     #[tokio::test]
@@ -837,7 +929,7 @@ mod tests {
         let reranker = MockReranker::new();
 
         let (results, _timings) = search_hybrid_reranked(
-            &index_dir, &provider, &reranker, "function", 2, 60.0, dim, 10, 50, 50,
+            &index_dir, &provider, &reranker, "function", 2, 60.0, dim, 10, 50, 50, false,
         )
         .await
         .unwrap();
@@ -924,6 +1016,7 @@ mod tests {
             10,
             compute_bm25_candidates(id_query, 5),
             compute_vector_candidates(5, id_params.vector_candidate_multiplier),
+            false,
         )
         .await
         .unwrap();
@@ -945,6 +1038,7 @@ mod tests {
             10,
             compute_bm25_candidates(nl_query, 5),
             compute_vector_candidates(5, nl_params.vector_candidate_multiplier),
+            false,
         )
         .await
         .unwrap();

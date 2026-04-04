@@ -326,10 +326,12 @@ enum Commands {
                       Source files are favored by default. Use `--scope docs` for prose, \
                       `--scope runtime` for extracted runtime trees, and `--include-generated` \
                       when you intentionally want dist/minified artifacts.\n\n\
-                      Falls back gracefully: if embedding API is unavailable, uses BM25-only \
-                      search. If reranker is unavailable, returns unreranked hybrid results.\n\n\
-                      Requires an existing index (run `vera index <path>` first).\n\n\
-                      Examples:\n  \
+                       Falls back gracefully: if embedding API is unavailable, uses BM25-only \
+                       search. If reranker is unavailable, returns unreranked hybrid results.\n\n\
+                       Set `retrieval.fail_on_stage_error=true` to fail fast instead of falling \
+                       back when a retrieval stage is unavailable.\n\n\
+                       Requires an existing index (run `vera index <path>` first).\n\n\
+                       Examples:\n  \
                       vera search \"auth logic\"                  # Semantic search\n  \
                       vera search \"parse_config\"                 # Symbol lookup\n  \
                       vera search \"hotkeys\" --scope docs         # Search docs only\n  \
@@ -596,11 +598,22 @@ enum Commands {
                        retrieval.max_rerank_doc_chars Max chars per reranker document (default: 4800)\n  \
                        retrieval.max_output_chars     Total output char budget (default: 12000)\n  \
                        embedding.batch_size           Embedding batch size (default: 128)\n  \
-                      embedding.max_concurrent_requests  Concurrent API requests (default: 8)\n  \
-                      embedding.timeout_secs         API timeout (default: 60)\n  \
-                      embedding.max_retries          API retry count (default: 3)\n  \
-                      embedding.max_stored_dim       Vector dimensionality (default: 1024)\n\n\
-                      Examples:\n  \
+                       embedding.max_concurrent_requests  Concurrent API requests (default: 8)\n  \
+                       embedding.timeout_secs         API timeout (default: 60)\n  \
+                       embedding.max_retries          API retry count (default: 3)\n  \
+                       embedding.max_stored_dim       Vector dimensionality (default: 1024)\n  \
+                       api.embedding.base_url         Embedding endpoint URL\n  \
+                       api.embedding.model_id         Embedding model ID\n  \
+                       api.embedding.api_key          Embedding API key\n  \
+                       api.embedding.query_prefix     Optional embedding query prefix\n  \
+                       api.reranker.base_url          Reranker endpoint URL\n  \
+                       api.reranker.model_id          Reranker model ID\n  \
+                       api.reranker.api_key           Reranker API key\n  \
+                       api.reranker.max_docs_per_request Alias of retrieval.max_rerank_batch\n  \
+                       api.completion.base_url        Completion endpoint URL\n  \
+                       api.completion.model_id        Completion model ID\n  \
+                       api.completion.api_key         Completion API key\n\n\
+                       Examples:\n  \
                       vera config                                  # Show all settings\n  \
                       vera config show                             # Same as above\n  \
                       vera config get retrieval.default_limit      # Get one value\n  \

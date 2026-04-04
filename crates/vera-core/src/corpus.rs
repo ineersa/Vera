@@ -24,6 +24,7 @@ pub enum ContentClass {
 pub fn classify_path(file_path: &str, language: Language) -> ContentClass {
     let path = normalize_path(file_path);
     let tokens = tokenize_path(&path);
+    let document_file = is_document_file_path(&path);
 
     if is_runtime_like_path(&path, &tokens) {
         return ContentClass::Runtime;
@@ -43,6 +44,9 @@ pub fn classify_path(file_path: &str, language: Language) -> ContentClass {
         ],
     ) {
         return ContentClass::Archive;
+    }
+    if document_file {
+        return ContentClass::Docs;
     }
     if contains_token(
         &tokens,
@@ -188,8 +192,6 @@ fn is_runtime_like_path(path: &str, tokens: &[&str]) -> bool {
             tokens,
             &[
                 "runtime",
-                "bundle",
-                "bundles",
                 "extracted",
                 "extract",
                 "installed",
@@ -216,6 +218,15 @@ fn contains_token(tokens: &[&str], expected: &[&str]) -> bool {
     tokens.iter().any(|token| expected.contains(token))
 }
 
+fn is_document_file_path(path: &str) -> bool {
+    path.ends_with(".md")
+        || path.ends_with(".markdown")
+        || path.ends_with(".rst")
+        || path.ends_with(".rst.inc")
+        || path.ends_with(".adoc")
+        || path.ends_with(".asciidoc")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +243,26 @@ mod tests {
     fn classifies_rst_as_docs() {
         assert_eq!(
             classify_path("guide.rst", Language::Rst),
+            ContentClass::Docs
+        );
+    }
+
+    #[test]
+    fn classifies_bundles_rst_as_docs() {
+        assert_eq!(
+            classify_path("bundles/configuration.rst", Language::Rst),
+            ContentClass::Docs
+        );
+    }
+
+    #[test]
+    fn classifies_docs_path_as_docs_even_for_code_block_language() {
+        assert_eq!(
+            classify_path("bundles/configuration.rst", Language::Php),
+            ContentClass::Docs
+        );
+        assert_eq!(
+            classify_path("testing.rst", Language::Php),
             ContentClass::Docs
         );
     }

@@ -5,6 +5,19 @@ use vera_core::config::InferenceBackend;
 
 use crate::helpers::{load_runtime_config, output_results};
 
+fn collect_stage_errors(
+    timings: &vera_core::retrieval::search_service::SearchTimings,
+) -> [(&'static str, Option<&str>); 6] {
+    [
+        ("embedding", timings.embedding_error.as_deref()),
+        ("bm25", timings.bm25_error.as_deref()),
+        ("vector", timings.vector_error.as_deref()),
+        ("fusion", timings.fusion_error.as_deref()),
+        ("reranking", timings.reranking_error.as_deref()),
+        ("completion", timings.completion_error.as_deref()),
+    ]
+}
+
 /// Run the `vera search <query>` command.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -61,6 +74,21 @@ pub fn run(
         config.retrieval.max_output_chars,
     );
 
+    let stage_errors = collect_stage_errors(&timings);
+    if stage_errors.iter().any(|(_, err)| err.is_some()) {
+        use std::io::Write;
+        let stderr = std::io::stderr();
+        let mut err = stderr.lock();
+        for (stage, message) in stage_errors {
+            if let Some(message) = message {
+                let _ = writeln!(
+                    err,
+                    "Warning: retrieval stage '{stage}' degraded: {message}"
+                );
+            }
+        }
+    }
+
     if timing {
         use std::io::Write;
         use std::time::Duration;
@@ -84,6 +112,11 @@ pub fn run(
         for (name, duration) in stages {
             if duration.is_some() || *name == "total" {
                 let _ = writeln!(err, "[timing] {name}: {}", fmt(*duration));
+            }
+        }
+        for (stage, message) in collect_stage_errors(&timings) {
+            if let Some(message) = message {
+                let _ = writeln!(err, "[stage-error] {stage}: {message}");
             }
         }
     }

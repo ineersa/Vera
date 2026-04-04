@@ -10,6 +10,7 @@ use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::{STORED, STRING, Schema, TEXT, Value};
 use tantivy::{Index, IndexWriter, ReloadPolicy, TantivyDocument, doc};
+use tracing::debug;
 
 use crate::chunk_text;
 
@@ -151,6 +152,19 @@ impl Bm25Index {
 
         let query = query_parser
             .parse_query(query_text)
+            .or_else(|primary_err| {
+                let fallback = sanitize_query_for_parser(query_text);
+                if fallback.is_empty() || fallback == query_text {
+                    return Err(primary_err);
+                }
+
+                debug!(
+                    query = query_text,
+                    fallback = %fallback,
+                    "retrying BM25 parse with sanitized query"
+                );
+                query_parser.parse_query(&fallback)
+            })
             .with_context(|| format!("failed to parse BM25 query: {query_text}"))?;
 
         let top_docs = searcher
@@ -237,6 +251,19 @@ impl Bm25Index {
             .map_err(|e| anyhow::anyhow!("BM25 merge after clear failed: {e}"))?;
         Ok(())
     }
+}
+
+fn sanitize_query_for_parser(query: &str) -> String {
+    let mut out = String::with_capacity(query.len());
+    for ch in query.chars() {
+        if ch.is_alphanumeric() || ch == '_' || ch == '/' || ch == '.' {
+            out.push(ch);
+        } else {
+            out.push(' ');
+        }
+    }
+
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Data for a single BM25 document insertion.
@@ -486,5 +513,23 @@ mod tests {
             .search("turbo.json pipeline configuration", 10)
             .unwrap();
         assert_eq!(results[0].chunk_id, "turbo.json:0");
+    }
+
+    #[test]
+    fn sanitize_query_keeps_unicode_letters() {
+        let sanitized = sanitize_query_for_parser("cómo работает `handleRequest` в src/модуль.rs?");
+        assert_eq!(sanitized, "cómo работает handleRequest в src/модуль.rs");
+    }
+
+    #[test]
+    fn parser_fallback_handles_symbol_heavy_query() {
+        let index = Bm25Index::open_in_memory().unwrap();
+        index.insert_batch(&sample_docs()).unwrap();
+
+        let results = index
+            .search("what does `handleRequest(req: Request)` do?", 10)
+            .unwrap();
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|r| r.chunk_id == "src/server.ts:0"));
     }
 }

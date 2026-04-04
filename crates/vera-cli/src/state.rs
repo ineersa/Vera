@@ -20,6 +20,10 @@ pub struct StoredConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reranker_api: Option<ApiEndpointConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_api: Option<ApiEndpointConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_query_prefix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub core_config: Option<vera_core::config::VeraConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_embedding_model: Option<vera_core::local_models::LocalEmbeddingModelConfig>,
@@ -37,6 +41,8 @@ pub struct StoredSecrets {
     pub embedding_api_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reranker_api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -138,6 +144,14 @@ pub fn load_runtime_config() -> Result<vera_core::config::VeraConfig> {
     Ok(load_saved_config()?.core_config.unwrap_or(default))
 }
 
+pub fn persist_saved_config(config: &StoredConfig) -> Result<()> {
+    save_config(config)
+}
+
+pub fn persist_saved_secrets(secrets: &StoredSecrets) -> Result<()> {
+    save_secrets(secrets)
+}
+
 pub fn config_path() -> Result<PathBuf> {
     Ok(vera_dir()?.join("config.json"))
 }
@@ -193,6 +207,11 @@ fn apply_saved_env_impl(force: bool) -> Result<()> {
     if let Some(api_key) = secrets.embedding_api_key.as_deref() {
         set_env_value("EMBEDDING_MODEL_API_KEY", api_key, force);
     }
+    set_optional_env_value(
+        "EMBEDDING_QUERY_PREFIX",
+        config.embedding_query_prefix.as_deref(),
+        force,
+    );
 
     if let Some(reranker) = config.reranker_api.as_ref() {
         set_env_value("RERANKER_MODEL_BASE_URL", &reranker.base_url, force);
@@ -200,6 +219,14 @@ fn apply_saved_env_impl(force: bool) -> Result<()> {
     }
     if let Some(api_key) = secrets.reranker_api_key.as_deref() {
         set_env_value("RERANKER_MODEL_API_KEY", api_key, force);
+    }
+
+    if let Some(completion) = config.completion_api.as_ref() {
+        set_env_value("VERA_COMPLETION_BASE_URL", &completion.base_url, force);
+        set_env_value("VERA_COMPLETION_MODEL_ID", &completion.model_id, force);
+    }
+    if let Some(api_key) = secrets.completion_api_key.as_deref() {
+        set_env_value("VERA_COMPLETION_API_KEY", api_key, force);
     }
 
     apply_local_embedding_env(config.local_embedding_model.as_ref(), force);
@@ -399,6 +426,8 @@ mod tests {
         assert!(config.install_method.is_none());
         assert!(config.embedding_api.is_none());
         assert!(config.reranker_api.is_none());
+        assert!(config.completion_api.is_none());
+        assert!(config.embedding_query_prefix.is_none());
         assert!(config.core_config.is_none());
         assert!(config.local_embedding_model.is_none());
     }
@@ -408,6 +437,7 @@ mod tests {
         let secrets = StoredSecrets::default();
         assert!(secrets.embedding_api_key.is_none());
         assert!(secrets.reranker_api_key.is_none());
+        assert!(secrets.completion_api_key.is_none());
     }
 
     #[test]

@@ -33,10 +33,16 @@ pub fn execute_deep_search(
     result_limit: usize,
     backend: InferenceBackend,
 ) -> Result<(Vec<SearchResult>, SearchTimings)> {
+    let fail_on_stage_error = config.retrieval.fail_on_stage_error;
     let completion_client = match CompletionClient::from_env_if_configured() {
         Ok(Some(client)) => client,
         Ok(None) => {
-            return super::iterative_search::execute_iterative_search(
+            if fail_on_stage_error {
+                return Err(anyhow!(
+                    "completion stage unavailable: completion endpoint is not configured"
+                ));
+            }
+            let (results, mut timings) = super::iterative_search::execute_iterative_search(
                 index_dir,
                 query,
                 config,
@@ -44,11 +50,23 @@ pub fn execute_deep_search(
                 result_limit,
                 backend,
                 1,
+            )?;
+            timings.completion_error = Some(
+                "completion endpoint not configured; used iterative deep-search fallback"
+                    .to_string(),
             );
+            return Ok((results, timings));
         }
         Err(e) => {
+            let message = format!(
+                "completion stage initialization failed: {e}; \
+                 set retrieval.fail_on_stage_error=false to allow iterative fallback"
+            );
+            if fail_on_stage_error {
+                return Err(anyhow!(message));
+            }
             warn!(error = %e, "completion client init failed, falling back to iterative search");
-            return super::iterative_search::execute_iterative_search(
+            let (results, mut timings) = super::iterative_search::execute_iterative_search(
                 index_dir,
                 query,
                 config,
@@ -56,7 +74,9 @@ pub fn execute_deep_search(
                 result_limit,
                 backend,
                 1,
-            );
+            )?;
+            timings.completion_error = Some(message);
+            return Ok((results, timings));
         }
     };
 
@@ -90,16 +110,52 @@ fn execute_rag_fusion(
         "BM25 pre-filter produced context hints for query expansion"
     );
 
-    let expanded = completion_client
-        .expand_query_with_context(query, &context_hints)
-        .map_err(|e| anyhow!("failed to generate deep-search query candidates: {e}"))?;
+    let expanded = match completion_client.expand_query_with_context(query, &context_hints) {
+        Ok(expanded) => expanded,
+        Err(e) => {
+            if config.retrieval.fail_on_stage_error {
+                return Err(anyhow!(
+                    "failed to generate deep-search query candidates: {e}"
+                ));
+            }
+            warn!(error = %e, "query expansion failed, falling back to iterative deep search");
+            let (results, mut timings) = super::iterative_search::execute_iterative_search(
+                index_dir,
+                query,
+                config,
+                filters,
+                result_limit,
+                backend,
+                1,
+            )?;
+            timings.completion_error = Some(format!(
+                "completion stage failed to expand query: {e}; used iterative fallback"
+            ));
+            return Ok((results, timings));
+        }
+    };
 
     let queries = dedupe_queries_with_original(query, expanded);
     if queries.len() <= 1 {
-        return Err(anyhow!(
-            "query expansion produced no additional rewrites; \
-             check completion model output"
-        ));
+        if config.retrieval.fail_on_stage_error {
+            return Err(anyhow!(
+                "query expansion produced no additional rewrites; \
+                 check completion model output"
+            ));
+        }
+        let (results, mut timings) = super::iterative_search::execute_iterative_search(
+            index_dir,
+            query,
+            config,
+            filters,
+            result_limit,
+            backend,
+            1,
+        )?;
+        timings.completion_error = Some(
+            "completion stage produced no usable rewrites; used iterative fallback".to_string(),
+        );
+        return Ok((results, timings));
     }
 
     let per_query_limit = compute_per_query_limit(result_limit);
@@ -150,6 +206,12 @@ fn execute_rag_fusion(
             }
             Err(e) if idx == 0 => return Err(e),
             Err(e) => {
+                if config.retrieval.fail_on_stage_error {
+                    return Err(anyhow!(
+                        "deep-search subquery failed (query='{}'): {e}",
+                        queries[idx]
+                    ));
+                }
                 warn!(query = %queries[idx], error = %e, "deep-search subquery failed; continuing");
             }
         }
@@ -219,11 +281,35 @@ fn merge_timings(target: &mut SearchTimings, incoming: &SearchTimings) {
     add_duration(&mut target.fusion, incoming.fusion);
     add_duration(&mut target.reranking, incoming.reranking);
     add_duration(&mut target.augmentation, incoming.augmentation);
+    merge_error(
+        &mut target.embedding_error,
+        incoming.embedding_error.as_deref(),
+    );
+    merge_error(&mut target.bm25_error, incoming.bm25_error.as_deref());
+    merge_error(&mut target.vector_error, incoming.vector_error.as_deref());
+    merge_error(&mut target.fusion_error, incoming.fusion_error.as_deref());
+    merge_error(
+        &mut target.reranking_error,
+        incoming.reranking_error.as_deref(),
+    );
+    merge_error(
+        &mut target.completion_error,
+        incoming.completion_error.as_deref(),
+    );
 }
 
 fn add_duration(target: &mut Option<Duration>, incoming: Option<Duration>) {
     if let Some(delta) = incoming {
         *target = Some(target.unwrap_or_default() + delta);
+    }
+}
+
+fn merge_error(target: &mut Option<String>, incoming: Option<&str>) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+    if target.is_none() {
+        *target = Some(incoming.to_string());
     }
 }
 
@@ -305,6 +391,7 @@ mod tests {
             reranking: Some(Duration::from_millis(50)),
             augmentation: Some(Duration::from_millis(60)),
             total: None,
+            ..Default::default()
         };
         merge_timings(&mut target, &incoming);
         merge_timings(&mut target, &incoming);

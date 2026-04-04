@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use tracing::warn;
 
 use crate::chunk_text::file_name;
@@ -33,12 +33,19 @@ pub struct SearchTimings {
     pub reranking: Option<Duration>,
     pub augmentation: Option<Duration>,
     pub total: Option<Duration>,
+    pub embedding_error: Option<String>,
+    pub bm25_error: Option<String>,
+    pub vector_error: Option<String>,
+    pub fusion_error: Option<String>,
+    pub reranking_error: Option<String>,
+    pub completion_error: Option<String>,
 }
 
 /// Execute a search against the index at `index_dir`.
 ///
 /// Attempts hybrid search (BM25 + vector + optional reranking). Falls
-/// back to BM25-only when embedding API is unavailable.
+/// back to partial results when configured to degrade. When
+/// `retrieval.fail_on_stage_error` is enabled, stage failures return errors.
 pub fn execute_search(
     index_dir: &Path,
     query: &str,
@@ -48,6 +55,7 @@ pub fn execute_search(
     backend: InferenceBackend,
 ) -> Result<(Vec<SearchResult>, SearchTimings)> {
     let total_start = Instant::now();
+    let fail_on_stage_error = config.retrieval.fail_on_stage_error;
     let fetch_limit = compute_fetch_limit(query, filters, result_limit);
     let query_type = classify_query(query);
     let query_params = params_for_query_type(query_type);
@@ -69,18 +77,27 @@ pub fn execute_search(
         match rt.block_on(crate::embedding::create_dynamic_provider(config, backend)) {
             Ok(res) => res,
             Err(e) => {
+                let message = format!(
+                    "embedding provider initialization failed: {e}. \
+                     Set retrieval.fail_on_stage_error=false to allow BM25 fallback"
+                );
+                if fail_on_stage_error {
+                    return Err(anyhow!(message));
+                }
                 warn!(
                     "Failed to create embedding provider ({}), using BM25-only search",
                     e
                 );
-                return run_bm25_only(
+                let (results, mut timings) = run_bm25_only(
                     index_dir,
                     query,
                     filters,
                     bm25_candidates,
                     result_limit,
                     total_start,
-                );
+                )?;
+                timings.embedding_error = Some(message);
+                return Ok((results, timings));
             }
         };
 
@@ -96,35 +113,55 @@ pub fn execute_search(
                 .unwrap_or(None),
         ) {
             if !crate::config::model_names_match(&s_model, &model_name) {
+                let message = format!(
+                    "index model '{}' does not match active model '{}'; \
+                     re-index or switch model",
+                    s_model, model_name
+                );
+                if fail_on_stage_error {
+                    return Err(anyhow!(message));
+                }
                 warn!(
                     "Index model '{}' does not match active model '{}'; using BM25-only search",
                     s_model, model_name
                 );
-                return run_bm25_only(
+                let (results, mut timings) = run_bm25_only(
                     index_dir,
                     query,
                     filters,
                     bm25_candidates,
                     result_limit,
                     total_start,
-                );
+                )?;
+                timings.embedding_error = Some(message);
+                return Ok((results, timings));
             }
             if let Ok(dim) = s_dim.parse::<usize>() {
                 use crate::embedding::EmbeddingProvider;
                 if let Some(provider_dim) = provider.expected_dim() {
                     if provider_dim != dim {
+                        let message = format!(
+                            "index dimension {} does not match provider dimension {}; \
+                             re-index or switch model",
+                            dim, provider_dim
+                        );
+                        if fail_on_stage_error {
+                            return Err(anyhow!(message));
+                        }
                         warn!(
                             "Index dimension {} does not match provider dimension {}; using BM25-only search",
                             dim, provider_dim
                         );
-                        return run_bm25_only(
+                        let (results, mut timings) = run_bm25_only(
                             index_dir,
                             query,
                             filters,
                             bm25_candidates,
                             result_limit,
                             total_start,
-                        );
+                        )?;
+                        timings.embedding_error = Some(message);
+                        return Ok((results, timings));
                     }
                 }
                 stored_dim = dim;
@@ -134,14 +171,41 @@ pub fn execute_search(
 
     let provider = crate::embedding::CachedEmbeddingProvider::new(provider, 512);
 
+    let should_skip_reranker = should_skip_reranking(query, filters);
+    let mut reranker_error: Option<String> = None;
+
     // Create optional reranker.
-    let reranker = rt
-        .block_on(crate::retrieval::create_dynamic_reranker(config, backend))
-        .unwrap_or_else(|e| {
-            warn!("Failed to create reranker ({})", e);
-            None
-        });
-    let reranker_enabled = reranker.is_some() && !should_skip_reranking(query, filters);
+    let reranker = if config.retrieval.reranking_enabled && !should_skip_reranker {
+        match rt.block_on(crate::retrieval::create_dynamic_reranker(config, backend)) {
+            Ok(Some(reranker)) => Some(reranker),
+            Ok(None) => {
+                let message = "reranker is enabled but no reranker backend is configured";
+                if fail_on_stage_error {
+                    return Err(anyhow!(
+                        "{message}; disable reranking or configure reranker provider"
+                    ));
+                }
+                warn!("{message}");
+                reranker_error = Some(message.to_string());
+                None
+            }
+            Err(e) => {
+                let message = format!(
+                    "reranker initialization failed: {e}. \
+                     Set retrieval.fail_on_stage_error=false to allow fallback"
+                );
+                if fail_on_stage_error {
+                    return Err(anyhow!(message));
+                }
+                warn!("{message}");
+                reranker_error = Some(message);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let reranker_enabled = reranker.is_some();
 
     let ranking_stage = if reranker_enabled {
         RankingStage::PostRerank
@@ -164,6 +228,7 @@ pub fn execute_search(
             rerank_candidates,
             bm25_candidates,
             vector_candidates,
+            fail_on_stage_error,
         ))?
     } else {
         rt.block_on(search_hybrid(
@@ -175,6 +240,7 @@ pub fn execute_search(
             stored_dim,
             bm25_candidates,
             vector_candidates,
+            fail_on_stage_error,
         ))?
     };
 
@@ -184,6 +250,10 @@ pub fn execute_search(
         vector: hybrid_timings.vector,
         fusion: hybrid_timings.fusion,
         reranking: hybrid_timings.reranking,
+        bm25_error: hybrid_timings.bm25_error,
+        vector_error: hybrid_timings.vector_error,
+        fusion_error: hybrid_timings.fusion_error,
+        reranking_error: reranker_error.or(hybrid_timings.reranking_error),
         ..Default::default()
     };
 
