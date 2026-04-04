@@ -303,8 +303,6 @@ fn parse_discovered_files_parallel(
                     }
                 })?;
 
-                let hash = content_hash(&source);
-
                 let language = file
                     .absolute_path
                     .file_name()
@@ -341,6 +339,7 @@ fn parse_discovered_files_parallel(
                     None
                 };
                 let source_for_chunking = normalized_source.as_deref().unwrap_or(&source);
+                let hash = content_hash(source_for_chunking);
 
                 parsing::parse_and_chunk(
                     source_for_chunking,

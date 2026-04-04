@@ -59,6 +59,44 @@ pub fn content_hash(content: &str) -> String {
     })
 }
 
+fn detect_language_for_path(file_path: &str) -> Language {
+    Path::new(file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(Language::from_filename)
+        .unwrap_or_else(|| {
+            let ext = Path::new(file_path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            Language::from_extension(ext)
+        })
+}
+
+fn hash_for_indexing_source(
+    content: &str,
+    rel_path: &str,
+    language: Language,
+    repo_root: &Path,
+) -> String {
+    if language != Language::Rst {
+        return content_hash(content);
+    }
+
+    let absolute_path = repo_root.join(rel_path);
+    match parsing::sphinx::preprocess_rst(content, &absolute_path, repo_root) {
+        Ok(preprocessed) => content_hash(&preprocessed),
+        Err(err) => {
+            warn!(
+                file = %rel_path,
+                error = %err,
+                "failed to preprocess rst for hashing; falling back to raw source"
+            );
+            content_hash(content)
+        }
+    }
+}
+
 /// Incrementally update the index for a repository.
 ///
 /// Only re-indexes files whose content has changed since the last index/update.
@@ -172,7 +210,8 @@ pub async fn update_repository<P: EmbeddingProvider>(
     let mut unchanged = 0usize;
 
     for (rel_path, content) in &current_files {
-        let hash = content_hash(content);
+        let language = detect_language_for_path(rel_path);
+        let hash = hash_for_indexing_source(content, rel_path, language, &repo_root);
         let stored_hash = metadata_store
             .get_file_hash(rel_path)
             .context("failed to get stored hash")?;
@@ -243,17 +282,7 @@ pub async fn update_repository<P: EmbeddingProvider>(
         // Parse and chunk new/modified files.
         let mut all_chunks = Vec::new();
         for (rel_path, content, _hash) in &files_to_index {
-            let language = Path::new(rel_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .and_then(Language::from_filename)
-                .unwrap_or_else(|| {
-                    let ext = Path::new(rel_path)
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("");
-                    Language::from_extension(ext)
-                });
+            let language = detect_language_for_path(rel_path);
 
             // Extract call-site references.
             let refs = parsing::parse_and_extract_references(content, language);
