@@ -125,6 +125,64 @@ async fn update_modified_file() {
     assert!(!results.is_empty(), "BM25 should find new function");
 }
 
+#[tokio::test]
+async fn update_detects_rst_include_dependency_changes() {
+    let dir = TempDir::new().unwrap();
+    let docs = dir.path().join("docs");
+    let includes = docs.join("includes");
+    fs::create_dir_all(&includes).unwrap();
+
+    fs::write(
+        docs.join("index.rst"),
+        "Guide\n=====\n\n.. include:: includes/common.rst.inc\n",
+    )
+    .unwrap();
+    fs::write(
+        includes.join("common.rst.inc"),
+        "Original include fragment text.\n",
+    )
+    .unwrap();
+
+    let provider = MockProvider::new(8);
+    let config = default_config();
+
+    index_repository(dir.path(), &provider, &config, "mock-model")
+        .await
+        .unwrap();
+
+    let idx = index_dir(&dir.path().canonicalize().unwrap());
+    let metadata = MetadataStore::open(&idx.join("metadata.db")).unwrap();
+    let indexed_files = metadata.indexed_files().unwrap();
+    assert!(indexed_files.contains(&"docs/index.rst".to_string()));
+    assert!(
+        !indexed_files.contains(&"docs/includes/common.rst.inc".to_string()),
+        "rst include fragments should not be indexed as standalone files"
+    );
+
+    fs::write(
+        includes.join("common.rst.inc"),
+        "Updated include fragment text from dependency.\n",
+    )
+    .unwrap();
+
+    let update_summary = update_repository(dir.path(), &provider, &config, "mock-model")
+        .await
+        .unwrap();
+
+    assert_eq!(update_summary.files_modified, 1);
+    assert_eq!(update_summary.files_added, 0);
+    assert_eq!(update_summary.files_deleted, 0);
+
+    let bm25 = Bm25Index::open(&idx.join("bm25")).unwrap();
+    let results = bm25
+        .search("Updated include fragment text from dependency", 10)
+        .unwrap();
+    assert!(
+        !results.is_empty(),
+        "BM25 should reflect updated included RST content"
+    );
+}
+
 // ── Update: file added ──────────────────────────────────────────────
 
 #[tokio::test]

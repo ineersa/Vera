@@ -148,6 +148,13 @@ pub fn discover_files(root: &Path, config: &IndexingConfig) -> Result<DiscoveryR
             continue;
         }
 
+        // Sphinx include fragments are inlined into parent RST documents,
+        // so indexing them separately duplicates content by default.
+        if !config.no_default_excludes && is_rst_include_fragment(path) {
+            debug!("skipping rst include fragment: {}", path.display());
+            continue;
+        }
+
         // Get file metadata for size check.
         let metadata = match std::fs::metadata(path) {
             Ok(m) => m,
@@ -240,6 +247,12 @@ fn is_binary_extension(path: &Path) -> bool {
             let lower = ext.to_lowercase();
             BINARY_EXTENSIONS.contains(&lower.as_str())
         })
+}
+
+fn is_rst_include_fragment(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.to_ascii_lowercase().ends_with(".rst.inc"))
 }
 
 /// Check if a file contains binary content by reading the first 8KB.
@@ -511,6 +524,65 @@ mod tests {
         assert!(
             !paths.iter().any(|p| p.starts_with("build")),
             "build should be excluded"
+        );
+    }
+
+    #[test]
+    fn rst_include_fragments_excluded_by_default() {
+        let dir = TempDir::new().unwrap();
+        let docs = dir.path().join("docs");
+        let includes = docs.join("includes");
+        fs::create_dir_all(&includes).unwrap();
+
+        fs::write(
+            docs.join("index.rst"),
+            ".. include:: includes/common.rst.inc\n",
+        )
+        .unwrap();
+        fs::write(includes.join("common.rst.inc"), "Shared include fragment\n").unwrap();
+
+        let result = discover_files(dir.path(), &default_config()).unwrap();
+        let names: Vec<&str> = result
+            .files
+            .iter()
+            .map(|f| f.relative_path.as_str())
+            .collect();
+
+        assert!(names.contains(&"docs/index.rst"));
+        assert!(
+            !names.contains(&"docs/includes/common.rst.inc"),
+            "rst include fragment should be excluded by default"
+        );
+    }
+
+    #[test]
+    fn rst_include_fragments_included_when_default_excludes_disabled() {
+        let dir = TempDir::new().unwrap();
+        let docs = dir.path().join("docs");
+        let includes = docs.join("includes");
+        fs::create_dir_all(&includes).unwrap();
+
+        fs::write(
+            docs.join("index.rst"),
+            ".. include:: includes/common.rst.inc\n",
+        )
+        .unwrap();
+        fs::write(includes.join("common.rst.inc"), "Shared include fragment\n").unwrap();
+
+        let mut config = default_config();
+        config.no_default_excludes = true;
+
+        let result = discover_files(dir.path(), &config).unwrap();
+        let names: Vec<&str> = result
+            .files
+            .iter()
+            .map(|f| f.relative_path.as_str())
+            .collect();
+
+        assert!(names.contains(&"docs/index.rst"));
+        assert!(
+            names.contains(&"docs/includes/common.rst.inc"),
+            "rst include fragment should be included with no_default_excludes"
         );
     }
 
