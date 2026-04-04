@@ -44,7 +44,7 @@ pub fn compute_vector_candidates(limit: usize, multiplier: usize) -> usize {
     limit.saturating_mul(multiplier).max(50)
 }
 
-fn compute_bm25_candidates(query: &str, limit: usize) -> usize {
+pub(crate) fn compute_bm25_candidates(query: &str, limit: usize) -> usize {
     let query_type = classify_query(query);
     let token_count = query.split_whitespace().count();
 
@@ -83,9 +83,9 @@ pub async fn search_hybrid(
     limit: usize,
     rrf_k: f64,
     stored_dim: usize,
+    bm25_candidates: usize,
     vector_candidates: usize,
 ) -> Result<(Vec<SearchResult>, HybridTimings), HybridSearchError> {
-    let bm25_candidates = compute_bm25_candidates(query, limit);
     let mut timings = HybridTimings::default();
 
     let bm25_start = Instant::now();
@@ -157,6 +157,7 @@ pub async fn search_hybrid(
 /// - `rrf_k` — RRF constant (typically 60.0)
 /// - `stored_dim` — Dimensionality of stored vectors
 /// - `rerank_candidates` — Number of candidates to send to the reranker
+/// - `bm25_candidates` — Number of BM25 candidates to fetch (query-type-aware)
 /// - `vector_candidates` — Number of vector candidates to fetch (query-type-aware)
 #[allow(clippy::too_many_arguments)]
 pub async fn search_hybrid_reranked(
@@ -168,6 +169,7 @@ pub async fn search_hybrid_reranked(
     rrf_k: f64,
     stored_dim: usize,
     rerank_candidates: usize,
+    bm25_candidates: usize,
     vector_candidates: usize,
 ) -> Result<(Vec<SearchResult>, HybridTimings), HybridSearchError> {
     let fetch_limit = rerank_candidates.max(limit);
@@ -179,6 +181,7 @@ pub async fn search_hybrid_reranked(
         fetch_limit,
         rrf_k,
         stored_dim,
+        bm25_candidates,
         vector_candidates,
     )
     .await?;
@@ -727,6 +730,7 @@ mod tests {
             dim,
             10,
             50,
+            50,
         )
         .await
         .unwrap();
@@ -772,6 +776,7 @@ mod tests {
             dim,
             10,
             50,
+            50,
         )
         .await
         .unwrap();
@@ -808,6 +813,7 @@ mod tests {
             dim,
             10,
             50,
+            50,
         )
         .await
         .unwrap();
@@ -831,7 +837,7 @@ mod tests {
         let reranker = MockReranker::new();
 
         let (results, _timings) = search_hybrid_reranked(
-            &index_dir, &provider, &reranker, "function", 2, 60.0, dim, 10, 50,
+            &index_dir, &provider, &reranker, "function", 2, 60.0, dim, 10, 50, 50,
         )
         .await
         .unwrap();
@@ -916,6 +922,7 @@ mod tests {
             id_params.rrf_k,
             dim,
             10,
+            compute_bm25_candidates(id_query, 5),
             compute_vector_candidates(5, id_params.vector_candidate_multiplier),
         )
         .await
@@ -936,6 +943,7 @@ mod tests {
             nl_params.rrf_k,
             dim,
             10,
+            compute_bm25_candidates(nl_query, 5),
             compute_vector_candidates(5, nl_params.vector_candidate_multiplier),
         )
         .await

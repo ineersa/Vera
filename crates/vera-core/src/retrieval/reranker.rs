@@ -149,15 +149,20 @@ pub struct ApiReranker {
 impl ApiReranker {
     /// Create a new API-based reranker from configuration.
     pub fn new(config: RerankerConfig) -> Result<Self> {
+        Self::new_with_limits(
+            config,
+            default_max_rerank_batch(),
+            default_max_rerank_doc_chars(),
+        )
+    }
+
+    /// Create a new API-based reranker with explicit runtime limits.
+    pub fn new_with_limits(
+        config: RerankerConfig,
+        max_rerank_batch: usize,
+        max_document_chars: usize,
+    ) -> Result<Self> {
         crate::init_tls();
-        let max_rerank_batch = std::env::var("VERA_MAX_RERANK_BATCH")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(20);
-        let max_document_chars = std::env::var("VERA_MAX_RERANK_DOC_CHARS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(4800);
         let client = reqwest::Client::builder()
             .timeout(config.timeout)
             .build()
@@ -305,6 +310,20 @@ impl ApiReranker {
 
         Ok(scores)
     }
+}
+
+fn default_max_rerank_batch() -> usize {
+    std::env::var("VERA_MAX_RERANK_BATCH")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20)
+}
+
+fn default_max_rerank_doc_chars() -> usize {
+    std::env::var("VERA_MAX_RERANK_DOC_CHARS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4_800)
 }
 
 impl Reranker for ApiReranker {

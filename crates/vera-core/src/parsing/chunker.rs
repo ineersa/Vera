@@ -438,7 +438,11 @@ fn file_name(path: &str) -> &str {
 /// Uses a byte-length pre-filter: chunks already under the limit are passed
 /// through untouched (the common case for ~70-80% of chunks). Oversized chunks
 /// are split at natural boundaries using `find_split_boundary`.
-pub fn split_oversized_chunks(chunks: Vec<Chunk>, max_bytes: usize) -> Vec<Chunk> {
+pub fn split_oversized_chunks(
+    chunks: Vec<Chunk>,
+    max_bytes: usize,
+    overlap_bytes: usize,
+) -> Vec<Chunk> {
     if max_bytes == 0 {
         return chunks;
     }
@@ -496,10 +500,39 @@ pub fn split_oversized_chunks(chunks: Vec<Chunk>, max_bytes: usize) -> Vec<Chunk
             });
 
             part += 1;
-            current = end + 1;
+            if end + 1 >= total {
+                break;
+            }
+
+            if overlap_bytes == 0 {
+                current = end + 1;
+                continue;
+            }
+
+            let overlap_lines = compute_overlap_lines(&lines, current, end, overlap_bytes);
+            current = end + 1 - overlap_lines;
         }
     }
     result
+}
+
+fn compute_overlap_lines(lines: &[&str], start: u32, end: u32, overlap_bytes: usize) -> u32 {
+    if overlap_bytes == 0 || end < start {
+        return 0;
+    }
+
+    let mut bytes = 0usize;
+    let mut overlap = 0u32;
+    for row in (start..=end).rev() {
+        bytes = bytes.saturating_add(lines[row as usize].len() + 1);
+        overlap += 1;
+        if bytes >= overlap_bytes {
+            break;
+        }
+    }
+
+    let chunk_len = end - start + 1;
+    overlap.min(chunk_len.saturating_sub(1))
 }
 
 /// Join lines from `start_row` to `end_row` (inclusive, 0-based) into a string.
@@ -636,6 +669,39 @@ mod tests {
             );
         }
         assert_eq!(all_content, source);
+    }
+
+    #[test]
+    fn oversized_split_supports_configurable_overlap() {
+        let lines = (1..=12)
+            .map(|i| format!("line_{i:02}_{}", "x".repeat(10)))
+            .collect::<Vec<_>>();
+        let content = lines.join("\n");
+        let chunk = Chunk {
+            id: "doc.rst:0".to_string(),
+            file_path: "doc.rst".to_string(),
+            line_start: 1,
+            line_end: 12,
+            content,
+            language: Language::Rst,
+            symbol_type: Some(SymbolType::Block),
+            symbol_name: Some("Doc".to_string()),
+        };
+
+        let chunks = split_oversized_chunks(vec![chunk], 60, 30);
+
+        assert!(chunks.len() > 1, "expected oversized chunk to split");
+        assert!(
+            chunks.iter().all(|c| c.content.len() <= 60),
+            "split chunks must respect max bytes"
+        );
+
+        for pair in chunks.windows(2) {
+            assert!(
+                pair[1].line_start <= pair[0].line_end,
+                "adjacent chunks should overlap in line ranges"
+            );
+        }
     }
 
     #[test]

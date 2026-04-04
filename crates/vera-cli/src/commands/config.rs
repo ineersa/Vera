@@ -94,6 +94,14 @@ fn print_human_config(config: &vera_core::config::VeraConfig) {
         config.indexing.max_file_size_bytes
     );
     println!(
+        "    max_chunk_bytes           {}",
+        config.indexing.max_chunk_bytes
+    );
+    println!(
+        "    max_chunk_overlap_bytes   {}",
+        config.indexing.max_chunk_overlap_bytes
+    );
+    println!(
         "    default_excludes          {:?}",
         config.indexing.default_excludes
     );
@@ -113,8 +121,24 @@ fn print_human_config(config: &vera_core::config::VeraConfig) {
         config.retrieval.rerank_candidates
     );
     println!(
+        "    max_bm25_candidates       {}",
+        config.retrieval.max_bm25_candidates
+    );
+    println!(
+        "    max_vector_candidates     {}",
+        config.retrieval.max_vector_candidates
+    );
+    println!(
         "    reranking_enabled         {}",
         config.retrieval.reranking_enabled
+    );
+    println!(
+        "    max_rerank_batch          {}",
+        config.retrieval.max_rerank_batch
+    );
+    println!(
+        "    max_rerank_doc_chars      {}",
+        config.retrieval.max_rerank_doc_chars
     );
     println!();
     println!("  Embedding:");
@@ -152,6 +176,12 @@ pub fn get_config_value(
         "indexing.max_file_size_bytes" => Some(serde_json::Value::Number(
             config.indexing.max_file_size_bytes.into(),
         )),
+        "indexing.max_chunk_bytes" => Some(serde_json::Value::Number(
+            config.indexing.max_chunk_bytes.into(),
+        )),
+        "indexing.max_chunk_overlap_bytes" => Some(serde_json::Value::Number(
+            config.indexing.max_chunk_overlap_bytes.into(),
+        )),
         "indexing.default_excludes" => serde_json::to_value(&config.indexing.default_excludes).ok(),
         "retrieval.default_limit" => Some(serde_json::Value::Number(
             config.retrieval.default_limit.into(),
@@ -160,9 +190,21 @@ pub fn get_config_value(
         "retrieval.rerank_candidates" => Some(serde_json::Value::Number(
             config.retrieval.rerank_candidates.into(),
         )),
+        "retrieval.max_bm25_candidates" => Some(serde_json::Value::Number(
+            config.retrieval.max_bm25_candidates.into(),
+        )),
+        "retrieval.max_vector_candidates" => Some(serde_json::Value::Number(
+            config.retrieval.max_vector_candidates.into(),
+        )),
         "retrieval.reranking_enabled" => {
             Some(serde_json::Value::Bool(config.retrieval.reranking_enabled))
         }
+        "retrieval.max_rerank_batch" => Some(serde_json::Value::Number(
+            config.retrieval.max_rerank_batch.into(),
+        )),
+        "retrieval.max_rerank_doc_chars" => Some(serde_json::Value::Number(
+            config.retrieval.max_rerank_doc_chars.into(),
+        )),
         "retrieval.max_output_chars" => Some(serde_json::Value::Number(
             config.retrieval.max_output_chars.into(),
         )),
@@ -197,6 +239,12 @@ fn set_config_value(
         "indexing.max_file_size_bytes" => {
             config.indexing.max_file_size_bytes = parse_value(key, value)?;
         }
+        "indexing.max_chunk_bytes" => {
+            config.indexing.max_chunk_bytes = parse_value(key, value)?;
+        }
+        "indexing.max_chunk_overlap_bytes" => {
+            config.indexing.max_chunk_overlap_bytes = parse_value(key, value)?;
+        }
         "indexing.default_excludes" => {
             config.indexing.default_excludes = serde_json::from_str(value).with_context(|| {
                 format!("failed to parse {key} as JSON array of strings: {value}")
@@ -211,8 +259,20 @@ fn set_config_value(
         "retrieval.rerank_candidates" => {
             config.retrieval.rerank_candidates = parse_value(key, value)?;
         }
+        "retrieval.max_bm25_candidates" => {
+            config.retrieval.max_bm25_candidates = parse_value(key, value)?;
+        }
+        "retrieval.max_vector_candidates" => {
+            config.retrieval.max_vector_candidates = parse_value(key, value)?;
+        }
         "retrieval.reranking_enabled" => {
             config.retrieval.reranking_enabled = parse_value(key, value)?;
+        }
+        "retrieval.max_rerank_batch" => {
+            config.retrieval.max_rerank_batch = parse_value(key, value)?;
+        }
+        "retrieval.max_rerank_doc_chars" => {
+            config.retrieval.max_rerank_doc_chars = parse_value(key, value)?;
         }
         "retrieval.max_output_chars" => {
             config.retrieval.max_output_chars = parse_value(key, value)?;

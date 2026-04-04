@@ -38,6 +38,11 @@ pub struct IndexingConfig {
     /// Default: 24576 (24KB, ~6K-7K tokens, safe for any embedding model).
     #[serde(default = "default_max_chunk_bytes")]
     pub max_chunk_bytes: usize,
+    /// Overlap (in bytes) to keep between adjacent oversized split chunks.
+    /// Uses line boundaries and best-effort byte approximation.
+    /// Default: 0 (no overlap).
+    #[serde(default)]
+    pub max_chunk_overlap_bytes: usize,
 }
 
 fn default_max_chunk_bytes() -> usize {
@@ -66,6 +71,7 @@ impl Default for IndexingConfig {
             no_ignore: false,
             no_default_excludes: false,
             max_chunk_bytes: default_max_chunk_bytes(),
+            max_chunk_overlap_bytes: 0,
         }
     }
 }
@@ -79,12 +85,24 @@ pub struct RetrievalConfig {
     pub rrf_k: f64,
     /// Number of candidates to pass to the reranker.
     pub rerank_candidates: usize,
+    /// Hard cap for BM25 candidates fetched before RRF fusion.
+    /// 0 means no cap (adaptive strategy only).
+    #[serde(default = "default_max_bm25_candidates")]
+    pub max_bm25_candidates: usize,
+    /// Hard cap for vector candidates fetched before RRF fusion.
+    /// 0 means no cap (adaptive strategy only).
+    #[serde(default = "default_max_vector_candidates")]
+    pub max_vector_candidates: usize,
     /// Whether to enable reranking (requires API credentials).
     pub reranking_enabled: bool,
     /// Maximum documents per reranker API call. Larger candidate sets are
     /// partitioned into batches and scores merged. 0 means no batching.
     #[serde(default = "default_max_rerank_batch")]
     pub max_rerank_batch: usize,
+    /// Maximum characters per candidate document sent to the reranker.
+    /// Truncates at a newline boundary. 0 means no truncation.
+    #[serde(default = "default_max_rerank_doc_chars")]
+    pub max_rerank_doc_chars: usize,
     /// Total character budget for search output. Results are progressively
     /// truncated so the combined output stays within this limit.
     /// 0 means unlimited.
@@ -103,14 +121,38 @@ fn default_max_rerank_batch() -> usize {
         .unwrap_or(20)
 }
 
+fn default_max_rerank_doc_chars() -> usize {
+    std::env::var("VERA_MAX_RERANK_DOC_CHARS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4_800)
+}
+
+fn default_max_bm25_candidates() -> usize {
+    std::env::var("VERA_MAX_BM25_CANDIDATES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+
+fn default_max_vector_candidates() -> usize {
+    std::env::var("VERA_MAX_VECTOR_CANDIDATES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+
 impl Default for RetrievalConfig {
     fn default() -> Self {
         Self {
             default_limit: 5,
             rrf_k: 60.0,
             rerank_candidates: 50,
+            max_bm25_candidates: default_max_bm25_candidates(),
+            max_vector_candidates: default_max_vector_candidates(),
             reranking_enabled: true,
             max_rerank_batch: default_max_rerank_batch(),
+            max_rerank_doc_chars: default_max_rerank_doc_chars(),
             max_output_chars: 12_000,
         }
     }
@@ -504,6 +546,10 @@ mod tests {
         assert!(config.indexing.max_chunk_lines > 0);
         assert!(config.retrieval.default_limit > 0);
         assert!(config.retrieval.rrf_k > 0.0);
+        assert!(config.retrieval.max_rerank_batch > 0);
+        assert!(config.retrieval.max_rerank_doc_chars > 0);
+        assert_eq!(config.retrieval.max_bm25_candidates, 0);
+        assert_eq!(config.retrieval.max_vector_candidates, 0);
         assert!(config.embedding.batch_size > 0);
     }
 

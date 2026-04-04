@@ -104,10 +104,21 @@ Local models often have smaller context windows than cloud APIs. Adjust these se
 ```bash
 # Reduce chunk size for smaller embedding models
 vera config set indexing.max_chunk_bytes 1800
+# Keep overlap so split chunks preserve context
+vera config set indexing.max_chunk_overlap_bytes 200
 
 # Limit reranker batch size and document length
+vera config set retrieval.max_rerank_batch 8
+vera config set retrieval.max_rerank_doc_chars 1200
+vera config set retrieval.rerank_candidates 30
+
+# Optional: hard caps before RRF fusion
+vera config set retrieval.max_bm25_candidates 60
+vera config set retrieval.max_vector_candidates 60
+
+# (env var fallback)
 export VERA_MAX_RERANK_BATCH=8
-export RERANKER_MAX_DOCUMENT_CHARS=1200
+export VERA_MAX_RERANK_DOC_CHARS=1200
 
 # Increase completion budget for reasoning models
 export VERA_COMPLETION_MAX_TOKENS=16384
@@ -141,7 +152,7 @@ Make sure the environment variables from step 4 are available to the MCP process
 ## Troubleshooting
 
 - **Embedding errors**: verify the server is running and the model ID matches the GGUF filename
-- **Reranker context errors**: lower `RERANKER_MAX_DOCUMENT_CHARS` or `VERA_MAX_RERANK_BATCH`
+- **Reranker context errors**: lower `retrieval.max_rerank_doc_chars` (or `VERA_MAX_RERANK_DOC_CHARS`)
 - **`--deep` behaves like normal search**: completion env vars are not set; Vera falls back to iterative symbol-following search
 - **`--deep` fails with query expansion errors**: ensure the completion model returns JSON; increase `VERA_COMPLETION_MAX_TOKENS` for reasoning models
 - **Slow indexing**: reduce `indexing.max_chunk_bytes` or add exclusions to `.veraignore`

@@ -581,15 +581,21 @@ enum Commands {
                       configuration as a table (or JSON with --json).\n\n\
                       Use `get <key>` to read a specific value, or `set <key> <value>` \
                       to update it.\n\n\
-                      Configuration keys use dot notation:\n  \
-                      indexing.max_chunk_lines       Max lines per chunk (default: 200)\n  \
-                      indexing.max_file_size_bytes   Max file size to index (default: 1000000)\n  \
-                      retrieval.default_limit        Default result count (default: 5)\n  \
-                      retrieval.rrf_k                RRF fusion constant (default: 60)\n  \
-                      retrieval.rerank_candidates    Reranker candidate count (default: 50)\n  \
-                      retrieval.reranking_enabled    Enable reranking (default: true)\n  \
-                      retrieval.max_output_chars     Total output char budget (default: 12000)\n  \
-                      embedding.batch_size           Embedding batch size (default: 128)\n  \
+                       Configuration keys use dot notation:\n  \
+                       indexing.max_chunk_lines       Max lines per chunk (default: 200)\n  \
+                       indexing.max_file_size_bytes   Max file size to index (default: 1000000)\n  \
+                       indexing.max_chunk_bytes       Max chunk size before split (default: 24576)\n  \
+                       indexing.max_chunk_overlap_bytes Overlap between split chunks (default: 0)\n  \
+                       retrieval.default_limit        Default result count (default: 5)\n  \
+                       retrieval.rrf_k                RRF fusion constant (default: 60)\n  \
+                       retrieval.rerank_candidates    Reranker candidate count (default: 50)\n  \
+                       retrieval.max_bm25_candidates  Hard cap BM25 candidates (default: 0=off)\n  \
+                       retrieval.max_vector_candidates Hard cap vector candidates (default: 0=off)\n  \
+                       retrieval.reranking_enabled    Enable reranking (default: true)\n  \
+                       retrieval.max_rerank_batch     Max docs per reranker request (default: 20)\n  \
+                       retrieval.max_rerank_doc_chars Max chars per reranker document (default: 4800)\n  \
+                       retrieval.max_output_chars     Total output char budget (default: 12000)\n  \
+                       embedding.batch_size           Embedding batch size (default: 128)\n  \
                       embedding.max_concurrent_requests  Concurrent API requests (default: 8)\n  \
                       embedding.timeout_secs         API timeout (default: 60)\n  \
                       embedding.max_retries          API retry count (default: 3)\n  \
@@ -1164,10 +1170,28 @@ mod tests {
     fn config_get_known_keys() {
         let config = vera_core::config::VeraConfig::default();
         assert!(commands::config::get_config_value(&config, "indexing.max_chunk_lines").is_some());
+        assert!(commands::config::get_config_value(&config, "indexing.max_chunk_bytes").is_some());
+        assert!(
+            commands::config::get_config_value(&config, "indexing.max_chunk_overlap_bytes")
+                .is_some()
+        );
         assert!(commands::config::get_config_value(&config, "retrieval.default_limit").is_some());
         assert!(commands::config::get_config_value(&config, "retrieval.rrf_k").is_some());
         assert!(
+            commands::config::get_config_value(&config, "retrieval.max_bm25_candidates").is_some()
+        );
+        assert!(
+            commands::config::get_config_value(&config, "retrieval.max_vector_candidates")
+                .is_some()
+        );
+        assert!(
             commands::config::get_config_value(&config, "retrieval.reranking_enabled").is_some()
+        );
+        assert!(
+            commands::config::get_config_value(&config, "retrieval.max_rerank_batch").is_some()
+        );
+        assert!(
+            commands::config::get_config_value(&config, "retrieval.max_rerank_doc_chars").is_some()
         );
         assert!(commands::config::get_config_value(&config, "embedding.batch_size").is_some());
         assert!(commands::config::get_config_value(&config, "embedding.max_stored_dim").is_some());
@@ -1188,8 +1212,27 @@ mod tests {
         let val = commands::config::get_config_value(&config, "indexing.max_chunk_lines").unwrap();
         assert_eq!(val, serde_json::json!(200));
 
+        let val = commands::config::get_config_value(&config, "indexing.max_chunk_bytes").unwrap();
+        assert_eq!(val, serde_json::json!(config.indexing.max_chunk_bytes));
+
+        let val = commands::config::get_config_value(&config, "indexing.max_chunk_overlap_bytes")
+            .unwrap();
+        assert_eq!(val, serde_json::json!(0));
+
         let val =
             commands::config::get_config_value(&config, "retrieval.reranking_enabled").unwrap();
         assert_eq!(val, serde_json::json!(true));
+
+        let val =
+            commands::config::get_config_value(&config, "retrieval.max_rerank_doc_chars").unwrap();
+        assert_eq!(val, serde_json::json!(4800));
+
+        let val =
+            commands::config::get_config_value(&config, "retrieval.max_bm25_candidates").unwrap();
+        assert_eq!(val, serde_json::json!(0));
+
+        let val =
+            commands::config::get_config_value(&config, "retrieval.max_vector_candidates").unwrap();
+        assert_eq!(val, serde_json::json!(0));
     }
 }

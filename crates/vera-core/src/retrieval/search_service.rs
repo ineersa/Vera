@@ -12,7 +12,7 @@ use tracing::warn;
 
 use crate::chunk_text::file_name;
 use crate::config::{InferenceBackend, VeraConfig};
-use crate::retrieval::hybrid::compute_vector_candidates;
+use crate::retrieval::hybrid::{compute_bm25_candidates, compute_vector_candidates};
 use crate::retrieval::query_classifier::{QueryType, classify_query, params_for_query_type};
 use crate::retrieval::query_utils::{
     looks_like_compound_identifier, looks_like_filename, path_depth, trim_query_token,
@@ -49,6 +49,19 @@ pub fn execute_search(
 ) -> Result<(Vec<SearchResult>, SearchTimings)> {
     let total_start = Instant::now();
     let fetch_limit = compute_fetch_limit(query, filters, result_limit);
+    let query_type = classify_query(query);
+    let query_params = params_for_query_type(query_type);
+    let rrf_k = query_params.rrf_k;
+    let bm25_candidates =
+        effective_bm25_candidates(query, fetch_limit, config.retrieval.max_bm25_candidates);
+    let vector_candidates = effective_vector_candidates(
+        fetch_limit,
+        query_params,
+        config.retrieval.max_vector_candidates,
+    );
+    let rerank_candidates =
+        effective_rerank_candidates(config.retrieval.rerank_candidates, result_limit);
+
     let rt = tokio::runtime::Runtime::new()?;
 
     // Try to create embedding provider for hybrid search.
@@ -64,7 +77,7 @@ pub fn execute_search(
                     index_dir,
                     query,
                     filters,
-                    fetch_limit,
+                    bm25_candidates,
                     result_limit,
                     total_start,
                 );
@@ -91,7 +104,7 @@ pub fn execute_search(
                     index_dir,
                     query,
                     filters,
-                    fetch_limit,
+                    bm25_candidates,
                     result_limit,
                     total_start,
                 );
@@ -108,7 +121,7 @@ pub fn execute_search(
                             index_dir,
                             query,
                             filters,
-                            fetch_limit,
+                            bm25_candidates,
                             result_limit,
                             total_start,
                         );
@@ -130,18 +143,6 @@ pub fn execute_search(
         });
     let reranker_enabled = reranker.is_some() && !should_skip_reranking(query, filters);
 
-    // Classify query to adapt fusion parameters.
-    let query_type = classify_query(query);
-    let query_params = params_for_query_type(query_type);
-    let rrf_k = query_params.rrf_k;
-    let vector_candidates = effective_vector_candidates(fetch_limit, query_params);
-    let rerank_candidates = effective_rerank_candidates(
-        config.retrieval.rerank_candidates,
-        fetch_limit,
-        query,
-        filters,
-    );
-
     let ranking_stage = if reranker_enabled {
         RankingStage::PostRerank
     } else {
@@ -160,7 +161,8 @@ pub fn execute_search(
             fetch_limit,
             rrf_k,
             stored_dim,
-            rerank_candidates.max(fetch_limit),
+            rerank_candidates,
+            bm25_candidates,
             vector_candidates,
         ))?
     } else {
@@ -171,6 +173,7 @@ pub fn execute_search(
             fetch_limit,
             rrf_k,
             stored_dim,
+            bm25_candidates,
             vector_candidates,
         ))?
     };
@@ -225,21 +228,26 @@ fn needs_structural_overfetch(query: &str, filters: &SearchFilters) -> bool {
 fn effective_vector_candidates(
     fetch_limit: usize,
     query_params: crate::retrieval::query_classifier::QueryParams,
+    max_candidates: usize,
 ) -> usize {
-    compute_vector_candidates(fetch_limit, query_params.vector_candidate_multiplier)
+    let base = compute_vector_candidates(fetch_limit, query_params.vector_candidate_multiplier);
+    apply_candidate_cap(base, max_candidates)
 }
 
-fn effective_rerank_candidates(
-    base: usize,
-    fetch_limit: usize,
-    query: &str,
-    filters: &SearchFilters,
-) -> usize {
-    if needs_structural_overfetch(query, filters) {
-        return base;
-    }
+fn effective_bm25_candidates(query: &str, fetch_limit: usize, max_candidates: usize) -> usize {
+    let base = compute_bm25_candidates(query, fetch_limit);
+    apply_candidate_cap(base, max_candidates)
+}
 
-    base.max(fetch_limit)
+fn effective_rerank_candidates(base: usize, result_limit: usize) -> usize {
+    base.max(result_limit.max(1))
+}
+
+fn apply_candidate_cap(base: usize, max_candidates: usize) -> usize {
+    if max_candidates == 0 {
+        return base.max(1);
+    }
+    base.min(max_candidates).max(1)
 }
 
 fn should_skip_reranking(query: &str, filters: &SearchFilters) -> bool {
@@ -254,12 +262,12 @@ fn run_bm25_only(
     index_dir: &Path,
     query: &str,
     filters: &SearchFilters,
-    fetch_limit: usize,
+    bm25_candidates: usize,
     result_limit: usize,
     total_start: Instant,
 ) -> Result<(Vec<SearchResult>, SearchTimings)> {
     let bm25_start = Instant::now();
-    let results = search_bm25(index_dir, query, fetch_limit)?;
+    let results = search_bm25(index_dir, query, bm25_candidates)?;
     let bm25_elapsed = bm25_start.elapsed();
     let aug_start = Instant::now();
     let results =
@@ -547,24 +555,28 @@ mod tests {
     }
 
     #[test]
-    fn effective_candidates_use_base_multipliers() {
-        // Rerank candidates just return base.max(fetch_limit)
-        let filters = SearchFilters::default();
-        assert_eq!(
-            effective_rerank_candidates(50, 10, "anything", &filters),
-            50
-        );
-        assert_eq!(effective_rerank_candidates(5, 10, "anything", &filters), 10);
-        assert_eq!(
-            effective_rerank_candidates(50, 160, "file type detection and filtering", &filters),
-            50
-        );
+    fn effective_candidates_apply_hard_rerank_cap() {
+        assert_eq!(effective_rerank_candidates(50, 10), 50);
+        assert_eq!(effective_rerank_candidates(5, 10), 10);
+        assert_eq!(effective_rerank_candidates(60, 10), 60);
+        assert_eq!(effective_rerank_candidates(0, 10), 10);
 
-        // Vector candidates use query_params multiplier without inflation
+        // Vector candidates use query_params multiplier and optional hard caps.
         let nl_params =
             params_for_query_type(crate::retrieval::query_classifier::QueryType::NaturalLanguage);
-        let vc = effective_vector_candidates(10, nl_params);
+        let vc = effective_vector_candidates(10, nl_params, 0);
         assert!(vc >= 50); // at least the minimum from compute_vector_candidates
+
+        let vc_capped = effective_vector_candidates(160, nl_params, 60);
+        assert_eq!(vc_capped, 60);
+
+        let bm25_uncapped =
+            effective_bm25_candidates("request validation and schema enforcement", 20, 0);
+        assert_eq!(bm25_uncapped, 80);
+
+        let bm25_capped =
+            effective_bm25_candidates("request validation and schema enforcement", 20, 60);
+        assert_eq!(bm25_capped, 60);
     }
 
     #[test]

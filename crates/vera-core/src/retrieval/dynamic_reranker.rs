@@ -44,8 +44,12 @@ pub async fn create_dynamic_reranker(
                 let cfg = cfg
                     .with_timeout(Duration::from_secs(30))
                     .with_max_retries(2);
-                let p = ApiReranker::new(cfg)
-                    .map_err(|err| anyhow::anyhow!("failed to init reranker: {err}"))?;
+                let p = ApiReranker::new_with_limits(
+                    cfg,
+                    config.retrieval.max_rerank_batch,
+                    config.retrieval.max_rerank_doc_chars,
+                )
+                .map_err(|err| anyhow::anyhow!("failed to init reranker: {err}"))?;
                 Ok(Some(DynamicReranker::Api(p)))
             }
             Err(_) => Ok(None),

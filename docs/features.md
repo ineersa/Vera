@@ -13,11 +13,13 @@ Every query runs two retrieval paths in parallel:
 
 Results from both paths merge through Reciprocal Rank Fusion (RRF), so a result that scores well in both lists rises to the top. Full details: [how-it-works.md](how-it-works.md).
 
+You can hard-cap pre-fusion candidate pools with `retrieval.max_bm25_candidates` and `retrieval.max_vector_candidates` (both default to `0`, meaning adaptive behavior with no hard cap).
+
 ### Cross-Encoder Reranking
 
 After fusion, the top candidates go through a cross-encoder that reads query and candidate together as a single pair. This is the most impactful stage: it lifts MRR@10 from 0.39 to 0.60 (54% improvement). Most code search tools skip this step entirely.
 
-Large candidate sets are automatically batched (default 20 per request, configurable via `VERA_MAX_RERANK_BATCH`). Individual documents exceeding the reranker's context window are truncated at the last newline boundary before the character limit (default 4800, configurable via `VERA_MAX_RERANK_DOC_CHARS`). Both settings work automatically with no required configuration.
+Large candidate sets are automatically batched (default 20 per request, configurable via `retrieval.max_rerank_batch` or `VERA_MAX_RERANK_BATCH`). Individual documents exceeding the reranker's context window are truncated at the last newline boundary before the character limit (default 4800, configurable via `retrieval.max_rerank_doc_chars` or `VERA_MAX_RERANK_DOC_CHARS`). Both settings work automatically with no required configuration.
 
 ### Multi-Query Search
 
@@ -70,7 +72,7 @@ Symbol-aware chunking scores 2.3x higher MRR on symbol lookup than sliding-windo
 
 Large symbols (>150 lines) are split at logical boundaries: closing braces, semicolons, blank lines. This preserves readability instead of cutting at arbitrary line counts. Languages without a tree-sitter grammar fall back to sliding-window chunking. Module-level gaps between symbols are kept as chunks when they carry useful retrieval context.
 
-Chunks that exceed the embedding model's input limit are automatically split in a post-processing pass. API mode uses a 24KB byte budget (roughly 6K-7K tokens, safe for any modern embedding model). Local mode uses the model's own tokenizer and max_length. Override with `VERA_MAX_CHUNK_BYTES` if needed.
+Chunks that exceed the embedding model's input limit are automatically split in a post-processing pass. API mode uses a 24KB byte budget (roughly 6K-7K tokens, safe for any modern embedding model). Local mode uses the model's own tokenizer and max_length. Tune with `indexing.max_chunk_bytes` / `VERA_MAX_CHUNK_BYTES`; optional overlap between split chunks is controlled by `indexing.max_chunk_overlap_bytes`.
 
 ### Incremental Updates
 

@@ -61,6 +61,7 @@ pub fn parse_and_chunk(
     Ok(chunker::split_oversized_chunks(
         chunks,
         config.max_chunk_bytes,
+        config.max_chunk_overlap_bytes,
     ))
 }
 
