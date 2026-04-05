@@ -105,6 +105,11 @@ def git_sha() -> str:
     return proc.stdout.strip()
 
 
+def effective_config(binary: Path, cwd: Path) -> dict[str, Any]:
+    config, _ = run_json([str(binary), "--json", "config"], cwd)
+    return config if isinstance(config, dict) else {}
+
+
 def is_match(result: dict[str, Any], gt: dict[str, Any]) -> bool:
     return (
         result.get("file_path") == gt["file_path"]
@@ -281,6 +286,7 @@ def main() -> None:
         raise SystemExit(f"binary not found: {binary}")
 
     tasks = load_tasks()
+    repos = repo_order(tasks)
     output_path = args.output or RESULTS_DIR / f"{args.label}.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -288,8 +294,27 @@ def main() -> None:
     print(f"Label: {args.label}")
     print(f"Extra args: {args.extra_arg or 'none'}")
 
+    effective_config_by_repo: dict[str, dict[str, Any]] = {}
+    for repo_name in repos:
+        repo_path = CORPUS_DIR / repo_name
+        effective_config_by_repo[repo_name] = effective_config(binary, repo_path)
+
+    reference_config_repo = repos[0] if repos else "<none>"
+    reference_config = (
+        effective_config_by_repo.get(reference_config_repo, {}) if repos else effective_config(binary, REPO_ROOT)
+    )
+    all_repo_configs_match = (
+        len(
+            {
+                json.dumps(cfg, sort_keys=True)
+                for cfg in effective_config_by_repo.values()
+            }
+        )
+        <= 1
+    )
+
     indexing = []
-    for repo_name in repo_order(tasks):
+    for repo_name in repos:
         stat = index_repo(binary, repo_name, args.extra_arg)
         indexing.append(stat)
         print(
@@ -314,6 +339,10 @@ def main() -> None:
         "binary_version": binary_version(binary),
         "git_sha": git_sha(),
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "config_reference_repo": reference_config_repo,
+        "effective_config": reference_config,
+        "all_repo_configs_match": all_repo_configs_match,
+        "effective_config_by_repo": effective_config_by_repo,
         "extra_args": args.extra_arg,
         "limit": args.limit,
         "indexing": indexing,
