@@ -1,8 +1,8 @@
 # Supported Languages
 
-Vera supports 64 languages and file formats. Each file is detected by extension (or filename for extensionless files like `Dockerfile` and `Makefile`).
+Vera supports 65 languages and file formats. Each file is detected by extension (or filename for extensionless files like `Dockerfile` and `Makefile`).
 
-Languages with a tree-sitter grammar get symbol-level chunking. functions, classes, structs, and methods are extracted as discrete search results. Languages without a grammar fall back to sliding-window text chunking.
+Most languages with a tree-sitter grammar get symbol-level chunking: functions, classes, structs, and methods are extracted as discrete search results. reStructuredText is also parsed with tree-sitter, but chunked by section headings instead of code symbols. Languages without a grammar fall back to sliding-window text chunking.
 
 ## Systems & Low-Level
 
@@ -104,7 +104,7 @@ Languages with a tree-sitter grammar get symbol-level chunking. functions, class
 | XML | `.xml`, `.xsl`, `.xsd`, `.svg` | ✅ |
 | INI | `.ini`, `.cfg`, `.conf` | ✅ |
 
-## Data & Markup (text chunking)
+## Data & Markup
 
 | Format | Extensions | Symbol extraction |
 |--------|-----------|:-:|
@@ -112,5 +112,6 @@ Languages with a tree-sitter grammar get symbol-level chunking. functions, class
 | YAML | `.yaml`, `.yml` | - |
 | JSON | `.json` | - |
 | Markdown | `.md`, `.markdown` | - |
+| reStructuredText | `.rst` | Section-level (tree-sitter) |
 
 Files with unrecognized extensions are indexed using text chunking.
