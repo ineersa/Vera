@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/lemon07r/Vera/blob/master/LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![GitHub release](https://img.shields.io/github/v/release/lemon07r/Vera?include_prereleases&sort=semver)](https://github.com/lemon07r/Vera/releases)
-[![Languages](https://img.shields.io/badge/languages-64%2B-green.svg)](docs/supported-languages.md)
+[![Languages](https://img.shields.io/badge/languages-65%2B-green.svg)](docs/supported-languages.md)
 
 [Install Guide](docs/installation.md)
 ·

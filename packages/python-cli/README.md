@@ -49,7 +49,7 @@ On GPU backends, Vera uses a free-VRAM-aware batch ceiling and sequence-aware lo
 
 ## What you get
 
-- **60+ languages** via tree-sitter AST parsing
+- **61+ languages** via tree-sitter AST parsing
 - **Hybrid search**: BM25 keyword + vector similarity, fused with Reciprocal Rank Fusion
 - **Cross-encoder reranking** for precision
 - **Markdown codeblock output** by default with file paths, line ranges, and optional symbol info (use `--json` for compact JSON, `--raw` for verbose output, `--timing` for step durations)
