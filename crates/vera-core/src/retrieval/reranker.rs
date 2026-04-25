@@ -16,8 +16,9 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use crate::chunk_text::{file_name, normalize_path_tokens};
+use crate::config::RerankMetadataMode;
 use crate::retrieval::ranking::file_role_label;
-use crate::types::SearchResult;
+use crate::types::{SearchResult, SearchScope};
 
 // ── Error types ──────────────────────────────────────────────────────
 
@@ -74,6 +75,22 @@ pub struct RerankScore {
     pub relevance_score: f64,
 }
 
+/// Formatting controls for reranker document payloads.
+#[derive(Debug, Clone, Copy)]
+pub struct RerankFormatOptions {
+    pub metadata_mode: RerankMetadataMode,
+    pub scope: Option<SearchScope>,
+}
+
+impl Default for RerankFormatOptions {
+    fn default() -> Self {
+        Self {
+            metadata_mode: RerankMetadataMode::Full,
+            scope: None,
+        }
+    }
+}
+
 // ── Configuration ────────────────────────────────────────────────────
 
 /// Configuration for an API-based reranker.
@@ -89,17 +106,6 @@ pub struct RerankerConfig {
     pub timeout: Duration,
     /// Maximum retries on transient errors.
     pub max_retries: u32,
-    /// Maximum number of documents to send per `/rerank` request.
-    ///
-    /// Some backends (notably llama.cpp reranking models) have a small
-    /// context window and reject large document arrays in a single call.
-    pub max_docs_per_request: usize,
-    /// Maximum estimated tokens per formatted reranker document.
-    ///
-    /// Long code snippets are split into overlapping windows (and truncated
-    /// as a fallback) before reranking to avoid model context overflows on
-    /// small rerank models.
-    pub max_document_tokens: usize,
 }
 
 impl RerankerConfig {
@@ -111,8 +117,6 @@ impl RerankerConfig {
             api_key,
             timeout: Duration::from_secs(30),
             max_retries: 2,
-            max_docs_per_request: 8,
-            max_document_tokens: 300,
         }
     }
 
@@ -122,9 +126,6 @@ impl RerankerConfig {
     /// - `RERANKER_MODEL_BASE_URL`
     /// - `RERANKER_MODEL_ID`
     /// - `RERANKER_MODEL_API_KEY`
-    /// - `RERANKER_MAX_DOCS_PER_REQUEST` (optional)
-    /// - `RERANKER_MAX_DOCUMENT_TOKENS` (optional)
-    /// - `RERANKER_MAX_DOCUMENT_CHARS` (optional)
     pub fn from_env() -> Result<Self> {
         let base_url =
             std::env::var("RERANKER_MODEL_BASE_URL").context("RERANKER_MODEL_BASE_URL not set")?;
@@ -132,24 +133,7 @@ impl RerankerConfig {
         let api_key =
             std::env::var("RERANKER_MODEL_API_KEY").context("RERANKER_MODEL_API_KEY not set")?;
 
-        let mut cfg = Self::new(base_url, model_id, api_key);
-        if let Ok(value) = std::env::var("RERANKER_MAX_DOCS_PER_REQUEST") {
-            if let Ok(parsed) = value.parse::<usize>() {
-                cfg.max_docs_per_request = parsed;
-            }
-        }
-        if let Ok(value) = std::env::var("RERANKER_MAX_DOCUMENT_TOKENS") {
-            if let Ok(parsed) = value.parse::<usize>() {
-                cfg.max_document_tokens = parsed.max(16);
-            }
-        } else if let Ok(value) = std::env::var("RERANKER_MAX_DOCUMENT_CHARS") {
-            if let Ok(parsed) = value.parse::<usize>() {
-                cfg.max_document_tokens =
-                    crate::token_budget::token_budget_from_bytes(parsed).max(16);
-            }
-        }
-
-        Ok(cfg)
+        Ok(Self::new(base_url, model_id, api_key))
     }
 
     /// Set the request timeout.
@@ -161,25 +145,6 @@ impl RerankerConfig {
     /// Set the maximum retry count.
     pub fn with_max_retries(mut self, max_retries: u32) -> Self {
         self.max_retries = max_retries;
-        self
-    }
-
-    /// Set maximum documents per API request.
-    pub fn with_max_docs_per_request(mut self, max_docs_per_request: usize) -> Self {
-        self.max_docs_per_request = max_docs_per_request;
-        self
-    }
-
-    /// Set maximum token budget per formatted reranker document.
-    pub fn with_max_document_tokens(mut self, max_document_tokens: usize) -> Self {
-        self.max_document_tokens = max_document_tokens.max(16);
-        self
-    }
-
-    /// Backwards-compatible setter for char budgets.
-    pub fn with_max_document_chars(mut self, max_document_chars: usize) -> Self {
-        self.max_document_tokens =
-            crate::token_budget::token_budget_from_bytes(max_document_chars).max(16);
         self
     }
 }
@@ -194,18 +159,38 @@ impl RerankerConfig {
 pub struct ApiReranker {
     client: reqwest::Client,
     config: RerankerConfig,
+    max_rerank_batch: usize,
+    max_document_chars: usize,
 }
 
 impl ApiReranker {
     /// Create a new API-based reranker from configuration.
     pub fn new(config: RerankerConfig) -> Result<Self> {
+        Self::new_with_limits(
+            config,
+            default_max_rerank_batch(),
+            default_max_rerank_doc_chars(),
+        )
+    }
+
+    /// Create a new API-based reranker with explicit runtime limits.
+    pub fn new_with_limits(
+        config: RerankerConfig,
+        max_rerank_batch: usize,
+        max_document_chars: usize,
+    ) -> Result<Self> {
         crate::init_tls();
         let client = reqwest::Client::builder()
             .timeout(config.timeout)
             .build()
             .context("failed to create HTTP client for reranker")?;
 
-        Ok(Self { client, config })
+        Ok(Self {
+            client,
+            config,
+            max_rerank_batch,
+            max_document_chars,
+        })
     }
 
     /// Build the rerank endpoint URL.
@@ -245,8 +230,8 @@ impl ApiReranker {
             match self.send_request(&url, &body).await {
                 Ok(scores) => return Ok(scores),
                 Err(e) => {
-                    // Retry only transient errors (network, 429, 5xx, parse).
-                    if !is_retryable_reranker_error(&e) {
+                    // Don't retry auth or deterministic context-window errors.
+                    if matches!(e, RerankerError::AuthError { .. }) || is_context_size_error(&e) {
                         return Err(e);
                     }
                     warn!(
@@ -343,86 +328,122 @@ impl ApiReranker {
         Ok(scores)
     }
 
-    async fn rerank_adaptive_batches(
+    async fn rerank_batch_with_overflow_fallback(
         &self,
         query: &str,
         documents: &[String],
-        base_index: usize,
+        index_offset: usize,
     ) -> Result<Vec<RerankScore>, RerankerError> {
-        if documents.is_empty() {
-            return Ok(Vec::new());
+        match self.call_api(query, documents, documents.len()).await {
+            Ok(scores) => Ok(scores
+                .into_iter()
+                .map(|score| RerankScore {
+                    index: score.index + index_offset,
+                    relevance_score: score.relevance_score,
+                })
+                .collect()),
+            Err(err) if is_context_size_error(&err) => {
+                warn!(
+                    docs = documents.len(),
+                    offset = index_offset,
+                    "reranker context limit exceeded, retrying with overlap splits"
+                );
+                self.rerank_batch_with_overlap_split(query, documents, index_offset)
+                    .await
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn rerank_batch_with_overlap_split(
+        &self,
+        query: &str,
+        documents: &[String],
+        index_offset: usize,
+    ) -> Result<Vec<RerankScore>, RerankerError> {
+        let mut scores = Vec::with_capacity(documents.len());
+        for (local_idx, document) in documents.iter().enumerate() {
+            let best_score = self
+                .rerank_single_document_with_overlap_split(query, document)
+                .await?;
+            scores.push(RerankScore {
+                index: index_offset + local_idx,
+                relevance_score: best_score,
+            });
         }
 
-        let max_docs = if self.config.max_docs_per_request == 0 {
-            documents.len().max(1)
-        } else {
-            self.config.max_docs_per_request
-        };
-        let mut pending: Vec<(usize, usize)> = Vec::new();
-        let mut start = 0usize;
-        while start < documents.len() {
-            let end = (start + max_docs).min(documents.len());
-            pending.push((start, end));
-            start = end;
-        }
+        scores.sort_by(|a, b| {
+            b.relevance_score
+                .partial_cmp(&a.relevance_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Ok(scores)
+    }
 
-        let mut out = Vec::with_capacity(documents.len());
-        while let Some((start, end)) = pending.pop() {
-            let slice = &documents[start..end];
-            match self.call_api(query, slice, slice.len()).await {
-                Ok(mut scores) => {
-                    for score in &mut scores {
-                        score.index += base_index + start;
-                    }
-                    out.extend(scores);
+    async fn rerank_single_document_with_overlap_split(
+        &self,
+        query: &str,
+        document: &str,
+    ) -> Result<f64, RerankerError> {
+        let mut window_chars = initial_split_window_chars(self.max_document_chars, document.len());
+        let mut overlap_chars = split_overlap_chars(window_chars);
+        let mut last_ctx_error: Option<RerankerError> = None;
+
+        for split_round in 0..MAX_OVERFLOW_SPLIT_ROUNDS {
+            let split_docs = split_document_with_overlap(document, window_chars, overlap_chars);
+            debug!(
+                round = split_round + 1,
+                split_docs = split_docs.len(),
+                window_chars,
+                overlap_chars,
+                "retrying reranker document with overlap windows"
+            );
+
+            match self.call_api(query, &split_docs, split_docs.len()).await {
+                Ok(scores) => {
+                    let Some(best) = scores
+                        .iter()
+                        .map(|score| score.relevance_score)
+                        .reduce(f64::max)
+                    else {
+                        return Err(RerankerError::ResponseError {
+                            message: "reranker returned no scores for split windows".to_string(),
+                        });
+                    };
+                    return Ok(best);
                 }
-                Err(err) if is_context_limit_error(&err) && slice.len() > 1 => {
-                    // Split this failing batch and retry each half.
-                    let mid = start + slice.len() / 2;
-                    pending.push((mid, end));
-                    pending.push((start, mid));
-                }
-                Err(err) if is_context_limit_error(&err) && slice.len() == 1 => {
-                    // Even one document overflowed. Retry with progressively smaller text.
-                    let original = &documents[start];
-                    let mut budget = (self.config.max_document_tokens / 2).max(16);
-                    let mut recovered = None;
-
-                    while budget >= 16 {
-                        let shrunk = truncate_reranker_document(original, budget);
-                        let singleton = vec![shrunk];
-                        match self.call_api(query, &singleton, 1).await {
-                            Ok(mut scores) => {
-                                for score in &mut scores {
-                                    score.index += base_index + start;
-                                }
-                                recovered = Some(scores);
-                                debug!(
-                                    budget,
-                                    document_index = base_index + start,
-                                    "reranker context overflow recovered by shrinking single document"
-                                );
-                                break;
-                            }
-                            Err(e) if is_context_limit_error(&e) => {
-                                budget /= 2;
-                            }
-                            Err(e) => return Err(e),
-                        }
+                Err(err) if is_context_size_error(&err) => {
+                    last_ctx_error = Some(err);
+                    if window_chars <= MIN_OVERFLOW_WINDOW_CHARS {
+                        break;
                     }
-
-                    if let Some(scores) = recovered {
-                        out.extend(scores);
-                    } else {
-                        return Err(err);
-                    }
+                    window_chars = shrink_split_window_chars(window_chars);
+                    overlap_chars = split_overlap_chars(window_chars);
                 }
                 Err(err) => return Err(err),
             }
         }
 
-        Ok(out)
+        Err(last_ctx_error.unwrap_or(RerankerError::ApiError {
+            status: 400,
+            message: "reranker context overflow fallback exhausted".to_string(),
+        }))
     }
+}
+
+fn default_max_rerank_batch() -> usize {
+    std::env::var("VERA_MAX_RERANK_BATCH")
+        .ok()
+        .or_else(|| std::env::var("RERANKER_MAX_DOCS_PER_REQUEST").ok())
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20)
+}
+
+fn default_max_rerank_doc_chars() -> usize {
+    std::env::var("VERA_MAX_RERANK_DOC_CHARS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4_800)
 }
 
 impl Reranker for ApiReranker {
@@ -435,134 +456,37 @@ impl Reranker for ApiReranker {
             return Ok(Vec::new());
         }
 
-        let overlap_tokens = (self.config.max_document_tokens / 6).clamp(8, 64);
-        let mut expanded_documents = Vec::new();
-        let mut expanded_to_original = Vec::new();
-
-        for (doc_index, doc) in documents.iter().enumerate() {
-            let windows =
-                split_reranker_document(doc, self.config.max_document_tokens, overlap_tokens);
-            for window in windows {
-                expanded_to_original.push(doc_index);
-                expanded_documents.push(window);
-            }
-        }
-
-        debug!(
-            original_docs = documents.len(),
-            expanded_docs = expanded_documents.len(),
-            max_docs_per_request = self.config.max_docs_per_request,
-            max_document_tokens = self.config.max_document_tokens,
-            "prepared reranker windows"
-        );
-
-        let expanded_scores = self
-            .rerank_adaptive_batches(query, &expanded_documents, 0)
-            .await?;
-        Ok(aggregate_split_scores(
-            expanded_scores,
-            &expanded_to_original,
-            documents.len(),
-        ))
-    }
-}
-
-fn aggregate_split_scores(
-    expanded_scores: Vec<RerankScore>,
-    expanded_to_original: &[usize],
-    original_count: usize,
-) -> Vec<RerankScore> {
-    #[derive(Clone, Copy, Default)]
-    struct Top2 {
-        first: Option<f64>,
-        second: Option<f64>,
-    }
-
-    impl Top2 {
-        fn push(&mut self, score: f64) {
-            match self.first {
-                None => self.first = Some(score),
-                Some(first) if score >= first => {
-                    self.second = self.first;
-                    self.first = Some(score);
-                }
-                _ => match self.second {
-                    None => self.second = Some(score),
-                    Some(second) if score > second => self.second = Some(score),
-                    _ => {}
-                },
-            }
-        }
-
-        fn stable_score(self) -> Option<f64> {
-            match (self.first, self.second) {
-                (Some(first), Some(second)) => Some((first + second) / 2.0),
-                (Some(first), None) => Some(first),
-                _ => None,
-            }
-        }
-    }
-
-    let mut top_scores: Vec<Top2> = vec![Top2::default(); original_count];
-
-    for score in expanded_scores {
-        let Some(&original_index) = expanded_to_original.get(score.index) else {
-            warn!(
-                split_index = score.index,
-                split_documents = expanded_to_original.len(),
-                "reranker returned out-of-bounds split index, skipping"
-            );
-            continue;
-        };
-
-        top_scores[original_index].push(score.relevance_score);
-    }
-
-    let mut aggregated: Vec<RerankScore> = top_scores
-        .into_iter()
-        .enumerate()
-        .filter_map(|(index, top2)| {
-            top2.stable_score().map(|score| RerankScore {
-                index,
-                relevance_score: score,
-            })
-        })
-        .collect();
-
-    aggregated.sort_by(|a, b| {
-        b.relevance_score
-            .partial_cmp(&a.relevance_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    aggregated
-}
-
-fn split_reranker_document(doc: &str, max_tokens: usize, overlap_tokens: usize) -> Vec<String> {
-    if max_tokens == 0 || crate::token_budget::estimate_tokens(doc) <= max_tokens {
-        return vec![doc.to_string()];
-    }
-
-    if let Some(code_start) = doc.find("Code:\n") {
-        let prefix_end = code_start + "Code:\n".len();
-        let prefix = &doc[..prefix_end];
-        let code = &doc[prefix_end..];
-        let prefix_tokens = crate::token_budget::estimate_tokens(prefix);
-        let content_budget = max_tokens.saturating_sub(prefix_tokens);
-
-        if content_budget >= 16 {
-            return crate::token_budget::split_text_with_token_overlap(
-                code,
-                content_budget,
-                overlap_tokens,
-            )
-            .into_iter()
-            .map(|segment| format!("{prefix}{segment}"))
+        // Truncate documents that exceed the reranker's context window.
+        let truncated: Vec<String> = documents
+            .iter()
+            .map(|d| truncate_document(d, self.max_document_chars))
             .collect();
-        }
-    }
+        let documents = &truncated;
 
-    crate::token_budget::split_text_with_token_overlap(doc, max_tokens, overlap_tokens)
+        let batch_size = self.max_rerank_batch;
+        if batch_size == 0 || documents.len() <= batch_size {
+            return self
+                .rerank_batch_with_overflow_fallback(query, documents, 0)
+                .await;
+        }
+
+        // Partition into batches, rerank each, merge with corrected indices.
+        let mut all_scores = Vec::with_capacity(documents.len());
+        for (batch_idx, batch) in documents.chunks(batch_size).enumerate() {
+            let offset = batch_idx * batch_size;
+            let mut scores = self
+                .rerank_batch_with_overflow_fallback(query, batch, offset)
+                .await?;
+            all_scores.append(&mut scores);
+        }
+
+        all_scores.sort_by(|a, b| {
+            b.relevance_score
+                .partial_cmp(&a.relevance_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Ok(all_scores)
+    }
 }
 
 // ── Rerank search results ────────────────────────────────────────────
@@ -580,6 +504,7 @@ pub async fn rerank_results(
     query: &str,
     results: &[SearchResult],
     top_n: usize,
+    format_options: RerankFormatOptions,
 ) -> Result<Vec<SearchResult>, RerankerError> {
     if results.is_empty() {
         return Ok(Vec::new());
@@ -589,7 +514,10 @@ pub async fn rerank_results(
     let candidates: Vec<&SearchResult> = results.iter().take(top_n).collect();
 
     // Extract document texts for the reranker.
-    let documents: Vec<String> = candidates.iter().map(|r| format_for_reranker(r)).collect();
+    let documents: Vec<String> = candidates
+        .iter()
+        .map(|r| format_for_reranker(r, format_options))
+        .collect();
 
     debug!(
         query = query,
@@ -638,7 +566,49 @@ pub async fn rerank_results(
 /// Format a search result for the reranker API.
 ///
 /// Includes metadata context to help the cross-encoder understand the code.
-fn format_for_reranker(result: &SearchResult) -> String {
+fn format_for_reranker(result: &SearchResult, options: RerankFormatOptions) -> String {
+    match effective_metadata_mode(options.metadata_mode, options.scope) {
+        EffectiveMetadataMode::None => result.content.clone(),
+        EffectiveMetadataMode::Light => {
+            let mut parts = Vec::new();
+            parts.push(format!("Source: {}", result.file_path));
+            let breadcrumb = path_breadcrumb(&result.file_path);
+            if !breadcrumb.is_empty() {
+                parts.push(format!("Breadcrumb: {breadcrumb}"));
+            }
+            parts.push(format!("Code:\n{}", result.content));
+            parts.join("\n")
+        }
+        EffectiveMetadataMode::Full => format_full_metadata(result),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EffectiveMetadataMode {
+    Full,
+    None,
+    Light,
+}
+
+fn effective_metadata_mode(
+    mode: RerankMetadataMode,
+    scope: Option<SearchScope>,
+) -> EffectiveMetadataMode {
+    match mode {
+        RerankMetadataMode::Full => EffectiveMetadataMode::Full,
+        RerankMetadataMode::None => EffectiveMetadataMode::None,
+        RerankMetadataMode::NonDocs => {
+            if scope == Some(SearchScope::Docs) {
+                EffectiveMetadataMode::None
+            } else {
+                EffectiveMetadataMode::Full
+            }
+        }
+        RerankMetadataMode::Light => EffectiveMetadataMode::Light,
+    }
+}
+
+fn format_full_metadata(result: &SearchResult) -> String {
     let mut parts = Vec::new();
     let filename = file_name(&result.file_path);
 
@@ -664,6 +634,19 @@ fn format_for_reranker(result: &SearchResult) -> String {
     parts.push(format!("Code:\n{}", result.content));
 
     parts.join("\n")
+}
+
+fn path_breadcrumb(file_path: &str) -> String {
+    let normalized = file_path.replace('\\', "/");
+    let segments: Vec<&str> = normalized
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    if segments.is_empty() {
+        String::new()
+    } else {
+        segments.join(" > ")
+    }
 }
 
 // ── Sanitization ─────────────────────────────────────────────────────
@@ -693,60 +676,130 @@ fn sanitize_error_message(msg: &str) -> String {
     }
 }
 
-fn is_context_limit_error(err: &RerankerError) -> bool {
+fn is_context_size_error(err: &RerankerError) -> bool {
     match err {
-        RerankerError::ApiError { status, message } if *status == 400 || *status == 500 => {
-            let m = message.to_ascii_lowercase();
-            m.contains("max context size")
-                || m.contains("exceed_context_size_error")
-                || m.contains("too large to process")
+        RerankerError::ApiError { status, message } if *status == 400 => {
+            let lower = message.to_ascii_lowercase();
+            lower.contains("exceed_context_size_error")
+                || lower.contains("max context size")
+                || lower.contains("n_ctx")
         }
         _ => false,
     }
 }
 
-fn is_retryable_reranker_error(err: &RerankerError) -> bool {
-    match err {
-        RerankerError::AuthError { .. } => false,
-        RerankerError::RateLimitError { .. } => true,
-        RerankerError::ConnectionError { .. } => true,
-        RerankerError::ResponseError { .. } => true,
-        RerankerError::ApiError { status, .. } => *status >= 500,
-    }
-}
-
-fn truncate_reranker_document(doc: &str, max_tokens: usize) -> String {
-    if max_tokens == 0 || crate::token_budget::estimate_tokens(doc) <= max_tokens {
-        return doc.to_string();
-    }
-
-    if let Some(code_start) = doc.find("Code:\n") {
-        let prefix_end = code_start + "Code:\n".len();
-        let prefix = &doc[..prefix_end];
-        let code = &doc[prefix_end..];
-        let prefix_tokens = crate::token_budget::estimate_tokens(prefix);
-        let keep_tokens = max_tokens.saturating_sub(prefix_tokens);
-        if keep_tokens > 0 {
-            return format!(
-                "{prefix}{}",
-                crate::token_budget::truncate_to_token_budget(code, keep_tokens)
-            );
-        }
-    }
-
-    crate::token_budget::truncate_to_token_budget(doc, max_tokens)
-}
-
 // ── Document truncation ──────────────────────────────────────────────
+
+const MAX_OVERFLOW_SPLIT_ROUNDS: usize = 4;
+const MIN_OVERFLOW_WINDOW_CHARS: usize = 160;
+
+fn initial_split_window_chars(max_document_chars: usize, document_len: usize) -> usize {
+    let base = if max_document_chars == 0 {
+        document_len
+    } else {
+        max_document_chars
+    };
+    let three_quarters = (base / 4).saturating_mul(3).max(1);
+    three_quarters.min(document_len.max(1))
+}
+
+fn shrink_split_window_chars(window_chars: usize) -> usize {
+    ((window_chars / 4).saturating_mul(3)).max(MIN_OVERFLOW_WINDOW_CHARS)
+}
+
+fn split_overlap_chars(window_chars: usize) -> usize {
+    window_chars / 3
+}
+
+fn split_document_with_overlap(
+    doc: &str,
+    window_chars: usize,
+    overlap_chars: usize,
+) -> Vec<String> {
+    if doc.is_empty() {
+        return vec![String::new()];
+    }
+    if window_chars == 0 || doc.len() <= window_chars {
+        return vec![doc.to_string()];
+    }
+
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+    let step = window_chars.saturating_sub(overlap_chars).max(1);
+
+    while start < doc.len() {
+        start = ceil_char_boundary(doc, start.min(doc.len()));
+        if start >= doc.len() {
+            break;
+        }
+
+        let mut end = floor_char_boundary(doc, (start + window_chars).min(doc.len()));
+        if end <= start {
+            end = doc
+                .get(start..)
+                .and_then(|tail| tail.char_indices().nth(1).map(|(idx, _)| start + idx))
+                .unwrap_or(doc.len());
+        }
+
+        let slice = &doc[start..end];
+        let chunk = if end < doc.len() {
+            match slice.rfind('\n') {
+                Some(pos) if pos > 0 => slice[..pos].to_string(),
+                _ => slice.to_string(),
+            }
+        } else {
+            slice.to_string()
+        };
+
+        if !chunk.is_empty() {
+            chunks.push(chunk);
+        }
+
+        if end >= doc.len() {
+            break;
+        }
+
+        let mut next_start = ceil_char_boundary(doc, start.saturating_add(step).min(doc.len()));
+        if next_start <= start {
+            next_start = end;
+        }
+        if next_start <= start {
+            break;
+        }
+        start = next_start;
+    }
+
+    if chunks.is_empty() {
+        vec![doc.to_string()]
+    } else {
+        chunks
+    }
+}
+
+fn floor_char_boundary(text: &str, mut idx: usize) -> usize {
+    idx = idx.min(text.len());
+    while idx > 0 && !text.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
+fn ceil_char_boundary(text: &str, mut idx: usize) -> usize {
+    idx = idx.min(text.len());
+    while idx < text.len() && !text.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx
+}
 
 /// Truncate a document to at most `max_chars` characters, cutting at the last
 /// newline boundary to avoid splitting mid-line. Documents within the limit
-/// are returned as-is.
-#[cfg(test)]
+/// are returned as-is (zero-copy path).
 fn truncate_document(doc: &str, max_chars: usize) -> String {
     if max_chars == 0 || doc.len() <= max_chars {
         return doc.to_string();
     }
+    // Find the last char boundary at or before max_chars.
     let mut end = max_chars.min(doc.len());
     while end > 0 && !doc.is_char_boundary(end) {
         end -= 1;
@@ -865,7 +918,7 @@ pub(crate) mod test_helpers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Language, SymbolType};
+    use crate::types::{Language, SearchScope, SymbolType};
 
     /// Helper to create a SearchResult with given parameters.
     fn make_result(
@@ -1006,9 +1059,15 @@ mod tests {
             make_result("c.rs", 1, 10, 0.3, Some("func_c"), "fn func_c() {}"),
         ];
 
-        let reranked = rerank_results(&reranker, "test query", &results, 10)
-            .await
-            .unwrap();
+        let reranked = rerank_results(
+            &reranker,
+            "test query",
+            &results,
+            10,
+            RerankFormatOptions::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(reranked.len(), 3);
         // Scores should be descending.
@@ -1028,9 +1087,15 @@ mod tests {
             make_result("b.rs", 1, 10, 50.0, None, "fn b() {}"),
         ];
 
-        let reranked = rerank_results(&reranker, "query", &results, 10)
-            .await
-            .unwrap();
+        let reranked = rerank_results(
+            &reranker,
+            "query",
+            &results,
+            10,
+            RerankFormatOptions::default(),
+        )
+        .await
+        .unwrap();
 
         // Original scores (100.0, 50.0) should be replaced by reranker scores.
         for result in &reranked {
@@ -1054,9 +1119,15 @@ mod tests {
             "fn authenticate() {}",
         )];
 
-        let reranked = rerank_results(&reranker, "auth", &results, 10)
-            .await
-            .unwrap();
+        let reranked = rerank_results(
+            &reranker,
+            "auth",
+            &results,
+            10,
+            RerankFormatOptions::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(reranked.len(), 1);
         let r = &reranked[0];
@@ -1081,9 +1152,15 @@ mod tests {
         ];
 
         // Only rerank top 2 candidates.
-        let reranked = rerank_results(&reranker, "query", &results, 2)
-            .await
-            .unwrap();
+        let reranked = rerank_results(
+            &reranker,
+            "query",
+            &results,
+            2,
+            RerankFormatOptions::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             reranked.len(),
@@ -1096,7 +1173,9 @@ mod tests {
     async fn rerank_results_empty_input() {
         let reranker = test_helpers::MockReranker::new();
 
-        let reranked = rerank_results(&reranker, "query", &[], 10).await.unwrap();
+        let reranked = rerank_results(&reranker, "query", &[], 10, RerankFormatOptions::default())
+            .await
+            .unwrap();
 
         assert!(reranked.is_empty());
     }
@@ -1108,7 +1187,14 @@ mod tests {
         });
         let results = vec![make_result("a.rs", 1, 10, 0.5, None, "fn a() {}")];
 
-        let result = rerank_results(&reranker, "query", &results, 10).await;
+        let result = rerank_results(
+            &reranker,
+            "query",
+            &results,
+            10,
+            RerankFormatOptions::default(),
+        )
+        .await;
 
         assert!(result.is_err());
         assert!(matches!(
@@ -1125,7 +1211,14 @@ mod tests {
         });
         let results = vec![make_result("a.rs", 1, 10, 0.5, None, "fn a() {}")];
 
-        let result = rerank_results(&reranker, "query", &results, 10).await;
+        let result = rerank_results(
+            &reranker,
+            "query",
+            &results,
+            10,
+            RerankFormatOptions::default(),
+        )
+        .await;
 
         assert!(result.is_err());
         assert!(matches!(
@@ -1137,62 +1230,9 @@ mod tests {
     // ── format_for_reranker tests ────────────────────────────────────
 
     #[test]
-    fn split_reranker_document_keeps_prefix_and_limits_size() {
-        let prefix = "Symbol: demo\nFilename: a.rs\nFile: a.rs (rust)\nPath tokens: a rs\nRole: source\nLines: 1-1\nCode:\n";
-        let body = "x".repeat(2000);
-        let doc = format!("{prefix}{body}");
-
-        let max_tokens = 120;
-        let parts = split_reranker_document(&doc, max_tokens, 24);
-        assert!(parts.len() > 1, "document should be split into windows");
-        for part in &parts {
-            assert!(part.starts_with(prefix));
-            assert!(crate::token_budget::estimate_tokens(part) <= max_tokens + 16);
-        }
-    }
-
-    #[test]
-    fn aggregate_split_scores_uses_top2_mean_per_original_doc() {
-        let expanded_to_original = vec![0, 0, 1, 1, 2];
-        let expanded_scores = vec![
-            RerankScore {
-                index: 0,
-                relevance_score: 0.1,
-            },
-            RerankScore {
-                index: 1,
-                relevance_score: 0.9,
-            },
-            RerankScore {
-                index: 2,
-                relevance_score: 0.4,
-            },
-            RerankScore {
-                index: 3,
-                relevance_score: 0.6,
-            },
-            RerankScore {
-                index: 4,
-                relevance_score: 0.2,
-            },
-        ];
-
-        let aggregated = aggregate_split_scores(expanded_scores, &expanded_to_original, 3);
-        assert_eq!(aggregated.len(), 3);
-        let doc0 = aggregated.iter().find(|s| s.index == 0).unwrap();
-        assert!((doc0.relevance_score - 0.5).abs() < 1e-9);
-
-        let doc1 = aggregated.iter().find(|s| s.index == 1).unwrap();
-        assert!((doc1.relevance_score - 0.5).abs() < 1e-9);
-
-        let doc2 = aggregated.iter().find(|s| s.index == 2).unwrap();
-        assert!((doc2.relevance_score - 0.2).abs() < 1e-9);
-    }
-
-    #[test]
     fn format_includes_symbol_info() {
         let result = make_result("lib.rs", 1, 10, 0.5, Some("my_func"), "fn my_func() {}");
-        let formatted = format_for_reranker(&result);
+        let formatted = format_for_reranker(&result, RerankFormatOptions::default());
 
         assert!(formatted.contains("Symbol: my_func"));
         assert!(formatted.contains("Symbol type: function"));
@@ -1205,12 +1245,65 @@ mod tests {
     fn format_without_symbol_info() {
         let mut result = make_result("lib.rs", 1, 10, 0.5, None, "some code");
         result.symbol_type = None;
-        let formatted = format_for_reranker(&result);
+        let formatted = format_for_reranker(&result, RerankFormatOptions::default());
 
         assert!(formatted.contains("Filename: lib.rs"));
         assert!(formatted.contains("File: lib.rs"));
         assert!(formatted.contains("some code"));
         assert!(!formatted.contains("Symbol type:"));
+    }
+
+    #[test]
+    fn format_none_mode_sends_content_only() {
+        let result = make_result("src/auth.rs", 1, 3, 0.5, Some("auth"), "fn auth() {}\n");
+        let formatted = format_for_reranker(
+            &result,
+            RerankFormatOptions {
+                metadata_mode: RerankMetadataMode::None,
+                scope: None,
+            },
+        );
+
+        assert_eq!(formatted, "fn auth() {}\n");
+    }
+
+    #[test]
+    fn format_non_docs_mode_skips_metadata_for_docs_scope() {
+        let result = make_result("docs/guide/intro.md", 1, 5, 0.5, None, "Symfony docs text");
+        let formatted = format_for_reranker(
+            &result,
+            RerankFormatOptions {
+                metadata_mode: RerankMetadataMode::NonDocs,
+                scope: Some(SearchScope::Docs),
+            },
+        );
+
+        assert_eq!(formatted, "Symfony docs text");
+    }
+
+    #[test]
+    fn format_light_mode_includes_source_and_breadcrumb() {
+        let result = make_result(
+            "docs/components/security.rst",
+            10,
+            20,
+            0.8,
+            Some("authenticate"),
+            "security docs excerpt",
+        );
+        let formatted = format_for_reranker(
+            &result,
+            RerankFormatOptions {
+                metadata_mode: RerankMetadataMode::Light,
+                scope: None,
+            },
+        );
+
+        assert!(formatted.contains("Source: docs/components/security.rst"));
+        assert!(formatted.contains("Breadcrumb: docs > components > security.rst"));
+        assert!(formatted.contains("Code:\nsecurity docs excerpt"));
+        assert!(!formatted.contains("Path tokens:"));
+        assert!(!formatted.contains("Role:"));
     }
 
     // ── sanitize_error_message tests ─────────────────────────────────
@@ -1238,6 +1331,15 @@ mod tests {
     fn sanitize_empty_message() {
         let sanitized = sanitize_error_message("");
         assert_eq!(sanitized, "no details available");
+    }
+
+    #[test]
+    fn context_size_error_detection_matches_provider_payload() {
+        let err = RerankerError::ApiError {
+            status: 400,
+            message: r#"{"error":{"type":"exceed_context_size_error","n_ctx":512}}"#.to_string(),
+        };
+        assert!(is_context_size_error(&err));
     }
 
     // ── ApiReranker endpoint URL tests ───────────────────────────────
@@ -1294,6 +1396,33 @@ mod tests {
     #[test]
     fn truncate_document_zero_max_passthrough() {
         assert_eq!(truncate_document("hello", 0), "hello");
+    }
+
+    #[test]
+    fn split_window_defaults_match_requested_1000_to_750_250_pattern() {
+        let window = initial_split_window_chars(1000, 1000);
+        let overlap = split_overlap_chars(window);
+        assert_eq!(window, 750);
+        assert_eq!(overlap, 250);
+    }
+
+    #[test]
+    fn split_document_with_overlap_generates_expected_two_windows_for_1000_chars() {
+        let doc = "a".repeat(1000);
+        let chunks = split_document_with_overlap(&doc, 750, 250);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].len(), 750);
+        assert_eq!(chunks[1].len(), 500);
+    }
+
+    #[test]
+    fn split_document_with_overlap_respects_utf8_boundaries() {
+        let doc = "abc🦀def\n".repeat(200);
+        let chunks = split_document_with_overlap(&doc, 180, 60);
+        assert!(!chunks.is_empty());
+        for chunk in chunks {
+            assert!(chunk.is_char_boundary(chunk.len()));
+        }
     }
 
     #[tokio::test]

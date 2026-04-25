@@ -9,6 +9,8 @@
 [![GitHub release](https://img.shields.io/github/v/release/lemon07r/Vera?include_prereleases&sort=semver)](https://github.com/lemon07r/Vera/releases)
 [![Languages](https://img.shields.io/badge/languages-64%2B-green.svg)](docs/supported-languages.md)
 
+[Install Guide](docs/installation.md)
+·
 [Features](docs/features.md)
 ·
 [Query Guide](docs/query-guide.md)
@@ -23,15 +25,30 @@
 
 **V**ector **E**nhanced **R**eranking **A**gent
 
-Code search that combines BM25 keyword matching, vector similarity, and cross-encoder reranking. Supports 64 languages (60 with tree-sitter parsing), runs locally, returns structured results with file paths, line ranges, symbol metadata, and relevance scores.
+Code search that combines BM25 keyword matching, vector similarity, and cross-encoder reranking. Supports 65 languages (61 with tree-sitter parsing), runs locally, returns structured results with file paths, line ranges, symbol metadata, and relevance scores.
 
 </div>
 
 ## Quick Start
 
+**1. Install**
 ```bash
 bunx @vera-ai/cli install   # or: npx -y @vera-ai/cli install / uvx vera-ai install
-vera setup                   # downloads local models, no API needed
+```
+
+**2. Set up models** (pick one)
+```bash
+vera setup                       # Interactive wizard (auto-detects your hardware)
+vera setup --api                 # API mode: works everywhere, no GPU needed (recommended)
+vera setup --onnx-jina-coreml    # Apple Silicon (M1/M2/M3/M4)
+vera setup --onnx-jina-cuda      # NVIDIA GPU
+vera setup --onnx-jina-rocm      # AMD GPU (ROCm, Linux)
+vera setup --onnx-jina-openvino  # Intel GPU (OpenVINO, Linux)
+vera setup --onnx-jina-directml  # DirectX 12 GPU (Windows)
+```
+
+**3. Index and search**
+```bash
 vera index .
 vera search "authentication logic"
 ```
@@ -41,79 +58,43 @@ vera search "authentication logic"
 | | |
 |---|---|
 | **Cross-encoder reranking** | Most tools stop at retrieval. Vera scores query-candidate pairs jointly, lifting MRR@10 from 0.28 to 0.60. |
-| **Single binary, 64 languages** | One static binary with 60 tree-sitter grammars compiled in. No Python, no language servers, no per-language toolchains. |
+| **Single binary, 65 languages** | One static binary with 61 tree-sitter grammars compiled in. No Python, no language servers, no per-language toolchains. |
 | **Built-in code intelligence** | Call graph analysis, reference finding, dead code detection, and project overview, all from the same index. |
 | **Token-efficient for agents** | Returns symbol-bounded chunks, not entire files. 75-95% fewer tokens on typical queries. |
 
-Vera started after weeks of working on Pampax, a project I forked because it and other similar tools were missing what I wanted. I kept running into deep-rooted bugs and less-than-ideal design decisions, and realized starting fresh would be better. Every design choice comes from careful research, learning from other projects, benchmarking and evaluation. Take a look at the full [feature list](docs/features.md) to see everything Vera can do.
+Vera started after weeks of working on Pampax, a project I forked because it and other similar tools were missing what I wanted. I kept running into deep-rooted bugs, less-than-ideal design decisions, and thought I could build something better from the ground up. Every design choice comes from careful research, learning from other projects, benchmarking and evaluation. Take a look at the full [feature list](docs/features.md) to see everything Vera can do.
 
 ## Installation
 
 ```bash
 bunx @vera-ai/cli install   # or: npx -y @vera-ai/cli install / uvx vera-ai install
-vera setup
 ```
 
-The installer downloads the `vera` binary, writes a shim to a user bin directory, and installs global agent skill files. After that, `vera` is a standalone command.
+### Pick Your Backend
 
-`vera setup` runs an interactive wizard for backend selection, agent skill installation, and optional project indexing. Skip the wizard with flags: `--onnx-jina-cuda` (NVIDIA), `--onnx-jina-coreml` (Apple Silicon), `--api` (remote endpoints). Run `vera setup --help` for all options.
+Vera itself is always local: the index lives in `.vera/` per project, config and models in `$XDG_DATA_HOME/vera` (or `~/.vera` for existing installs). The backend choice only affects where embeddings and reranking run.
+
+| You have | Run this | What happens |
+|----------|----------|-------------|
+| Not sure | `vera setup` | Interactive wizard auto-detects your hardware |
+| Any hardware | `vera setup --api` | Models run remotely via any OpenAI-compatible API. No GPU needed. **Recommended.** |
+| Apple Silicon (M1/M2/M3/M4) | `vera setup --onnx-jina-coreml` | Downloads local models, uses CoreML GPU acceleration |
+| NVIDIA GPU | `vera setup --onnx-jina-cuda` | Downloads local models, uses CUDA. Fastest local option |
+| AMD GPU (Linux) | `vera setup --onnx-jina-rocm` | Downloads local models, uses ROCm |
+| Intel GPU (Linux) | `vera setup --onnx-jina-openvino` | Downloads local models, uses OpenVINO |
+| DirectX 12 GPU (Windows) | `vera setup --onnx-jina-directml` | Downloads local models, uses DirectML |
+
+API mode works with any OpenAI-compatible endpoint and needs no local compute. Local mode downloads two curated ONNX models and auto-detects your GPU; a GPU is recommended since CPU-only indexing is slow. After the first index, `vera update .` only re-embeds changed files, so incremental updates are fast on any backend. Full details: [docs/models.md](docs/models.md).
+
+For step-by-step instructions, API provider options, Docker, building from source, and troubleshooting, see the full [Installation Guide](docs/installation.md).
 
 <details>
-<summary>Other install methods</summary>
+<summary>MCP server</summary>
 
-**MCP server** (JSON-RPC over stdio):
 ```bash
 vera mcp   # or: bunx @vera-ai/cli mcp / uvx vera-ai mcp
 ```
-Exposes `search_code`, `get_overview`, and `regex_search` tools. `search_code` auto-indexes and starts a file watcher on first use if no index exists.
-
-**Docker** (MCP server):
-```bash
-docker run --rm -i -v $(pwd):/workspace ghcr.io/lemon07r/vera:cpu
-```
-CPU, CUDA, ROCm, and OpenVINO images available. See [docs/docker.md](docs/docker.md).
-
-**Prebuilt binaries:**
-Download from [GitHub Releases](https://github.com/lemon07r/Vera/releases) for Linux (x86_64, aarch64), macOS (x86_64, aarch64), or Windows (x86_64). For Alpine, NixOS, or minimal containers without glibc, use the `x86_64-unknown-linux-musl` archive (fully static, zero runtime dependencies). The npm/pip wrappers auto-detect musl systems; to force a specific target, set `VERA_TARGET=x86_64-unknown-linux-musl` before running the install command.
-
-**Build from source** (Rust 1.85+):
-```bash
-git clone https://github.com/lemon07r/Vera.git && cd Vera
-cargo build --release
-cp target/release/vera ~/.local/bin/
-vera setup
-```
-
-**Manual install:** [docs/manual-install.md](docs/manual-install.md)
-
-</details>
-
-<details>
-<summary>Updating</summary>
-
-Vera checks for new releases daily and prints a hint when one is available.
-
-```bash
-vera upgrade              # dry run: shows what would happen
-vera upgrade --apply      # applies the update
-```
-
-After an upgrade, Vera automatically syncs stale agent skill installs. Set `VERA_NO_UPDATE_CHECK=1` to disable the automatic check.
-
-If you are having trouble updating try one of these, using the package manager you initially installed Vera with:
-
-Bun: 
-```bash
-bun install -g @vera-ai/cli && bunx @vera-ai/cli install
-```
-npm: 
-```bash
-npm install -g @vera-ai/cli && npx @vera-ai/cli install
-```
-uvx: 
-```bash
-uvx vera-ai install 
-```
+Exposes `search_code`, `get_stats`, `get_overview`, and `regex_search` tools. `search_code` auto-indexes and starts a file watcher on first use if no index exists.
 
 </details>
 
@@ -124,7 +105,7 @@ vera search "authentication logic"
 vera search "error handling" --lang rust
 vera search "routes" --path "src/**/*.ts"
 vera search "handler" --type function --limit 5
-vera search "config loading" --deep              # RAG-fusion: query expansion + reciprocal rank fusion
+vera search "config loading" --deep              # query decomposition + parallel search (or iterative symbol-following)
 vera search "auth" --compact                     # signatures only, broad exploration
 ```
 
@@ -188,14 +169,6 @@ Use `--json` for compact JSON, `--raw` for verbose human-readable output, or `--
 
 Vera respects `.gitignore` by default. Create a `.veraignore` file (gitignore syntax) for more control, or use `--exclude` flags. Details: [docs/features.md](docs/features.md#flexible-exclusions).
 
-## Model Backend
-
-Vera itself is always local: the index lives in `.vera/` per project, config and models in `$XDG_DATA_HOME/vera` (or `~/.vera` for existing installs). The backend choice only affects where embeddings and reranking run.
-
-`vera setup` downloads two curated ONNX models and auto-detects your GPU. GPU is recommended; CPU works but is slow for initial indexing. After the first index, `vera update .` only re-embeds changed files, so updates are fast even on CPU.
-
-Full details: [docs/models.md](docs/models.md).
-
 ## Benchmarks
 
 21-task benchmark across `ripgrep`, `flask`, `fastify`, and `turborepo`:
@@ -229,7 +202,7 @@ Use Vera before opening many files or running broad text search when you need to
 - `vera grep "pattern"` for exact text or regex
 - `vera references <symbol>` for callers and callees
 - `vera overview` for a project summary (languages, entry points, hotspots)
-- `vera search --deep "query"` for RAG-fusion query expansion + merged ranking
+- `vera search --deep "query"` for query decomposition + parallel search with weighted fusion
 - Narrow results with `--lang`, `--path`, `--type`, or `--scope docs`
 - `vera watch .` to auto-update the index, or `vera update .` after edits (`vera index .` if `.vera/` is missing)
 - For detailed usage, query patterns, and troubleshooting, read the Vera skill file installed by `vera agent install`

@@ -1,21 +1,57 @@
-//! `vera config` -- Show or set configuration values.
+//! `vera config` — Show or set configuration values.
 
 use anyhow::{Context, bail};
+use serde::Serialize;
 
 use crate::helpers::load_runtime_config;
 use crate::state;
 
+const SECRET_SET_MARKER: &str = "[set]";
+
+#[derive(Debug, Clone, Serialize)]
+struct EffectiveApiConfig {
+    embedding: EffectiveEmbeddingConfig,
+    reranker: EffectiveEndpointConfig,
+    completion: EffectiveEndpointConfig,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EffectiveEmbeddingConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    query_prefix: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EffectiveEndpointConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    api_key: Option<String>,
+}
+
 /// Run the `vera config` command.
 pub fn run(args: &[String], json_output: bool) -> anyhow::Result<()> {
     let mut config = load_runtime_config()?;
+    let mut stored = state::load_saved_config()?;
+    let mut secrets = state::load_saved_secrets()?;
 
     match args.first().map(|s| s.as_str()) {
         None | Some("show") => {
+            let api = effective_api_config(&stored, &secrets);
+
+            // Show full configuration.
             if json_output {
-                print_json_config(&config)?;
+                print_json_config(&config, &api)?;
             } else {
-                print_human_config(&config);
-                print_stored_sections()?;
+                print_human_config(&config, &api);
             }
         }
         Some("get") => {
@@ -27,13 +63,9 @@ pub fn run(args: &[String], json_output: bool) -> anyhow::Result<()> {
                      e.g., `vera config get retrieval.default_limit`"
                 ),
             };
-
-            let value = if let Some(value) = get_config_value(&config, key) {
-                Some(value)
-            } else {
-                get_stored_config_value(key)?
-            };
-
+            let api = effective_api_config(&stored, &secrets);
+            let value = get_config_value(&config, key)
+                .or_else(|| get_external_config_value(&config, &api, key));
             match value {
                 Some(v) => {
                     if json_output {
@@ -53,22 +85,17 @@ pub fn run(args: &[String], json_output: bool) -> anyhow::Result<()> {
             let value = args.get(2);
             match (key, value) {
                 (Some(key), Some(value)) => {
-                    let handled = if set_config_value(&mut config, key, value)? {
+                    if set_config_value(&mut config, key, value)? {
                         state::save_runtime_config(&config)?;
-                        true
+                    } else if set_external_config_value(&mut stored, &mut secrets, key, value) {
+                        state::persist_saved_config(&stored)?;
+                        state::persist_saved_secrets(&secrets)?;
                     } else {
-                        set_stored_config_value(key, value)?
-                    };
-
-                    if !handled {
                         bail!(
                             "unknown configuration key: {key}\n\
                              Hint: run `vera config show` to see all available keys."
                         );
                     }
-
-                    // Ensure in-process env reflects any saved provider settings.
-                    state::apply_saved_env_force()?;
 
                     if json_output {
                         let result = serde_json::json!({
@@ -98,226 +125,175 @@ pub fn run(args: &[String], json_output: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_json_config(config: &vera_core::config::VeraConfig) -> anyhow::Result<()> {
-    let stored = state::load_saved_config()?;
-    let secrets = state::load_saved_secrets()?;
+fn print_json_config(
+    config: &vera_core::config::VeraConfig,
+    api: &EffectiveApiConfig,
+) -> anyhow::Result<()> {
+    let mut json = serde_json::to_value(config)
+        .map_err(|e| anyhow::anyhow!("failed to serialize config: {e}"))?;
 
-    let json = serde_json::json!({
-        "indexing": config.indexing,
-        "retrieval": config.retrieval,
-        "embedding": config.embedding,
-        "embedding_api": stored.embedding_api,
-        "reranker_api": stored.reranker_api,
-        "completion_api": stored.completion_api,
-        "credentials": {
-            "embedding_api_key_set": secrets.embedding_api_key.as_deref().is_some_and(|v| !v.is_empty()),
-            "reranker_api_key_set": secrets.reranker_api_key.as_deref().is_some_and(|v| !v.is_empty()),
-            "completion_api_key_set": secrets.completion_api_key.as_deref().is_some_and(|v| !v.is_empty())
-        }
-    });
-    println!("{}", serde_json::to_string_pretty(&json)?);
+    let object = json
+        .as_object_mut()
+        .context("failed to serialize config as object")?;
+    object.insert(
+        "api".to_string(),
+        serde_json::to_value(api)
+            .map_err(|e| anyhow::anyhow!("failed to serialize API config: {e}"))?,
+    );
+
+    let rendered = serde_json::to_string_pretty(&json)
+        .map_err(|e| anyhow::anyhow!("failed to render config JSON: {e}"))?;
+    println!("{rendered}");
     Ok(())
 }
 
-/// Print human-readable runtime configuration.
-fn print_human_config(config: &vera_core::config::VeraConfig) {
+/// Print human-readable configuration.
+fn print_human_config(config: &vera_core::config::VeraConfig, api: &EffectiveApiConfig) {
     println!("Vera Configuration");
     println!();
     println!("  Indexing:");
     println!(
-        "    max_chunk_lines                 {}",
+        "    max_chunk_lines           {}",
         config.indexing.max_chunk_lines
     );
     println!(
-        "    max_file_size_bytes             {}",
+        "    max_file_size_bytes       {}",
         config.indexing.max_file_size_bytes
     );
     println!(
-        "    max_chunk_bytes                 {}",
+        "    max_chunk_bytes           {}",
         config.indexing.max_chunk_bytes
     );
     println!(
-        "    max_chunk_tokens                {}",
-        config.indexing.max_chunk_tokens
+        "    max_chunk_overlap_bytes   {}",
+        config.indexing.max_chunk_overlap_bytes
     );
     println!(
-        "    chunk_overlap_lines             {}",
-        config.indexing.chunk_overlap_lines
-    );
-    println!(
-        "    default_excludes                {:?}",
+        "    default_excludes          {:?}",
         config.indexing.default_excludes
     );
     println!();
     println!("  Retrieval:");
     println!(
-        "    default_limit                   {}",
+        "    default_limit             {}",
         config.retrieval.default_limit
     );
     println!(
-        "    max_output_chars                {}",
+        "    max_output_chars          {}",
         config.retrieval.max_output_chars
     );
     println!(
-        "    rrf_k                           {}",
-        config.retrieval.rrf_k
+        "    fail_on_stage_error       {}",
+        config.retrieval.fail_on_stage_error
     );
+    println!("    rrf_k                     {}", config.retrieval.rrf_k);
     println!(
-        "    rerank_candidates               {}",
+        "    rerank_candidates         {}",
         config.retrieval.rerank_candidates
     );
     println!(
-        "    reranking_enabled               {}",
+        "    max_bm25_candidates       {}",
+        config.retrieval.max_bm25_candidates
+    );
+    println!(
+        "    max_vector_candidates     {}",
+        config.retrieval.max_vector_candidates
+    );
+    println!(
+        "    reranking_enabled         {}",
         config.retrieval.reranking_enabled
     );
     println!(
-        "    max_rerank_batch                {}",
+        "    max_rerank_batch          {}",
         config.retrieval.max_rerank_batch
     );
     println!(
-        "    reranker_max_docs_per_request   {}",
-        config.retrieval.reranker_max_docs_per_request
+        "    max_rerank_doc_chars      {}",
+        config.retrieval.max_rerank_doc_chars
     );
     println!(
-        "    reranker_max_document_tokens    {}",
-        config.retrieval.reranker_max_document_tokens
+        "    rerank_metadata_mode      {}",
+        config.retrieval.rerank_metadata_mode
+    );
+    println!(
+        "    adaptive_exact_query_tuning {}",
+        config.retrieval.adaptive_exact_query_tuning
     );
     println!();
     println!("  Embedding:");
     println!(
-        "    batch_size                      {}",
+        "    batch_size                {}",
         config.embedding.batch_size
     );
     println!(
-        "    max_concurrent_requests         {}",
+        "    max_concurrent_requests   {}",
         config.embedding.max_concurrent_requests
     );
     println!(
-        "    timeout_secs                    {}",
+        "    timeout_secs              {}",
         config.embedding.timeout_secs
     );
     println!(
-        "    max_retries                     {}",
+        "    max_retries               {}",
         config.embedding.max_retries
     );
     println!(
-        "    max_stored_dim                  {}",
+        "    max_stored_dim            {}",
         config.embedding.max_stored_dim
     );
+    println!();
+    println!("  API:");
+    println!(
+        "    embedding.base_url        {}",
+        display_optional(&api.embedding.base_url)
+    );
+    println!(
+        "    embedding.model_id        {}",
+        display_optional(&api.embedding.model_id)
+    );
+    println!(
+        "    embedding.api_key         {}",
+        display_optional(&api.embedding.api_key)
+    );
+    println!(
+        "    embedding.query_prefix    {}",
+        display_optional(&api.embedding.query_prefix)
+    );
+    println!(
+        "    reranker.base_url         {}",
+        display_optional(&api.reranker.base_url)
+    );
+    println!(
+        "    reranker.model_id         {}",
+        display_optional(&api.reranker.model_id)
+    );
+    println!(
+        "    reranker.api_key          {}",
+        display_optional(&api.reranker.api_key)
+    );
+    println!(
+        "    reranker.max_docs_per_request {}",
+        config.retrieval.max_rerank_batch
+    );
+    println!(
+        "    completion.base_url       {}",
+        display_optional(&api.completion.base_url)
+    );
+    println!(
+        "    completion.model_id       {}",
+        display_optional(&api.completion.model_id)
+    );
+    println!(
+        "    completion.api_key        {}",
+        display_optional(&api.completion.api_key)
+    );
 }
 
-fn print_stored_sections() -> anyhow::Result<()> {
-    let stored = state::load_saved_config()?;
-    let secrets = state::load_saved_secrets()?;
-
-    println!();
-    println!("  Embedding API:");
-    println!(
-        "    base_url                        {}",
-        stored
-            .embedding_api
-            .as_ref()
-            .map(|v| v.base_url.as_str())
-            .unwrap_or("<unset>")
-    );
-    println!(
-        "    model_id                        {}",
-        stored
-            .embedding_api
-            .as_ref()
-            .map(|v| v.model_id.as_str())
-            .unwrap_or("<unset>")
-    );
-    println!(
-        "    api_key                         {}",
-        secret_status(secrets.embedding_api_key.as_deref())
-    );
-
-    println!();
-    println!("  Reranker API:");
-    println!(
-        "    base_url                        {}",
-        stored
-            .reranker_api
-            .as_ref()
-            .map(|v| v.base_url.as_str())
-            .unwrap_or("<unset>")
-    );
-    println!(
-        "    model_id                        {}",
-        stored
-            .reranker_api
-            .as_ref()
-            .map(|v| v.model_id.as_str())
-            .unwrap_or("<unset>")
-    );
-    println!(
-        "    api_key                         {}",
-        secret_status(secrets.reranker_api_key.as_deref())
-    );
-
-    println!();
-    println!("  Completion API:");
-    println!(
-        "    base_url                        {}",
-        stored
-            .completion_api
-            .as_ref()
-            .map(|v| v.base_url.as_str())
-            .unwrap_or("<unset>")
-    );
-    println!(
-        "    model_id                        {}",
-        stored
-            .completion_api
-            .as_ref()
-            .map(|v| v.model_id.as_str())
-            .unwrap_or("<unset>")
-    );
-    println!(
-        "    timeout_secs                    {}",
-        stored
-            .completion_api
-            .as_ref()
-            .map(|v| v.timeout_secs.to_string())
-            .unwrap_or_else(|| "<unset>".to_string())
-    );
-    println!(
-        "    max_tokens                      {}",
-        stored
-            .completion_api
-            .as_ref()
-            .map(|v| v.max_tokens.to_string())
-            .unwrap_or_else(|| "<unset>".to_string())
-    );
-    println!(
-        "    max_alternatives                {}",
-        stored
-            .completion_api
-            .as_ref()
-            .map(|v| v.max_alternatives.to_string())
-            .unwrap_or_else(|| "<unset>".to_string())
-    );
-
-    let completion_key = stored
-        .completion_api
-        .as_ref()
-        .and_then(|value| value.api_key.as_deref())
-        .or(secrets.completion_api_key.as_deref());
-    println!(
-        "    api_key                         {}",
-        secret_status(completion_key)
-    );
-
-    Ok(())
-}
-
-fn secret_status(value: Option<&str>) -> &'static str {
-    if value.is_some_and(|v| !v.trim().is_empty()) {
-        "<set>"
-    } else {
-        "<unset>"
-    }
+fn display_optional(value: &Option<String>) -> &str {
+    value
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or("<unset>")
 }
 
 /// Get a configuration value by dot-notation key.
@@ -335,11 +311,8 @@ pub fn get_config_value(
         "indexing.max_chunk_bytes" => Some(serde_json::Value::Number(
             config.indexing.max_chunk_bytes.into(),
         )),
-        "indexing.max_chunk_tokens" => Some(serde_json::Value::Number(
-            config.indexing.max_chunk_tokens.into(),
-        )),
-        "indexing.chunk_overlap_lines" => Some(serde_json::Value::Number(
-            config.indexing.chunk_overlap_lines.into(),
+        "indexing.max_chunk_overlap_bytes" => Some(serde_json::Value::Number(
+            config.indexing.max_chunk_overlap_bytes.into(),
         )),
         "indexing.default_excludes" => serde_json::to_value(&config.indexing.default_excludes).ok(),
         "retrieval.default_limit" => Some(serde_json::Value::Number(
@@ -349,32 +322,41 @@ pub fn get_config_value(
         "retrieval.rerank_candidates" => Some(serde_json::Value::Number(
             config.retrieval.rerank_candidates.into(),
         )),
+        "retrieval.max_bm25_candidates" => Some(serde_json::Value::Number(
+            config.retrieval.max_bm25_candidates.into(),
+        )),
+        "retrieval.max_vector_candidates" => Some(serde_json::Value::Number(
+            config.retrieval.max_vector_candidates.into(),
+        )),
         "retrieval.reranking_enabled" => {
             Some(serde_json::Value::Bool(config.retrieval.reranking_enabled))
         }
-        "retrieval.max_output_chars" => Some(serde_json::Value::Number(
-            config.retrieval.max_output_chars.into(),
-        )),
         "retrieval.max_rerank_batch" => Some(serde_json::Value::Number(
             config.retrieval.max_rerank_batch.into(),
         )),
-        "retrieval.reranker_max_docs_per_request" => Some(serde_json::Value::Number(
-            config.retrieval.reranker_max_docs_per_request.into(),
+        "api.reranker.max_docs_per_request"
+        | "RERANKER_MAX_DOCS_PER_REQUEST"
+        | "VERA_MAX_RERANK_BATCH" => Some(serde_json::Value::Number(
+            config.retrieval.max_rerank_batch.into(),
         )),
-        "retrieval.reranker_max_document_tokens" => Some(serde_json::Value::Number(
-            config.retrieval.reranker_max_document_tokens.into(),
+        "retrieval.max_rerank_doc_chars" => Some(serde_json::Value::Number(
+            config.retrieval.max_rerank_doc_chars.into(),
         )),
-        "reranker.max_docs_per_request" => {
-            let value = if config.retrieval.reranker_max_docs_per_request > 0 {
-                config.retrieval.reranker_max_docs_per_request
-            } else {
-                config.retrieval.max_rerank_batch
-            };
-            Some(serde_json::Value::Number(value.into()))
+        "VERA_MAX_RERANK_DOC_CHARS" => Some(serde_json::Value::Number(
+            config.retrieval.max_rerank_doc_chars.into(),
+        )),
+        "retrieval.rerank_metadata_mode" | "VERA_RERANK_METADATA_MODE" => {
+            serde_json::to_value(config.retrieval.rerank_metadata_mode).ok()
         }
-        "reranker.max_document_tokens" => Some(serde_json::Value::Number(
-            config.retrieval.reranker_max_document_tokens.into(),
+        "retrieval.adaptive_exact_query_tuning" | "VERA_ADAPTIVE_EXACT_QUERY_TUNING" => Some(
+            serde_json::Value::Bool(config.retrieval.adaptive_exact_query_tuning),
+        ),
+        "retrieval.max_output_chars" => Some(serde_json::Value::Number(
+            config.retrieval.max_output_chars.into(),
         )),
+        "retrieval.fail_on_stage_error" | "VERA_FAIL_ON_STAGE_ERROR" => Some(
+            serde_json::Value::Bool(config.retrieval.fail_on_stage_error),
+        ),
         "embedding.batch_size" => Some(serde_json::Value::Number(
             config.embedding.batch_size.into(),
         )),
@@ -394,78 +376,127 @@ pub fn get_config_value(
     }
 }
 
-fn get_stored_config_value(key: &str) -> anyhow::Result<Option<serde_json::Value>> {
-    let stored = state::load_saved_config()?;
-    let secrets = state::load_saved_secrets()?;
-
-    let value = match key {
-        "embedding_api.base_url" => Some(optional_string(
-            stored.embedding_api.as_ref().map(|v| v.base_url.as_str()),
-        )),
-        "embedding_api.model_id" => Some(optional_string(
-            stored.embedding_api.as_ref().map(|v| v.model_id.as_str()),
-        )),
-        "embedding_api.api_key" => Some(optional_string(secrets.embedding_api_key.as_deref())),
-        "reranker_api.base_url" => Some(optional_string(
-            stored.reranker_api.as_ref().map(|v| v.base_url.as_str()),
-        )),
-        "reranker_api.model_id" => Some(optional_string(
-            stored.reranker_api.as_ref().map(|v| v.model_id.as_str()),
-        )),
-        "reranker_api.api_key" => Some(optional_string(secrets.reranker_api_key.as_deref())),
-        "completion_api.base_url" | "completion.base_url" => Some(optional_string(
-            stored.completion_api.as_ref().map(|v| v.base_url.as_str()),
-        )),
-        "completion_api.model_id" | "completion.model_id" => Some(optional_string(
-            stored.completion_api.as_ref().map(|v| v.model_id.as_str()),
-        )),
-        "completion_api.api_key" | "completion.api_key" => {
-            let key = stored
-                .completion_api
-                .as_ref()
-                .and_then(|value| value.api_key.as_deref())
-                .or(secrets.completion_api_key.as_deref());
-            Some(optional_string(key))
+fn get_external_config_value(
+    config: &vera_core::config::VeraConfig,
+    api: &EffectiveApiConfig,
+    key: &str,
+) -> Option<serde_json::Value> {
+    match key {
+        "api.embedding.base_url" | "EMBEDDING_MODEL_BASE_URL" => {
+            serde_json::to_value(&api.embedding.base_url).ok()
         }
-        "completion_api.timeout_secs" | "completion.timeout_secs" => Some(optional_u64(
-            stored.completion_api.as_ref().map(|v| v.timeout_secs),
+        "api.embedding.model_id" | "EMBEDDING_MODEL_ID" => {
+            serde_json::to_value(&api.embedding.model_id).ok()
+        }
+        "api.embedding.api_key" | "EMBEDDING_MODEL_API_KEY" => {
+            serde_json::to_value(&api.embedding.api_key).ok()
+        }
+        "api.embedding.query_prefix" | "EMBEDDING_QUERY_PREFIX" => {
+            serde_json::to_value(&api.embedding.query_prefix).ok()
+        }
+        "api.reranker.base_url" | "RERANKER_MODEL_BASE_URL" => {
+            serde_json::to_value(&api.reranker.base_url).ok()
+        }
+        "api.reranker.model_id" | "RERANKER_MODEL_ID" => {
+            serde_json::to_value(&api.reranker.model_id).ok()
+        }
+        "api.reranker.api_key" | "RERANKER_MODEL_API_KEY" => {
+            serde_json::to_value(&api.reranker.api_key).ok()
+        }
+        "api.reranker.max_docs_per_request"
+        | "RERANKER_MAX_DOCS_PER_REQUEST"
+        | "VERA_MAX_RERANK_BATCH" => Some(serde_json::Value::Number(
+            config.retrieval.max_rerank_batch.into(),
         )),
-        "completion_api.max_tokens" | "completion.max_tokens" => Some(optional_u32(
-            stored.completion_api.as_ref().map(|v| v.max_tokens),
-        )),
-        "completion_api.max_alternatives" | "completion.max_alternatives" => Some(optional_usize(
-            stored.completion_api.as_ref().map(|v| v.max_alternatives),
-        )),
+        "api.completion.base_url" | "VERA_COMPLETION_BASE_URL" => {
+            serde_json::to_value(&api.completion.base_url).ok()
+        }
+        "api.completion.model_id" | "VERA_COMPLETION_MODEL_ID" => {
+            serde_json::to_value(&api.completion.model_id).ok()
+        }
+        "api.completion.api_key" | "VERA_COMPLETION_API_KEY" => {
+            serde_json::to_value(&api.completion.api_key).ok()
+        }
         _ => None,
-    };
-
-    Ok(value)
-}
-
-fn optional_string(value: Option<&str>) -> serde_json::Value {
-    match value {
-        Some(value) => serde_json::Value::String(value.to_string()),
-        None => serde_json::Value::Null,
     }
 }
 
-fn optional_u64(value: Option<u64>) -> serde_json::Value {
-    value
-        .map(|v| serde_json::Value::Number(v.into()))
-        .unwrap_or(serde_json::Value::Null)
+fn effective_api_config(
+    stored: &state::StoredConfig,
+    secrets: &state::StoredSecrets,
+) -> EffectiveApiConfig {
+    EffectiveApiConfig {
+        embedding: EffectiveEmbeddingConfig {
+            base_url: effective_value(
+                "EMBEDDING_MODEL_BASE_URL",
+                stored.embedding_api.as_ref().map(|c| c.base_url.as_str()),
+            ),
+            model_id: effective_value(
+                "EMBEDDING_MODEL_ID",
+                stored.embedding_api.as_ref().map(|c| c.model_id.as_str()),
+            ),
+            api_key: effective_secret_marker(
+                "EMBEDDING_MODEL_API_KEY",
+                secrets.embedding_api_key.as_deref(),
+            ),
+            query_prefix: effective_value(
+                "EMBEDDING_QUERY_PREFIX",
+                stored.embedding_query_prefix.as_deref(),
+            ),
+        },
+        reranker: EffectiveEndpointConfig {
+            base_url: effective_value(
+                "RERANKER_MODEL_BASE_URL",
+                stored.reranker_api.as_ref().map(|c| c.base_url.as_str()),
+            ),
+            model_id: effective_value(
+                "RERANKER_MODEL_ID",
+                stored.reranker_api.as_ref().map(|c| c.model_id.as_str()),
+            ),
+            api_key: effective_secret_marker(
+                "RERANKER_MODEL_API_KEY",
+                secrets.reranker_api_key.as_deref(),
+            ),
+        },
+        completion: EffectiveEndpointConfig {
+            base_url: effective_value(
+                "VERA_COMPLETION_BASE_URL",
+                stored.completion_api.as_ref().map(|c| c.base_url.as_str()),
+            ),
+            model_id: effective_value(
+                "VERA_COMPLETION_MODEL_ID",
+                stored.completion_api.as_ref().map(|c| c.model_id.as_str()),
+            ),
+            api_key: effective_secret_marker(
+                "VERA_COMPLETION_API_KEY",
+                secrets.completion_api_key.as_deref(),
+            ),
+        },
+    }
 }
 
-fn optional_u32(value: Option<u32>) -> serde_json::Value {
-    value
-        .map(|v| serde_json::Value::Number(v.into()))
-        .unwrap_or(serde_json::Value::Null)
+fn effective_value(env_key: &str, fallback: Option<&str>) -> Option<String> {
+    std::env::var(env_key)
+        .ok()
+        .and_then(|value| normalize_optional_value(&value))
+        .or_else(|| fallback.and_then(normalize_optional_value))
 }
 
-fn optional_usize(value: Option<usize>) -> serde_json::Value {
-    value
-        .and_then(|v| u64::try_from(v).ok())
-        .map(|v| serde_json::Value::Number(v.into()))
-        .unwrap_or(serde_json::Value::Null)
+fn effective_secret_marker(env_key: &str, fallback: Option<&str>) -> Option<String> {
+    effective_value(env_key, fallback).map(|_| SECRET_SET_MARKER.to_string())
+}
+
+fn normalize_optional_value(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("none")
+        || trimmed.eq_ignore_ascii_case("null")
+        || trimmed.eq_ignore_ascii_case("unset")
+    {
+        None
+    } else {
+        Some(value.to_string())
+    }
 }
 
 fn set_config_value(
@@ -483,11 +514,8 @@ fn set_config_value(
         "indexing.max_chunk_bytes" => {
             config.indexing.max_chunk_bytes = parse_value(key, value)?;
         }
-        "indexing.max_chunk_tokens" => {
-            config.indexing.max_chunk_tokens = parse_value(key, value)?;
-        }
-        "indexing.chunk_overlap_lines" => {
-            config.indexing.chunk_overlap_lines = parse_value(key, value)?;
+        "indexing.max_chunk_overlap_bytes" => {
+            config.indexing.max_chunk_overlap_bytes = parse_value(key, value)?;
         }
         "indexing.default_excludes" => {
             config.indexing.default_excludes = serde_json::from_str(value).with_context(|| {
@@ -503,28 +531,40 @@ fn set_config_value(
         "retrieval.rerank_candidates" => {
             config.retrieval.rerank_candidates = parse_value(key, value)?;
         }
+        "retrieval.max_bm25_candidates" => {
+            config.retrieval.max_bm25_candidates = parse_value(key, value)?;
+        }
+        "retrieval.max_vector_candidates" => {
+            config.retrieval.max_vector_candidates = parse_value(key, value)?;
+        }
         "retrieval.reranking_enabled" => {
             config.retrieval.reranking_enabled = parse_value(key, value)?;
-        }
-        "retrieval.max_output_chars" => {
-            config.retrieval.max_output_chars = parse_value(key, value)?;
         }
         "retrieval.max_rerank_batch" => {
             config.retrieval.max_rerank_batch = parse_value(key, value)?;
         }
-        "retrieval.reranker_max_docs_per_request" | "reranker.max_docs_per_request" => {
-            config.retrieval.reranker_max_docs_per_request = parse_value(key, value)?;
+        "api.reranker.max_docs_per_request"
+        | "RERANKER_MAX_DOCS_PER_REQUEST"
+        | "VERA_MAX_RERANK_BATCH" => {
+            config.retrieval.max_rerank_batch = parse_value(key, value)?;
         }
-        "retrieval.reranker_max_document_tokens" | "reranker.max_document_tokens" => {
-            config.retrieval.reranker_max_document_tokens = parse_value(key, value)?;
+        "retrieval.max_rerank_doc_chars" => {
+            config.retrieval.max_rerank_doc_chars = parse_value(key, value)?;
         }
-        "reranker.max_document_chars" => {
-            let max_chars: usize = parse_value(key, value)?;
-            config.retrieval.reranker_max_document_tokens = if max_chars == 0 {
-                0
-            } else {
-                max_chars.div_ceil(4).max(16)
-            };
+        "VERA_MAX_RERANK_DOC_CHARS" => {
+            config.retrieval.max_rerank_doc_chars = parse_value(key, value)?;
+        }
+        "retrieval.rerank_metadata_mode" | "VERA_RERANK_METADATA_MODE" => {
+            config.retrieval.rerank_metadata_mode = parse_value(key, value)?;
+        }
+        "retrieval.adaptive_exact_query_tuning" | "VERA_ADAPTIVE_EXACT_QUERY_TUNING" => {
+            config.retrieval.adaptive_exact_query_tuning = parse_value(key, value)?;
+        }
+        "retrieval.max_output_chars" => {
+            config.retrieval.max_output_chars = parse_value(key, value)?;
+        }
+        "retrieval.fail_on_stage_error" | "VERA_FAIL_ON_STAGE_ERROR" => {
+            config.retrieval.fail_on_stage_error = parse_value(key, value)?;
         }
         "embedding.batch_size" => {
             config.embedding.batch_size = parse_value(key, value)?;
@@ -547,120 +587,91 @@ fn set_config_value(
     Ok(true)
 }
 
-fn set_stored_config_value(key: &str, value: &str) -> anyhow::Result<bool> {
-    let mut stored = state::load_saved_config()?;
-    let mut secrets = state::load_saved_secrets()?;
-    let mut config_changed = false;
-    let mut secrets_changed = false;
-
+fn set_external_config_value(
+    stored: &mut state::StoredConfig,
+    secrets: &mut state::StoredSecrets,
+    key: &str,
+    value: &str,
+) -> bool {
     match key {
-        "embedding_api.base_url" => {
-            let endpoint = stored
-                .embedding_api
-                .get_or_insert_with(default_api_endpoint_config);
-            endpoint.base_url = value.to_string();
-            config_changed = true;
+        "api.embedding.base_url" | "EMBEDDING_MODEL_BASE_URL" => {
+            set_endpoint_base_url(&mut stored.embedding_api, normalize_optional_value(value));
+            true
         }
-        "embedding_api.model_id" => {
-            let endpoint = stored
-                .embedding_api
-                .get_or_insert_with(default_api_endpoint_config);
-            endpoint.model_id = value.to_string();
-            config_changed = true;
+        "api.embedding.model_id" | "EMBEDDING_MODEL_ID" => {
+            set_endpoint_model_id(&mut stored.embedding_api, normalize_optional_value(value));
+            true
         }
-        "embedding_api.api_key" => {
-            secrets.embedding_api_key = Some(value.to_string());
-            secrets_changed = true;
+        "api.embedding.api_key" | "EMBEDDING_MODEL_API_KEY" => {
+            secrets.embedding_api_key = normalize_optional_value(value);
+            true
         }
-        "reranker_api.base_url" => {
-            let endpoint = stored
-                .reranker_api
-                .get_or_insert_with(default_api_endpoint_config);
-            endpoint.base_url = value.to_string();
-            config_changed = true;
+        "api.embedding.query_prefix" | "EMBEDDING_QUERY_PREFIX" => {
+            stored.embedding_query_prefix = normalize_optional_value(value);
+            true
         }
-        "reranker_api.model_id" => {
-            let endpoint = stored
-                .reranker_api
-                .get_or_insert_with(default_api_endpoint_config);
-            endpoint.model_id = value.to_string();
-            config_changed = true;
+        "api.reranker.base_url" | "RERANKER_MODEL_BASE_URL" => {
+            set_endpoint_base_url(&mut stored.reranker_api, normalize_optional_value(value));
+            true
         }
-        "reranker_api.api_key" => {
-            secrets.reranker_api_key = Some(value.to_string());
-            secrets_changed = true;
+        "api.reranker.model_id" | "RERANKER_MODEL_ID" => {
+            set_endpoint_model_id(&mut stored.reranker_api, normalize_optional_value(value));
+            true
         }
-        "completion_api.base_url" | "completion.base_url" => {
-            let completion = stored
-                .completion_api
-                .get_or_insert_with(default_completion_api_config);
-            completion.base_url = value.to_string();
-            config_changed = true;
+        "api.reranker.api_key" | "RERANKER_MODEL_API_KEY" => {
+            secrets.reranker_api_key = normalize_optional_value(value);
+            true
         }
-        "completion_api.model_id" | "completion.model_id" => {
-            let completion = stored
-                .completion_api
-                .get_or_insert_with(default_completion_api_config);
-            completion.model_id = value.to_string();
-            config_changed = true;
+        "api.completion.base_url" | "VERA_COMPLETION_BASE_URL" => {
+            set_endpoint_base_url(&mut stored.completion_api, normalize_optional_value(value));
+            true
         }
-        "completion_api.api_key" | "completion.api_key" => {
-            secrets.completion_api_key = Some(value.to_string());
-            secrets_changed = true;
+        "api.completion.model_id" | "VERA_COMPLETION_MODEL_ID" => {
+            set_endpoint_model_id(&mut stored.completion_api, normalize_optional_value(value));
+            true
         }
-        "completion_api.timeout_secs" | "completion.timeout_secs" => {
-            let timeout: u64 = parse_value(key, value)?;
-            if timeout == 0 {
-                bail!("{key} must be greater than 0");
+        "api.completion.api_key" | "VERA_COMPLETION_API_KEY" => {
+            secrets.completion_api_key = normalize_optional_value(value);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn set_endpoint_base_url(slot: &mut Option<state::ApiEndpointConfig>, value: Option<String>) {
+    set_endpoint_field(slot, value, true);
+}
+
+fn set_endpoint_model_id(slot: &mut Option<state::ApiEndpointConfig>, value: Option<String>) {
+    set_endpoint_field(slot, value, false);
+}
+
+fn set_endpoint_field(
+    slot: &mut Option<state::ApiEndpointConfig>,
+    value: Option<String>,
+    set_base_url: bool,
+) {
+    match value {
+        Some(value) => {
+            let endpoint = slot.get_or_insert_with(state::ApiEndpointConfig::default);
+            if set_base_url {
+                endpoint.base_url = value;
+            } else {
+                endpoint.model_id = value;
             }
-            let completion = stored
-                .completion_api
-                .get_or_insert_with(default_completion_api_config);
-            completion.timeout_secs = timeout;
-            config_changed = true;
         }
-        "completion_api.max_tokens" | "completion.max_tokens" => {
-            let completion = stored
-                .completion_api
-                .get_or_insert_with(default_completion_api_config);
-            completion.max_tokens = parse_value(key, value)?;
-            config_changed = true;
+        None => {
+            if let Some(endpoint) = slot.as_mut() {
+                if set_base_url {
+                    endpoint.base_url.clear();
+                } else {
+                    endpoint.model_id.clear();
+                }
+                if endpoint.base_url.trim().is_empty() && endpoint.model_id.trim().is_empty() {
+                    *slot = None;
+                }
+            }
         }
-        "completion_api.max_alternatives" | "completion.max_alternatives" => {
-            let completion = stored
-                .completion_api
-                .get_or_insert_with(default_completion_api_config);
-            completion.max_alternatives = parse_value(key, value)?;
-            config_changed = true;
-        }
-        _ => return Ok(false),
-    }
-
-    if config_changed {
-        state::save_saved_config(&stored)?;
-    }
-    if secrets_changed {
-        state::save_saved_secrets(&secrets)?;
-    }
-
-    Ok(true)
-}
-
-fn default_api_endpoint_config() -> state::ApiEndpointConfig {
-    state::ApiEndpointConfig {
-        base_url: String::new(),
-        model_id: String::new(),
-    }
-}
-
-fn default_completion_api_config() -> state::CompletionApiConfig {
-    state::CompletionApiConfig {
-        base_url: String::new(),
-        model_id: String::new(),
-        api_key: None,
-        timeout_secs: 120,
-        max_tokens: 16_384,
-        max_alternatives: 4,
     }
 }
 

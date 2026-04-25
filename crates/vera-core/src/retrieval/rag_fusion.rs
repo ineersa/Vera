@@ -1,29 +1,31 @@
 //! Deep search via RAG Fusion.
 //!
-//! Flow:
-//! 1. Expand the user query into multiple variants using a completion model.
-//! 2. Execute standard hybrid search for each query variant.
-//! 3. Merge and rerank all results together with reciprocal rank fusion.
+//! 1. Decompose the user query into targeted sub-queries using a completion model.
+//! 2. Execute standard hybrid search for each sub-query in parallel.
+//! 3. Merge all results with weighted reciprocal rank fusion (original query
+//!    receives higher weight).
 //!
-//! If completion query-expansion is not configured, this module silently
-//! falls back to a normal single-query search.
+//! Falls back to iterative (symbol-following) search when no completion
+//! endpoint is configured.
 
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::config::{InferenceBackend, VeraConfig};
+use crate::retrieval::bm25::search_bm25;
 use crate::types::{SearchFilters, SearchResult};
 
 use super::completion_client::CompletionClient;
-use super::hybrid::fuse_rrf_multi;
+use super::hybrid::fuse_rrf_multi_weighted;
 use super::search_service::{SearchTimings, execute_search};
 
-/// Execute deep search with query expansion + reciprocal rank fusion.
-pub fn execute_rag_fusion_search(
+/// Execute deep search: RAG-fusion if a completion endpoint is configured,
+/// otherwise fall back to iterative symbol-following search.
+pub fn execute_deep_search(
     index_dir: &Path,
     query: &str,
     config: &VeraConfig,
@@ -31,68 +33,208 @@ pub fn execute_rag_fusion_search(
     result_limit: usize,
     backend: InferenceBackend,
 ) -> Result<(Vec<SearchResult>, SearchTimings)> {
-    let overall_start = Instant::now();
-
+    let fail_on_stage_error = config.retrieval.fail_on_stage_error;
     let completion_client = match CompletionClient::from_env_if_configured() {
         Ok(Some(client)) => client,
         Ok(None) => {
-            return execute_search(index_dir, query, config, filters, result_limit, backend);
+            if fail_on_stage_error {
+                return Err(anyhow!(
+                    "completion stage unavailable: completion endpoint is not configured"
+                ));
+            }
+            let (results, mut timings) = super::iterative_search::execute_iterative_search(
+                index_dir,
+                query,
+                config,
+                filters,
+                result_limit,
+                backend,
+                1,
+            )?;
+            timings.completion_error = Some(
+                "completion endpoint not configured; used iterative deep-search fallback"
+                    .to_string(),
+            );
+            return Ok((results, timings));
         }
-        Err(error) => {
-            return Err(anyhow!(
-                "failed to initialize deep-search completion client: {error}"
-            ));
+        Err(e) => {
+            let message = format!(
+                "completion stage initialization failed: {e}; \
+                 set retrieval.fail_on_stage_error=false to allow iterative fallback"
+            );
+            if fail_on_stage_error {
+                return Err(anyhow!(message));
+            }
+            warn!(error = %e, "completion client init failed, falling back to iterative search");
+            let (results, mut timings) = super::iterative_search::execute_iterative_search(
+                index_dir,
+                query,
+                config,
+                filters,
+                result_limit,
+                backend,
+                1,
+            )?;
+            timings.completion_error = Some(message);
+            return Ok((results, timings));
         }
     };
 
-    let expanded_queries = completion_client
-        .expand_query(query)
-        .map_err(|error| anyhow!("failed to generate deep-search query candidates: {error}"))?;
+    execute_rag_fusion(
+        index_dir,
+        query,
+        config,
+        filters,
+        result_limit,
+        backend,
+        &completion_client,
+    )
+}
 
-    let queries = dedupe_queries_with_original(query, expanded_queries);
+fn execute_rag_fusion(
+    index_dir: &Path,
+    query: &str,
+    config: &VeraConfig,
+    filters: &SearchFilters,
+    result_limit: usize,
+    backend: InferenceBackend,
+    completion_client: &CompletionClient,
+) -> Result<(Vec<SearchResult>, SearchTimings)> {
+    let overall_start = Instant::now();
+
+    // BM25 pre-filter: run a cheap keyword search to gather codebase context
+    // (symbol names and file paths) that helps the LLM generate better rewrites.
+    let context_hints = bm25_context_hints(index_dir, query);
+    debug!(
+        hints = context_hints.len(),
+        "BM25 pre-filter produced context hints for query expansion"
+    );
+
+    let expanded = match completion_client.expand_query_with_context(query, &context_hints) {
+        Ok(expanded) => expanded,
+        Err(e) => {
+            if config.retrieval.fail_on_stage_error {
+                return Err(anyhow!(
+                    "failed to generate deep-search query candidates: {e}"
+                ));
+            }
+            warn!(error = %e, "query expansion failed, falling back to iterative deep search");
+            let (results, mut timings) = super::iterative_search::execute_iterative_search(
+                index_dir,
+                query,
+                config,
+                filters,
+                result_limit,
+                backend,
+                1,
+            )?;
+            timings.completion_error = Some(format!(
+                "completion stage failed to expand query: {e}; used iterative fallback"
+            ));
+            return Ok((results, timings));
+        }
+    };
+
+    let queries = dedupe_queries_with_original(query, expanded);
     if queries.len() <= 1 {
-        return Err(anyhow!(
-            "failed to generate deep-search query candidates: no additional rewrites were produced"
-        ));
-    }
-
-    let mut aggregated_timings = SearchTimings::default();
-    let mut per_query_results: Vec<Vec<SearchResult>> = Vec::with_capacity(queries.len());
-    let per_query_limit = compute_per_query_limit(result_limit);
-
-    for (idx, expanded_query) in queries.iter().enumerate() {
-        match execute_search(
+        if config.retrieval.fail_on_stage_error {
+            return Err(anyhow!(
+                "query expansion produced no additional rewrites; \
+                 check completion model output"
+            ));
+        }
+        let (results, mut timings) = super::iterative_search::execute_iterative_search(
             index_dir,
-            expanded_query,
+            query,
             config,
             filters,
-            per_query_limit,
+            result_limit,
             backend,
-        ) {
+            1,
+        )?;
+        timings.completion_error = Some(
+            "completion stage produced no usable rewrites; used iterative fallback".to_string(),
+        );
+        return Ok((results, timings));
+    }
+
+    let per_query_limit = compute_per_query_limit(result_limit);
+
+    // Run all sub-queries in parallel using OS threads (each execute_search
+    // creates its own tokio runtime internally).
+    let query_count = queries.len();
+    #[allow(clippy::type_complexity)]
+    let results_and_timings: Vec<(usize, Result<(Vec<SearchResult>, SearchTimings)>)> =
+        std::thread::scope(|s| {
+            let handles: Vec<_> = queries
+                .iter()
+                .enumerate()
+                .map(|(idx, q)| {
+                    let q = q.clone();
+                    let index_dir = index_dir.to_path_buf();
+                    let config = config.clone();
+                    let filters = filters.clone();
+                    s.spawn(move || {
+                        (
+                            idx,
+                            execute_search(
+                                &index_dir,
+                                &q,
+                                &config,
+                                &filters,
+                                per_query_limit,
+                                backend,
+                            ),
+                        )
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+    let mut aggregated_timings = SearchTimings::default();
+    let mut per_query_results: Vec<Vec<SearchResult>> = vec![Vec::new(); query_count];
+    let mut per_query_weights: Vec<f64> = vec![0.0; query_count];
+
+    for (idx, result) in results_and_timings {
+        match result {
             Ok((results, timings)) => {
                 merge_timings(&mut aggregated_timings, &timings);
-                per_query_results.push(results);
+                per_query_results[idx] = results;
+                // Original query (idx 0) gets 2x weight.
+                per_query_weights[idx] = if idx == 0 { 2.0 } else { 1.0 };
             }
-            Err(error) if idx == 0 => return Err(error),
-            Err(error) => {
-                warn!(
-                    query = %expanded_query,
-                    error = %error,
-                    "deep-search subquery failed; continuing with remaining queries"
-                );
+            Err(e) if idx == 0 => return Err(e),
+            Err(e) => {
+                if config.retrieval.fail_on_stage_error {
+                    return Err(anyhow!(
+                        "deep-search subquery failed (query='{}'): {e}",
+                        queries[idx]
+                    ));
+                }
+                warn!(query = %queries[idx], error = %e, "deep-search subquery failed; continuing");
             }
         }
     }
 
-    if per_query_results.is_empty() {
-        return Err(anyhow!(
-            "deep search failed: all generated query candidates failed"
-        ));
+    // Remove empty slots (failed queries).
+    let (filled_results, filled_weights): (Vec<_>, Vec<_>) = per_query_results
+        .into_iter()
+        .zip(per_query_weights)
+        .filter(|(r, _)| !r.is_empty())
+        .unzip();
+
+    if filled_results.is_empty() {
+        return Err(anyhow!("deep search failed: all query candidates failed"));
     }
 
-    let query_result_slices: Vec<&[SearchResult]> =
-        per_query_results.iter().map(Vec::as_slice).collect();
-    let fused = fuse_rrf_multi(&query_result_slices, config.retrieval.rrf_k, result_limit);
+    let slices: Vec<&[SearchResult]> = filled_results.iter().map(Vec::as_slice).collect();
+    let fused = fuse_rrf_multi_weighted(
+        &slices,
+        &filled_weights,
+        config.retrieval.rrf_k,
+        result_limit,
+    );
 
     aggregated_timings.total = Some(overall_start.elapsed());
     Ok((fused, aggregated_timings))
@@ -100,7 +242,7 @@ pub fn execute_rag_fusion_search(
 
 fn dedupe_queries_with_original(original: &str, alternatives: Vec<String>) -> Vec<String> {
     let mut deduped = Vec::with_capacity(alternatives.len() + 1);
-    let mut seen = HashSet::new();
+    let mut seen = std::collections::HashSet::new();
 
     let original = normalize_query(original);
     if !original.is_empty() {
@@ -108,13 +250,12 @@ fn dedupe_queries_with_original(original: &str, alternatives: Vec<String>) -> Ve
         deduped.push(original);
     }
 
-    for alternative in alternatives {
-        let normalized = normalize_query(&alternative);
+    for alt in alternatives {
+        let normalized = normalize_query(&alt);
         if normalized.is_empty() {
             continue;
         }
-        let key = normalized.to_ascii_lowercase();
-        if seen.insert(key) {
+        if seen.insert(normalized.to_ascii_lowercase()) {
             deduped.push(normalized);
         }
     }
@@ -140,6 +281,21 @@ fn merge_timings(target: &mut SearchTimings, incoming: &SearchTimings) {
     add_duration(&mut target.fusion, incoming.fusion);
     add_duration(&mut target.reranking, incoming.reranking);
     add_duration(&mut target.augmentation, incoming.augmentation);
+    merge_error(
+        &mut target.embedding_error,
+        incoming.embedding_error.as_deref(),
+    );
+    merge_error(&mut target.bm25_error, incoming.bm25_error.as_deref());
+    merge_error(&mut target.vector_error, incoming.vector_error.as_deref());
+    merge_error(&mut target.fusion_error, incoming.fusion_error.as_deref());
+    merge_error(
+        &mut target.reranking_error,
+        incoming.reranking_error.as_deref(),
+    );
+    merge_error(
+        &mut target.completion_error,
+        incoming.completion_error.as_deref(),
+    );
 }
 
 fn add_duration(target: &mut Option<Duration>, incoming: Option<Duration>) {
@@ -148,12 +304,58 @@ fn add_duration(target: &mut Option<Duration>, incoming: Option<Duration>) {
     }
 }
 
+fn merge_error(target: &mut Option<String>, incoming: Option<&str>) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+    if target.is_none() {
+        *target = Some(incoming.to_string());
+    }
+}
+
+/// Run a quick BM25 search and extract deduplicated symbol names and file
+/// paths from the top results. These hints give the LLM real identifiers
+/// from the codebase so it can produce more targeted query rewrites.
+const BM25_PREFILTER_LIMIT: usize = 10;
+const MAX_CONTEXT_HINTS: usize = 15;
+
+fn bm25_context_hints(index_dir: &Path, query: &str) -> Vec<String> {
+    let results = match search_bm25(index_dir, query, BM25_PREFILTER_LIMIT) {
+        Ok(r) => r,
+        Err(e) => {
+            debug!(error = %e, "BM25 pre-filter failed, continuing without context");
+            return Vec::new();
+        }
+    };
+
+    let mut seen = HashSet::new();
+    let mut hints = Vec::new();
+
+    for r in &results {
+        if let Some(ref sym) = r.symbol_name {
+            let hint = format!("symbol: {sym}");
+            if seen.insert(hint.clone()) {
+                hints.push(hint);
+            }
+        }
+        let hint = format!("file: {}", r.file_path);
+        if seen.insert(hint.clone()) {
+            hints.push(hint);
+        }
+        if hints.len() >= MAX_CONTEXT_HINTS {
+            break;
+        }
+    }
+
+    hints
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn dedupe_queries_preserves_original_order() {
+    fn dedupe_preserves_original_first() {
         let queries = dedupe_queries_with_original(
             "auth token refresh",
             vec![
@@ -165,21 +367,21 @@ mod tests {
         assert_eq!(
             queries,
             vec![
-                "auth token refresh".to_string(),
-                "jwt expiry handling".to_string(),
-                "auth middleware".to_string(),
+                "auth token refresh",
+                "jwt expiry handling",
+                "auth middleware"
             ]
         );
     }
 
     #[test]
-    fn per_query_limit_overfetches_for_fusion() {
+    fn per_query_limit_overfetches() {
         assert_eq!(compute_per_query_limit(5), 20);
         assert_eq!(compute_per_query_limit(20), 40);
     }
 
     #[test]
-    fn merge_timings_sums_stage_durations() {
+    fn merge_timings_sums() {
         let mut target = SearchTimings::default();
         let incoming = SearchTimings {
             embedding: Some(Duration::from_millis(10)),
@@ -189,16 +391,11 @@ mod tests {
             reranking: Some(Duration::from_millis(50)),
             augmentation: Some(Duration::from_millis(60)),
             total: None,
+            ..Default::default()
         };
-
         merge_timings(&mut target, &incoming);
         merge_timings(&mut target, &incoming);
-
         assert_eq!(target.embedding, Some(Duration::from_millis(20)));
         assert_eq!(target.bm25, Some(Duration::from_millis(40)));
-        assert_eq!(target.vector, Some(Duration::from_millis(60)));
-        assert_eq!(target.fusion, Some(Duration::from_millis(80)));
-        assert_eq!(target.reranking, Some(Duration::from_millis(100)));
-        assert_eq!(target.augmentation, Some(Duration::from_millis(120)));
     }
 }

@@ -66,7 +66,7 @@ enum Commands {
     /// Start the MCP (Model Context Protocol) server.
     ///
     /// Runs a JSON-RPC 2.0 server over stdio for tool integration.
-    /// The server exposes tools: search_code, get_overview, and regex_search.
+    /// The server exposes tools: search_code, get_stats, get_overview, and regex_search.
     /// search_code auto-indexes and starts a file watcher on first use.
     ///
     /// Examples:
@@ -78,6 +78,7 @@ enum Commands {
                       to stdout. Logs go to stderr.\n\n\
                       Exposed tools:\n  \
                       search_code      — Hybrid search (auto-indexes and watches on first use)\n  \
+                      get_stats        — Index statistics\n  \
                       get_overview     — Project summary for onboarding\n  \
                       regex_search     — Regex search over indexed files\n\n\
                       Examples:\n  \
@@ -325,10 +326,12 @@ enum Commands {
                       Source files are favored by default. Use `--scope docs` for prose, \
                       `--scope runtime` for extracted runtime trees, and `--include-generated` \
                       when you intentionally want dist/minified artifacts.\n\n\
-                      Falls back gracefully: if embedding API is unavailable, uses BM25-only \
-                      search. If reranker is unavailable, returns unreranked hybrid results.\n\n\
-                      Requires an existing index (run `vera index <path>` first).\n\n\
-                      Examples:\n  \
+                       Falls back gracefully: if embedding API is unavailable, uses BM25-only \
+                       search. If reranker is unavailable, returns unreranked hybrid results.\n\n\
+                       Set `retrieval.fail_on_stage_error=true` to fail fast instead of falling \
+                       back when a retrieval stage is unavailable.\n\n\
+                       Requires an existing index (run `vera index <path>` first).\n\n\
+                       Examples:\n  \
                       vera search \"auth logic\"                  # Semantic search\n  \
                       vera search \"parse_config\"                 # Symbol lookup\n  \
                       vera search \"hotkeys\" --scope docs         # Search docs only\n  \
@@ -373,7 +376,8 @@ enum Commands {
         #[arg(long)]
         include_generated: bool,
 
-        /// Deep RAG-fusion search: expand query variants and fuse ranked results.
+        /// Deep search: RAG-fusion query expansion + merged ranking when a completion
+        /// endpoint is configured, otherwise iterative symbol-following search.
         #[arg(long)]
         deep: bool,
 
@@ -580,37 +584,38 @@ enum Commands {
                       Use `get <key>` to read a specific value, or `set <key> <value>` \
                       to update it.\n\n\
                        Configuration keys use dot notation:\n  \
-                        indexing.max_chunk_lines       Max lines per chunk (default: 200)\n  \
-                       indexing.max_chunk_tokens      Max chunk tokens for embedding (default: 0=derive from bytes)\n  \
-                        indexing.max_chunk_bytes       Max chunk bytes for embedding (default: 24576)\n  \
-                       indexing.chunk_overlap_lines   Overlapping lines between token-split chunks (default: 2)\n  \
-                        indexing.max_file_size_bytes   Max file size to index (default: 1000000)\n  \
-                        retrieval.default_limit        Default result count (default: 5)\n  \
+                       indexing.max_chunk_lines       Max lines per chunk (default: 200)\n  \
+                       indexing.max_file_size_bytes   Max file size to index (default: 1000000)\n  \
+                       indexing.max_chunk_bytes       Max chunk size before split (default: 24576)\n  \
+                       indexing.max_chunk_overlap_bytes Overlap between split chunks (default: 0)\n  \
+                       retrieval.default_limit        Default result count (default: 5)\n  \
                        retrieval.rrf_k                RRF fusion constant (default: 60)\n  \
                        retrieval.rerank_candidates    Reranker candidate count (default: 50)\n  \
-                       retrieval.reranking_enabled    Enable reranking (default: true)\n  \
-                       retrieval.max_rerank_batch     Max docs per reranker API request (default: 20, 0 = no batching)\n  \
-                       retrieval.reranker_max_docs_per_request  Explicit reranker docs/request override (0 = use max_rerank_batch)\n  \
-                       retrieval.reranker_max_document_tokens    Max tokens per reranker document window (0 = env/default)\n  \
-                       retrieval.max_output_chars     Total output char budget (default: 12000)\n  \
-                       embedding.batch_size           Embedding batch size (default: 128)\n  \
+                       retrieval.max_bm25_candidates  Hard cap BM25 candidates (default: 0=off)\n  \
+                       retrieval.max_vector_candidates Hard cap vector candidates (default: 0=off)\n  \
+                        retrieval.reranking_enabled    Enable reranking (default: true)\n  \
+                         retrieval.max_rerank_batch     Max docs per reranker request (default: 20)\n  \
+                         retrieval.max_rerank_doc_chars Max chars per reranker document (default: 4800)\n  \
+                         retrieval.rerank_metadata_mode Reranker metadata mode (full|none|non_docs|light)\n  \
+                         retrieval.adaptive_exact_query_tuning Reduce exact-query vector/rerank pools\n  \
+                         retrieval.max_output_chars     Total output char budget (default: 12000)\n  \
+                        embedding.batch_size           Embedding batch size (default: 128)\n  \
                        embedding.max_concurrent_requests  Concurrent API requests (default: 8)\n  \
                        embedding.timeout_secs         API timeout (default: 60)\n  \
                        embedding.max_retries          API retry count (default: 3)\n  \
                        embedding.max_stored_dim       Vector dimensionality (default: 1024)\n  \
-                       embedding_api.base_url         Embedding endpoint URL (saved to config.json)\n  \
-                       embedding_api.model_id         Embedding model id (saved to config.json)\n  \
-                       embedding_api.api_key          Embedding API key (saved to credentials.json)\n  \
-                       reranker_api.base_url          Reranker endpoint URL (saved to config.json)\n  \
-                       reranker_api.model_id          Reranker model id (saved to config.json)\n  \
-                       reranker_api.api_key           Reranker API key (saved to credentials.json)\n  \
-                       completion_api.base_url        Deep-search completion endpoint URL\n  \
-                       completion_api.model_id        Deep-search completion model id\n  \
-                       completion_api.api_key         Completion API key\n  \
-                       completion_api.timeout_secs    Completion timeout in seconds\n  \
-                       completion_api.max_tokens      Completion max output tokens\n  \
-                       completion_api.max_alternatives  Deep-search rewrite candidates\n\n\
-                      Examples:\n  \
+                       api.embedding.base_url         Embedding endpoint URL\n  \
+                       api.embedding.model_id         Embedding model ID\n  \
+                       api.embedding.api_key          Embedding API key\n  \
+                       api.embedding.query_prefix     Optional embedding query prefix\n  \
+                       api.reranker.base_url          Reranker endpoint URL\n  \
+                       api.reranker.model_id          Reranker model ID\n  \
+                       api.reranker.api_key           Reranker API key\n  \
+                       api.reranker.max_docs_per_request Alias of retrieval.max_rerank_batch\n  \
+                       api.completion.base_url        Completion endpoint URL\n  \
+                       api.completion.model_id        Completion model ID\n  \
+                       api.completion.api_key         Completion API key\n\n\
+                       Examples:\n  \
                       vera config                                  # Show all settings\n  \
                       vera config show                             # Same as above\n  \
                       vera config get retrieval.default_limit      # Get one value\n  \
@@ -1180,10 +1185,35 @@ mod tests {
     fn config_get_known_keys() {
         let config = vera_core::config::VeraConfig::default();
         assert!(commands::config::get_config_value(&config, "indexing.max_chunk_lines").is_some());
+        assert!(commands::config::get_config_value(&config, "indexing.max_chunk_bytes").is_some());
+        assert!(
+            commands::config::get_config_value(&config, "indexing.max_chunk_overlap_bytes")
+                .is_some()
+        );
         assert!(commands::config::get_config_value(&config, "retrieval.default_limit").is_some());
         assert!(commands::config::get_config_value(&config, "retrieval.rrf_k").is_some());
         assert!(
+            commands::config::get_config_value(&config, "retrieval.max_bm25_candidates").is_some()
+        );
+        assert!(
+            commands::config::get_config_value(&config, "retrieval.max_vector_candidates")
+                .is_some()
+        );
+        assert!(
             commands::config::get_config_value(&config, "retrieval.reranking_enabled").is_some()
+        );
+        assert!(
+            commands::config::get_config_value(&config, "retrieval.max_rerank_batch").is_some()
+        );
+        assert!(
+            commands::config::get_config_value(&config, "retrieval.max_rerank_doc_chars").is_some()
+        );
+        assert!(
+            commands::config::get_config_value(&config, "retrieval.rerank_metadata_mode").is_some()
+        );
+        assert!(
+            commands::config::get_config_value(&config, "retrieval.adaptive_exact_query_tuning")
+                .is_some()
         );
         assert!(commands::config::get_config_value(&config, "embedding.batch_size").is_some());
         assert!(commands::config::get_config_value(&config, "embedding.max_stored_dim").is_some());
@@ -1204,8 +1234,36 @@ mod tests {
         let val = commands::config::get_config_value(&config, "indexing.max_chunk_lines").unwrap();
         assert_eq!(val, serde_json::json!(200));
 
+        let val = commands::config::get_config_value(&config, "indexing.max_chunk_bytes").unwrap();
+        assert_eq!(val, serde_json::json!(config.indexing.max_chunk_bytes));
+
+        let val = commands::config::get_config_value(&config, "indexing.max_chunk_overlap_bytes")
+            .unwrap();
+        assert_eq!(val, serde_json::json!(0));
+
         let val =
             commands::config::get_config_value(&config, "retrieval.reranking_enabled").unwrap();
         assert_eq!(val, serde_json::json!(true));
+
+        let val =
+            commands::config::get_config_value(&config, "retrieval.max_rerank_doc_chars").unwrap();
+        assert_eq!(val, serde_json::json!(4800));
+
+        let val =
+            commands::config::get_config_value(&config, "retrieval.rerank_metadata_mode").unwrap();
+        assert_eq!(val, serde_json::json!("full"));
+
+        let val =
+            commands::config::get_config_value(&config, "retrieval.adaptive_exact_query_tuning")
+                .unwrap();
+        assert_eq!(val, serde_json::json!(false));
+
+        let val =
+            commands::config::get_config_value(&config, "retrieval.max_bm25_candidates").unwrap();
+        assert_eq!(val, serde_json::json!(0));
+
+        let val =
+            commands::config::get_config_value(&config, "retrieval.max_vector_candidates").unwrap();
+        assert_eq!(val, serde_json::json!(0));
     }
 }

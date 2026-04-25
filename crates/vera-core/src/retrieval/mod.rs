@@ -9,12 +9,8 @@
 //! - Graceful degradation when services are unavailable
 
 pub mod bm25;
-pub mod completion_client;
-pub mod dynamic_reranker;
 pub mod hybrid;
-pub mod local_reranker;
 pub mod query_classifier;
-pub mod rag_fusion;
 pub mod ranking;
 pub mod reranker;
 pub mod search_service;
@@ -22,14 +18,21 @@ pub mod vector;
 
 pub use bm25::{search_bm25, search_bm25_with_stores};
 pub use hybrid::{
-    HybridSearchError, HybridTimings, fuse_rrf, search_hybrid, search_hybrid_reranked,
+    HybridSearchError, HybridTimings, fuse_rrf, fuse_rrf_multi, fuse_rrf_multi_weighted,
+    search_hybrid, search_hybrid_reranked,
 };
 pub use reranker::{
     ApiReranker, RerankScore, Reranker, RerankerConfig, RerankerError, rerank_results,
 };
 
+pub mod dynamic_reranker;
 pub use dynamic_reranker::{DynamicReranker, create_dynamic_reranker};
+
+pub mod completion_client;
+pub mod iterative_search;
+pub mod local_reranker;
 pub(crate) mod query_utils;
+pub mod rag_fusion;
 pub mod regex_search;
 
 pub use local_reranker::LocalReranker;

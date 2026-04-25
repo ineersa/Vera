@@ -4,15 +4,12 @@
 //! index updates after a debounce period. This keeps the index fresh
 //! without requiring manual update calls.
 
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
-use anyhow::Context;
 use notify_debouncer_mini::{DebouncedEventKind, new_debouncer};
-use serde::Deserialize;
 use tracing::{debug, info, warn};
 
 /// Debounce interval: wait this long after the last file change before updating.
@@ -60,11 +57,7 @@ fn start_watching_internal(repo_path: &Path, progress_logs: bool) -> Result<Watc
 
     let updating = Arc::new(AtomicBool::new(false));
     let updating_clone = updating.clone();
-    let watcher_started_at = SystemTime::now();
-    let seen_mtimes = Arc::new(Mutex::new(HashMap::<PathBuf, SystemTime>::new()));
-    let seen_mtimes_clone = seen_mtimes.clone();
     let repo_clone = repo_path.clone();
-    let ignored_dirs = vec![repo_path.join(".vera"), repo_path.join(".git")];
 
     let mut debouncer = new_debouncer(
         Duration::from_secs(DEBOUNCE_SECS),
@@ -77,42 +70,13 @@ fn start_watching_internal(repo_path: &Path, progress_logs: bool) -> Result<Watc
                 }
             };
 
-            let relevant_changes = collect_relevant_changes(&events, &repo_clone, &ignored_dirs);
-            if relevant_changes.is_empty() {
+            // Filter out events inside .vera/ directory.
+            let has_relevant_changes = events.iter().any(|e| {
+                e.kind == DebouncedEventKind::Any && !e.path.starts_with(repo_clone.join(".vera"))
+            });
+
+            if !has_relevant_changes {
                 return;
-            }
-
-            let material_changes = {
-                let mut seen = seen_mtimes_clone
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                filter_material_changes(&relevant_changes, watcher_started_at, &mut seen)
-            };
-            if material_changes.is_empty() {
-                return;
-            }
-
-            let indexable_changes = match filter_indexable_changes(&repo_clone, &material_changes) {
-                Ok(paths) => paths,
-                Err(error) => {
-                    warn!(error = %error, "failed to apply index ignore rules for watcher changes");
-                    material_changes.clone()
-                }
-            };
-
-            if indexable_changes.is_empty() {
-                if progress_logs {
-                    eprintln!("[watch] changes ignored by indexing rules");
-                }
-                return;
-            }
-
-            if progress_logs {
-                eprintln!(
-                    "[watch] detected {} file change(s): {}",
-                    indexable_changes.len(),
-                    format_change_preview(&indexable_changes, &repo_clone, 5)
-                );
             }
 
             // Skip if already updating.
@@ -123,18 +87,21 @@ fn start_watching_internal(repo_path: &Path, progress_logs: bool) -> Result<Watc
                 debug!("Skipping auto-update: previous update still running");
                 if progress_logs {
                     eprintln!(
-                        "[watch] update already running, changes will be picked up on next cycle"
+                        "[watch] update already running, changes will be picked up next cycle"
                     );
                 }
                 return;
             }
 
+            if progress_logs {
+                eprintln!("[watch] file changes detected, starting incremental update");
+            }
+
             let repo = repo_clone.clone();
             let flag = updating_clone.clone();
-            let changed_count = indexable_changes.len();
 
             std::thread::spawn(move || {
-                run_incremental_update(&repo, &flag, progress_logs, changed_count);
+                run_incremental_update(&repo, &flag, progress_logs);
             });
         },
     )
@@ -154,16 +121,8 @@ fn start_watching_internal(repo_path: &Path, progress_logs: bool) -> Result<Watc
 }
 
 /// Run an incremental update, resetting the flag when done.
-fn run_incremental_update(
-    repo_path: &Path,
-    updating: &AtomicBool,
-    progress_logs: bool,
-    changed_count: usize,
-) {
+fn run_incremental_update(repo_path: &Path, updating: &AtomicBool, progress_logs: bool) {
     debug!(path = %repo_path.display(), "Auto-update triggered by file changes");
-    if progress_logs {
-        eprintln!("[watch] processing {} changed file(s)...", changed_count);
-    }
 
     let result = run_update_blocking(repo_path);
 
@@ -179,21 +138,21 @@ fn run_incremental_update(
                 );
                 if progress_logs {
                     eprintln!(
-                        "[watch] index updated: modified={}, added={}, deleted={}",
+                        "[watch] update complete: {} modified, {} added, {} deleted",
                         summary.files_modified, summary.files_added, summary.files_deleted
                     );
                 }
             } else {
                 debug!("Auto-update: no changes detected");
                 if progress_logs {
-                    eprintln!("[watch] no index changes detected");
+                    eprintln!("[watch] no indexable changes detected");
                 }
             }
         }
         Err(e) => {
             warn!(error = %e, "Auto-update failed");
             if progress_logs {
-                eprintln!("[watch] auto-update failed: {e}");
+                eprintln!("[watch] update failed: {e}");
             }
         }
     }
@@ -201,211 +160,37 @@ fn run_incremental_update(
     updating.store(false, Ordering::SeqCst);
 }
 
-fn collect_relevant_changes(
-    events: &[notify_debouncer_mini::DebouncedEvent],
-    repo_path: &Path,
-    ignored_dirs: &[PathBuf],
-) -> Vec<PathBuf> {
-    let mut unique = std::collections::BTreeSet::new();
-    for event in events {
-        if event.kind != DebouncedEventKind::Any {
-            continue;
-        }
-        if ignored_dirs.iter().any(|dir| event.path.starts_with(dir)) {
-            continue;
-        }
-        if event.path == repo_path {
-            continue;
-        }
-        unique.insert(event.path.clone());
+/// Load the saved runtime config from Vera's home config.json, falling back to defaults.
+fn load_saved_runtime_config() -> vera_core::config::VeraConfig {
+    let config_path = match vera_core::local_models::vera_home_dir() {
+        Ok(dir) => dir.join("config.json"),
+        Err(_) => return vera_core::config::VeraConfig::default(),
+    };
+    load_config_from_path(&config_path)
+}
+
+/// Load config from a specific path, falling back to defaults on any error.
+fn load_config_from_path(config_path: &std::path::Path) -> vera_core::config::VeraConfig {
+    let data = match std::fs::read_to_string(config_path) {
+        Ok(d) => d,
+        Err(_) => return vera_core::config::VeraConfig::default(),
+    };
+    let json: serde_json::Value = match serde_json::from_str(&data) {
+        Ok(v) => v,
+        Err(_) => return vera_core::config::VeraConfig::default(),
+    };
+    match json.get("core_config") {
+        Some(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+        None => vera_core::config::VeraConfig::default(),
     }
-    unique.into_iter().collect()
-}
-
-fn filter_material_changes(
-    changed_paths: &[PathBuf],
-    watcher_started_at: SystemTime,
-    seen_mtimes: &mut HashMap<PathBuf, SystemTime>,
-) -> Vec<PathBuf> {
-    let mut material = Vec::new();
-
-    for path in changed_paths {
-        if !path.exists() {
-            seen_mtimes.remove(path);
-            material.push(path.clone());
-            continue;
-        }
-
-        let metadata = match std::fs::metadata(path) {
-            Ok(metadata) => metadata,
-            Err(_) => {
-                material.push(path.clone());
-                continue;
-            }
-        };
-
-        if metadata.is_dir() {
-            continue;
-        }
-        if !metadata.is_file() {
-            continue;
-        }
-
-        let modified = match metadata.modified() {
-            Ok(modified) => modified,
-            Err(_) => {
-                material.push(path.clone());
-                continue;
-            }
-        };
-
-        match seen_mtimes.get(path) {
-            Some(previous) if *previous >= modified => {}
-            Some(_) => {
-                seen_mtimes.insert(path.clone(), modified);
-                material.push(path.clone());
-            }
-            None => {
-                // Seed baseline mtimes for pre-existing files so startup/access
-                // notifications don't trigger a full incremental update cycle.
-                seen_mtimes.insert(path.clone(), modified);
-                if modified > watcher_started_at {
-                    material.push(path.clone());
-                }
-            }
-        }
-    }
-
-    material
-}
-
-fn filter_indexable_changes(
-    repo_path: &Path,
-    changed_paths: &[PathBuf],
-) -> anyhow::Result<Vec<PathBuf>> {
-    let runtime = load_runtime_settings()?;
-    let discovery = vera_core::discovery::discover_files(repo_path, &runtime.config.indexing)
-        .with_context(|| {
-            format!(
-                "failed to apply discovery rules for {}",
-                repo_path.display()
-            )
-        })?;
-
-    let discoverable: HashSet<String> = discovery
-        .files
-        .into_iter()
-        .map(|file| normalize_relative_path(&file.relative_path))
-        .collect();
-    let indexed = load_indexed_paths(repo_path)?;
-
-    Ok(filter_indexable_changes_with_sets(
-        repo_path,
-        changed_paths,
-        &discoverable,
-        &indexed,
-    ))
-}
-
-fn load_indexed_paths(repo_path: &Path) -> anyhow::Result<HashSet<String>> {
-    let metadata_path = vera_core::indexing::index_dir(repo_path).join("metadata.db");
-    if !metadata_path.exists() {
-        return Ok(HashSet::new());
-    }
-
-    let store = vera_core::storage::metadata::MetadataStore::open(&metadata_path)
-        .with_context(|| format!("failed to open metadata store: {}", metadata_path.display()))?;
-    let indexed = store
-        .indexed_files()
-        .with_context(|| format!("failed to read indexed files: {}", metadata_path.display()))?;
-
-    Ok(indexed
-        .into_iter()
-        .map(|path| normalize_relative_path(&path))
-        .collect())
-}
-
-fn filter_indexable_changes_with_sets(
-    repo_path: &Path,
-    changed_paths: &[PathBuf],
-    discoverable: &HashSet<String>,
-    indexed: &HashSet<String>,
-) -> Vec<PathBuf> {
-    changed_paths
-        .iter()
-        .filter(|path| {
-            let Some(relative) = relative_path(repo_path, path) else {
-                return false;
-            };
-
-            if path.exists() {
-                if path.is_file() {
-                    return discoverable.contains(&relative);
-                }
-                if path.is_dir() {
-                    let prefix = format!("{relative}/");
-                    return discoverable.iter().any(|entry| entry.starts_with(&prefix))
-                        || indexed.iter().any(|entry| entry.starts_with(&prefix));
-                }
-                return false;
-            }
-
-            if indexed.contains(&relative) {
-                return true;
-            }
-            let prefix = format!("{relative}/");
-            indexed.iter().any(|entry| entry.starts_with(&prefix))
-        })
-        .cloned()
-        .collect()
-}
-
-fn relative_path(repo_path: &Path, path: &Path) -> Option<String> {
-    let rel = path.strip_prefix(repo_path).ok()?;
-    let as_str = rel.to_string_lossy();
-    if as_str.is_empty() || as_str == "." {
-        return None;
-    }
-    Some(normalize_relative_path(&as_str))
-}
-
-fn normalize_relative_path(path: &str) -> String {
-    path.replace('\\', "/")
-}
-
-fn format_change_preview(paths: &[PathBuf], repo_path: &Path, max_items: usize) -> String {
-    let mut shown: Vec<String> = paths
-        .iter()
-        .take(max_items)
-        .map(|path| {
-            path.strip_prefix(repo_path)
-                .unwrap_or(path)
-                .display()
-                .to_string()
-        })
-        .collect();
-
-    if paths.len() > max_items {
-        shown.push(format!("+{} more", paths.len() - max_items));
-    }
-
-    shown.join(", ")
 }
 
 /// Blocking wrapper around the async update_repository.
 fn run_update_blocking(
     repo_path: &Path,
 ) -> Result<vera_core::indexing::UpdateSummary, anyhow::Error> {
-    let runtime = match load_runtime_settings() {
-        Ok(settings) => settings,
-        Err(err) => {
-            warn!(error = %err, "Failed to load saved runtime config; using defaults");
-            RuntimeSettings::default()
-        }
-    };
-
-    let backend = vera_core::config::resolve_backend(runtime.backend_hint);
-    let mut config = runtime.config;
+    let backend = vera_core::config::resolve_backend(None);
+    let mut config = load_saved_runtime_config();
     config.adjust_for_backend(backend);
 
     let rt = tokio::runtime::Runtime::new()?;
@@ -422,261 +207,45 @@ fn run_update_blocking(
     ))
 }
 
-#[derive(Debug, Clone)]
-struct RuntimeSettings {
-    config: vera_core::config::VeraConfig,
-    backend_hint: Option<vera_core::config::InferenceBackend>,
-}
-
-impl Default for RuntimeSettings {
-    fn default() -> Self {
-        Self {
-            config: vera_core::config::VeraConfig::default(),
-            backend_hint: None,
-        }
-    }
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct StoredConfigSnapshot {
-    #[serde(default)]
-    local_mode: Option<bool>,
-    #[serde(default)]
-    backend: Option<vera_core::config::InferenceBackend>,
-    #[serde(default)]
-    core_config: Option<vera_core::config::VeraConfig>,
-}
-
-fn load_runtime_settings() -> anyhow::Result<RuntimeSettings> {
-    let config_path = vera_core::local_models::vera_home_dir()?.join("config.json");
-    load_runtime_settings_from_path(&config_path)
-}
-
-fn load_runtime_settings_from_path(path: &Path) -> anyhow::Result<RuntimeSettings> {
-    if !path.exists() {
-        return Ok(RuntimeSettings::default());
-    }
-
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("failed to read runtime config: {}", path.display()))?;
-    if bytes.is_empty() {
-        return Ok(RuntimeSettings::default());
-    }
-
-    let stored: StoredConfigSnapshot = serde_json::from_slice(&bytes)
-        .with_context(|| format!("failed to parse runtime config: {}", path.display()))?;
-
-    let backend_hint = stored.backend.or(match stored.local_mode {
-        Some(true) => Some(vera_core::config::InferenceBackend::OnnxJina(
-            vera_core::config::OnnxExecutionProvider::Cpu,
-        )),
-        Some(false) => Some(vera_core::config::InferenceBackend::Api),
-        None => None,
-    });
-
-    Ok(RuntimeSettings {
-        config: stored.core_config.unwrap_or_default(),
-        backend_hint,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
-    fn loads_saved_core_config_values() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let path = temp.path().join("config.json");
-
-        let mut saved = vera_core::config::VeraConfig::default();
-        saved.indexing.max_chunk_tokens = 512;
-        saved.retrieval.max_rerank_batch = 7;
-
-        let payload = serde_json::json!({
-            "core_config": saved,
-        });
-        std::fs::write(&path, serde_json::to_vec(&payload).unwrap()).unwrap();
-
-        let settings = load_runtime_settings_from_path(&path).unwrap();
-        assert_eq!(settings.config.indexing.max_chunk_tokens, 512);
-        assert_eq!(settings.config.retrieval.max_rerank_batch, 7);
-        assert!(settings.backend_hint.is_none());
-    }
-
-    #[test]
-    fn local_mode_true_maps_to_local_backend() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let path = temp.path().join("config.json");
-
-        std::fs::write(&path, br#"{"local_mode":true}"#).unwrap();
-
-        let settings = load_runtime_settings_from_path(&path).unwrap();
+    fn load_config_missing_file_returns_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = load_config_from_path(&tmp.path().join("config.json"));
         assert_eq!(
-            settings.backend_hint,
-            Some(vera_core::config::InferenceBackend::OnnxJina(
-                vera_core::config::OnnxExecutionProvider::Cpu
-            ))
+            config.indexing.max_chunk_lines,
+            vera_core::config::VeraConfig::default()
+                .indexing
+                .max_chunk_lines
         );
     }
 
     #[test]
-    fn explicit_backend_takes_precedence_over_local_mode() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let path = temp.path().join("config.json");
+    fn load_config_reads_core_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = vera_core::config::VeraConfig::default();
+        cfg.indexing.max_chunk_lines = 99;
+        cfg.indexing.max_chunk_bytes = 1800;
+        let json = serde_json::json!({ "core_config": cfg });
+        std::fs::write(tmp.path().join("config.json"), json.to_string()).unwrap();
+        let config = load_config_from_path(&tmp.path().join("config.json"));
+        assert_eq!(config.indexing.max_chunk_lines, 99);
+        assert_eq!(config.indexing.max_chunk_bytes, 1800);
+    }
 
-        std::fs::write(&path, br#"{"local_mode":true,"backend":"api"}"#).unwrap();
-
-        let settings = load_runtime_settings_from_path(&path).unwrap();
+    #[test]
+    fn load_config_no_core_config_key_returns_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("config.json"), r#"{"backend":"api"}"#).unwrap();
+        let config = load_config_from_path(&tmp.path().join("config.json"));
         assert_eq!(
-            settings.backend_hint,
-            Some(vera_core::config::InferenceBackend::Api)
+            config.indexing.max_chunk_lines,
+            vera_core::config::VeraConfig::default()
+                .indexing
+                .max_chunk_lines
         );
-    }
-
-    #[test]
-    fn collect_relevant_changes_ignores_vera_directory() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let repo = temp.path().to_path_buf();
-        let ignored_dirs = vec![repo.join(".vera"), repo.join(".git")];
-
-        let events = vec![
-            notify_debouncer_mini::DebouncedEvent {
-                path: repo.join(".vera/index.db"),
-                kind: notify_debouncer_mini::DebouncedEventKind::Any,
-            },
-            notify_debouncer_mini::DebouncedEvent {
-                path: repo.join(".git/HEAD"),
-                kind: notify_debouncer_mini::DebouncedEventKind::Any,
-            },
-            notify_debouncer_mini::DebouncedEvent {
-                path: repo.join("src/main.rs"),
-                kind: notify_debouncer_mini::DebouncedEventKind::Any,
-            },
-        ];
-
-        let relevant = collect_relevant_changes(&events, &repo, &ignored_dirs);
-        assert_eq!(relevant, vec![repo.join("src/main.rs")]);
-    }
-
-    #[test]
-    fn format_change_preview_is_relative_and_capped() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let repo = temp.path().to_path_buf();
-
-        let paths = vec![
-            repo.join("src/a.rs"),
-            repo.join("src/b.rs"),
-            repo.join("src/c.rs"),
-        ];
-
-        let preview = format_change_preview(&paths, &repo, 2);
-        assert!(preview.contains("src/a.rs"));
-        assert!(preview.contains("src/b.rs"));
-        assert!(preview.contains("+1 more"));
-    }
-
-    #[test]
-    fn filter_indexable_changes_with_sets_respects_discovery_and_deletions() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let repo = temp.path().to_path_buf();
-
-        fs::create_dir_all(repo.join("src")).unwrap();
-        fs::create_dir_all(repo.join("vendor")).unwrap();
-        fs::write(repo.join("src/main.rs"), "fn main() {}\n").unwrap();
-        fs::write(repo.join("vendor/generated.rs"), "pub fn generated() {}\n").unwrap();
-
-        let deleted_file = repo.join("src/deleted.rs");
-
-        let changed = vec![
-            repo.join("src/main.rs"),
-            repo.join("vendor/generated.rs"),
-            deleted_file.clone(),
-        ];
-
-        let discoverable = HashSet::from(["src/main.rs".to_string()]);
-        let indexed = HashSet::from(["src/deleted.rs".to_string()]);
-
-        let filtered = filter_indexable_changes_with_sets(&repo, &changed, &discoverable, &indexed);
-
-        assert_eq!(filtered, vec![repo.join("src/main.rs"), deleted_file]);
-    }
-
-    #[test]
-    fn filter_indexable_changes_with_sets_accepts_directory_delete_for_indexed_children() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let repo = temp.path().to_path_buf();
-
-        let deleted_dir = repo.join("src/legacy");
-        let changed = vec![deleted_dir.clone()];
-        let discoverable = HashSet::new();
-        let indexed = HashSet::from(["src/legacy/old.rs".to_string()]);
-
-        let filtered = filter_indexable_changes_with_sets(&repo, &changed, &discoverable, &indexed);
-
-        assert_eq!(filtered, vec![deleted_dir]);
-    }
-
-    #[test]
-    fn filter_material_changes_ignores_existing_files_older_than_start() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let repo = temp.path().to_path_buf();
-
-        fs::create_dir_all(repo.join("src")).unwrap();
-        let file = repo.join("src/main.rs");
-        fs::write(&file, "fn main() {}\n").unwrap();
-
-        let watcher_started_at = SystemTime::now() + Duration::from_secs(1);
-        let mut seen = HashMap::new();
-        let filtered =
-            filter_material_changes(std::slice::from_ref(&file), watcher_started_at, &mut seen);
-
-        assert!(filtered.is_empty());
-        assert!(seen.contains_key(&file));
-    }
-
-    #[test]
-    fn filter_material_changes_skips_repeated_same_mtime_events() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let repo = temp.path().to_path_buf();
-
-        fs::create_dir_all(repo.join("src")).unwrap();
-        let file = repo.join("src/main.rs");
-        fs::write(&file, "fn main() {}\n").unwrap();
-
-        let mut seen = HashMap::new();
-        let first = filter_material_changes(
-            std::slice::from_ref(&file),
-            SystemTime::UNIX_EPOCH,
-            &mut seen,
-        );
-        let second = filter_material_changes(
-            std::slice::from_ref(&file),
-            SystemTime::UNIX_EPOCH,
-            &mut seen,
-        );
-
-        assert_eq!(first, vec![file]);
-        assert!(second.is_empty());
-    }
-
-    #[test]
-    fn filter_material_changes_ignores_existing_directories_but_keeps_deletions() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let repo = temp.path().to_path_buf();
-
-        let existing_dir = repo.join("src");
-        fs::create_dir_all(&existing_dir).unwrap();
-        let deleted_file = repo.join("src/deleted.rs");
-
-        let mut seen = HashMap::new();
-        let filtered = filter_material_changes(
-            &[existing_dir, deleted_file.clone()],
-            SystemTime::UNIX_EPOCH,
-            &mut seen,
-        );
-
-        assert_eq!(filtered, vec![deleted_file]);
     }
 }

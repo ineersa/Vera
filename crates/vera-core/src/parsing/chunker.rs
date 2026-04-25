@@ -291,6 +291,99 @@ pub fn markdown_section_chunks(source: &str, file_path: &str) -> Vec<Chunk> {
     chunks
 }
 
+/// Split an RST file into heading-based chunks.
+///
+/// `headings` is expected to come from tree-sitter title nodes as
+/// `(start_row, title_text)` pairs (0-based rows).
+pub fn rst_section_chunks(source: &str, file_path: &str, headings: &[(u32, String)]) -> Vec<Chunk> {
+    if source.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let lines: Vec<&str> = source.lines().collect();
+    if lines.is_empty() {
+        return Vec::new();
+    }
+
+    let mut sections: Vec<(usize, String)> = headings
+        .iter()
+        .filter_map(|(row, title)| {
+            let row = *row as usize;
+            if row >= lines.len() {
+                return None;
+            }
+            let normalized = title.split_whitespace().collect::<Vec<_>>().join(" ");
+            if normalized.is_empty() {
+                return None;
+            }
+            Some((row, normalized))
+        })
+        .collect();
+
+    sections.sort_by_key(|(row, _)| *row);
+    sections.dedup_by(|a, b| a.0 == b.0);
+
+    if sections.is_empty() {
+        return whole_file_chunk(source, file_path, Language::Rst);
+    }
+
+    let mut chunks = Vec::new();
+    let mut chunk_index: u32 = 0;
+
+    let first_start = sections[0].0 as u32;
+    if first_start > 0 {
+        let preface = join_lines(&lines, 0, first_start.saturating_sub(1));
+        if !preface.trim().is_empty() {
+            chunks.push(Chunk {
+                id: format!("{file_path}:{chunk_index}"),
+                file_path: file_path.to_string(),
+                line_start: 1,
+                line_end: first_start,
+                content: preface,
+                language: Language::Rst,
+                symbol_type: Some(SymbolType::Block),
+                symbol_name: Some(file_name(file_path).to_string()),
+            });
+            chunk_index += 1;
+        }
+    }
+
+    for (idx, (start_row, title)) in sections.iter().enumerate() {
+        let end_row = if idx + 1 < sections.len() {
+            sections[idx + 1].0.saturating_sub(1)
+        } else {
+            lines.len().saturating_sub(1)
+        };
+
+        if end_row < *start_row {
+            continue;
+        }
+
+        let content = join_lines(&lines, *start_row as u32, end_row as u32);
+        if content.trim().is_empty() {
+            continue;
+        }
+
+        chunks.push(Chunk {
+            id: format!("{file_path}:{chunk_index}"),
+            file_path: file_path.to_string(),
+            line_start: *start_row as u32 + 1,
+            line_end: end_row as u32 + 1,
+            content,
+            language: Language::Rst,
+            symbol_type: Some(SymbolType::Block),
+            symbol_name: Some(title.clone()),
+        });
+        chunk_index += 1;
+    }
+
+    if chunks.is_empty() {
+        return whole_file_chunk(source, file_path, Language::Rst);
+    }
+
+    chunks
+}
+
 /// Tier 0 fallback: sliding-window line-based chunking.
 ///
 /// Used for files with no tree-sitter grammar support. Produces overlapping
@@ -340,93 +433,52 @@ fn file_name(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
-/// Split chunks that exceed `max_tokens` into smaller sub-chunks.
+/// Split chunks that exceed `max_bytes` into smaller sub-chunks at line boundaries.
 ///
-/// Uses estimated token budgets and optional overlapping lines so adjacent
-/// sub-chunks preserve boundary context for retrieval and reranking.
+/// Uses a byte-length pre-filter: chunks already under the limit are passed
+/// through untouched (the common case for ~70-80% of chunks). Oversized chunks
+/// are split at natural boundaries using `find_split_boundary`.
 pub fn split_oversized_chunks(
     chunks: Vec<Chunk>,
-    max_tokens: usize,
-    overlap_lines: u32,
+    max_bytes: usize,
+    overlap_bytes: usize,
 ) -> Vec<Chunk> {
-    if max_tokens == 0 {
+    if max_bytes == 0 {
         return chunks;
     }
 
     let mut result = Vec::with_capacity(chunks.len());
     for chunk in chunks {
-        let embedding_text = crate::chunk_text::build_embedding_text(&chunk);
-        if crate::token_budget::estimate_tokens(&embedding_text) <= max_tokens {
+        if chunk.content.len() <= max_bytes {
             result.push(chunk);
             continue;
         }
 
         let lines: Vec<&str> = chunk.content.lines().collect();
-        let total = lines.len();
-        if total == 0 {
-            result.push(chunk);
-            continue;
-        }
-
-        let mut current = 0usize;
+        let total = lines.len() as u32;
+        let mut current: u32 = 0;
         let mut part = 1u32;
 
-        let mut header_chunk = chunk.clone();
-        header_chunk.content.clear();
-        let header_tokens = crate::token_budget::estimate_tokens(
-            &crate::chunk_text::build_embedding_text(&header_chunk),
-        );
-        let content_budget = max_tokens.saturating_sub(header_tokens).max(1);
-        let line_tokens = crate::token_budget::line_token_counts(&lines);
-
         while current < total {
-            let mut end = current;
-            let mut used_tokens = 0usize;
-
-            while end < total {
-                let next = used_tokens.saturating_add(line_tokens[end]);
-                if next > content_budget && end > current {
-                    break;
+            // Binary search for the largest end line that fits within max_bytes.
+            let mut lo = current;
+            let mut hi = (total - 1).min(current + 500); // cap search range
+            while lo < hi {
+                let mid = lo + (hi - lo).div_ceil(2);
+                let candidate: usize = lines[current as usize..=mid as usize]
+                    .iter()
+                    .map(|l| l.len() + 1)
+                    .sum();
+                if candidate <= max_bytes {
+                    lo = mid;
+                } else {
+                    hi = mid - 1;
                 }
-                if next > content_budget && end == current {
-                    end += 1;
-                    break;
-                }
-                used_tokens = next;
-                end += 1;
             }
 
-            if end <= current {
-                end = current + 1;
-            }
-
-            // Tighten to the largest range whose full embedding text fits the
-            // token budget. Metadata extraction can add non-trivial overhead,
-            // so a coarse line-token estimate alone is not enough.
-            while end > current + 1 {
-                let candidate_content = lines[current..end].join("\n");
-                let candidate_chunk = Chunk {
-                    id: chunk.id.clone(),
-                    file_path: chunk.file_path.clone(),
-                    line_start: chunk.line_start + current as u32,
-                    line_end: chunk.line_start + end as u32 - 1,
-                    content: candidate_content,
-                    language: chunk.language,
-                    symbol_type: chunk.symbol_type,
-                    symbol_name: chunk.symbol_name.clone(),
-                };
-
-                let token_count = crate::token_budget::estimate_tokens(
-                    &crate::chunk_text::build_embedding_text(&candidate_chunk),
-                );
-                if token_count <= max_tokens {
-                    break;
-                }
-
-                end -= 1;
-            }
-
-            let sub_content = lines[current..end].join("\n");
+            // Ensure at least one line per sub-chunk.
+            let end = lo.max(current);
+            let sub_content = lines[current as usize..=end as usize].join("\n");
             let sub_name = chunk
                 .symbol_name
                 .as_ref()
@@ -435,12 +487,12 @@ pub fn split_oversized_chunks(
             result.push(Chunk {
                 id: format!("{}:{part}", chunk.id),
                 file_path: chunk.file_path.clone(),
-                line_start: chunk.line_start + current as u32,
-                line_end: chunk.line_start + end as u32 - 1,
+                line_start: chunk.line_start + current,
+                line_end: chunk.line_start + end,
                 content: sub_content,
                 language: chunk.language,
                 symbol_type: chunk.symbol_type,
-                symbol_name: if part == 1 && end >= total {
+                symbol_name: if part == 1 && end + 1 >= total {
                     chunk.symbol_name.clone()
                 } else {
                     sub_name
@@ -448,21 +500,39 @@ pub fn split_oversized_chunks(
             });
 
             part += 1;
-            if end >= total {
+            if end + 1 >= total {
                 break;
             }
 
-            let max_overlap = (end - current).saturating_sub(1);
-            let overlap = (overlap_lines as usize).min(max_overlap);
-            let next_start = end.saturating_sub(overlap);
-            current = if next_start <= current {
-                end
-            } else {
-                next_start
-            };
+            if overlap_bytes == 0 {
+                current = end + 1;
+                continue;
+            }
+
+            let overlap_lines = compute_overlap_lines(&lines, current, end, overlap_bytes);
+            current = end + 1 - overlap_lines;
         }
     }
     result
+}
+
+fn compute_overlap_lines(lines: &[&str], start: u32, end: u32, overlap_bytes: usize) -> u32 {
+    if overlap_bytes == 0 || end < start {
+        return 0;
+    }
+
+    let mut bytes = 0usize;
+    let mut overlap = 0u32;
+    for row in (start..=end).rev() {
+        bytes = bytes.saturating_add(lines[row as usize].len() + 1);
+        overlap += 1;
+        if bytes >= overlap_bytes {
+            break;
+        }
+    }
+
+    let chunk_len = end - start + 1;
+    overlap.min(chunk_len.saturating_sub(1))
 }
 
 /// Join lines from `start_row` to `end_row` (inclusive, 0-based) into a string.
@@ -602,6 +672,39 @@ mod tests {
     }
 
     #[test]
+    fn oversized_split_supports_configurable_overlap() {
+        let lines = (1..=12)
+            .map(|i| format!("line_{i:02}_{}", "x".repeat(10)))
+            .collect::<Vec<_>>();
+        let content = lines.join("\n");
+        let chunk = Chunk {
+            id: "doc.rst:0".to_string(),
+            file_path: "doc.rst".to_string(),
+            line_start: 1,
+            line_end: 12,
+            content,
+            language: Language::Rst,
+            symbol_type: Some(SymbolType::Block),
+            symbol_name: Some("Doc".to_string()),
+        };
+
+        let chunks = split_oversized_chunks(vec![chunk], 60, 30);
+
+        assert!(chunks.len() > 1, "expected oversized chunk to split");
+        assert!(
+            chunks.iter().all(|c| c.content.len() <= 60),
+            "split chunks must respect max bytes"
+        );
+
+        for pair in chunks.windows(2) {
+            assert!(
+                pair[1].line_start <= pair[0].line_end,
+                "adjacent chunks should overlap in line ranges"
+            );
+        }
+    }
+
+    #[test]
     fn tier0_fallback_produces_chunks() {
         let mut lines = Vec::new();
         for i in 0..120 {
@@ -710,90 +813,5 @@ mod tests {
         assert_eq!(chunks[0].symbol_name.as_deref(), Some("Cargo.toml"));
         assert_eq!(chunks[0].line_start, 1);
         assert_eq!(chunks[0].line_end, 2);
-    }
-
-    #[test]
-    fn split_oversized_small_chunks_pass_through() {
-        let chunks = vec![Chunk {
-            id: "test.rs:0".to_string(),
-            file_path: "test.rs".to_string(),
-            line_start: 1,
-            line_end: 3,
-            content: "fn foo() {\n    42\n}".to_string(),
-            language: Language::Rust,
-            symbol_type: Some(SymbolType::Function),
-            symbol_name: Some("foo".to_string()),
-        }];
-        let result = split_oversized_chunks(chunks, 10_000, 2);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].symbol_name, Some("foo".to_string()));
-    }
-
-    #[test]
-    fn split_oversized_large_chunk_gets_split() {
-        let long_line = "    ".to_string() + &"x".repeat(200);
-        let content: Vec<String> = (0..60).map(|i| format!("{i}: {long_line}")).collect();
-        let full = content.join("\n");
-
-        let chunks = vec![Chunk {
-            id: "big.rs:0".to_string(),
-            file_path: "big.rs".to_string(),
-            line_start: 1,
-            line_end: 60,
-            content: full,
-            language: Language::Rust,
-            symbol_type: Some(SymbolType::Function),
-            symbol_name: Some("huge_fn".to_string()),
-        }];
-
-        let max_tokens = 260;
-        let result = split_oversized_chunks(chunks, max_tokens, 2);
-        assert!(result.len() > 1, "should split into multiple chunks");
-
-        for chunk in &result {
-            let text = crate::chunk_text::build_embedding_text(chunk);
-            assert!(
-                crate::token_budget::estimate_tokens(&text) <= max_tokens + 24,
-                "sub-chunk embedding text too large: {} tokens",
-                crate::token_budget::estimate_tokens(&text)
-            );
-        }
-
-        assert!(
-            result[0].symbol_name.as_ref().unwrap().contains("part 1"),
-            "first sub-chunk should have part number"
-        );
-        assert!(
-            result.last().unwrap().line_end <= 60,
-            "should not exceed original end line"
-        );
-    }
-
-    #[test]
-    fn split_oversized_overlaps_content() {
-        let lines: Vec<String> = (0..30)
-            .map(|i| format!("line {i} {}", "x".repeat(100)))
-            .collect();
-        let full = lines.join("\n");
-
-        let chunks = vec![Chunk {
-            id: "ov.rs:0".to_string(),
-            file_path: "ov.rs".to_string(),
-            line_start: 1,
-            line_end: 30,
-            content: full,
-            language: Language::Rust,
-            symbol_type: Some(SymbolType::Function),
-            symbol_name: Some("fn_ov".to_string()),
-        }];
-
-        let max_tokens = 140;
-        let result = split_oversized_chunks(chunks, max_tokens, 2);
-        assert!(result.len() > 1);
-
-        assert!(
-            result[1].line_start <= result[0].line_end,
-            "second chunk should overlap first chunk boundary"
-        );
     }
 }

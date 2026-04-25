@@ -34,20 +34,15 @@ pub struct IndexingConfig {
     #[serde(default)]
     pub no_default_excludes: bool,
     /// Maximum chunk size in bytes for embedding. Chunks exceeding this are
-    /// split at line boundaries. 0 disables byte fallback.
-    ///
-    /// Prefer `max_chunk_tokens` for token-aware chunk budgeting. This field
-    /// remains for backwards compatibility with existing configs.
+    /// split at line boundaries. 0 disables byte-based splitting.
+    /// Default: 24576 (24KB, ~6K-7K tokens, safe for any embedding model).
     #[serde(default = "default_max_chunk_bytes")]
     pub max_chunk_bytes: usize,
-    /// Maximum chunk size in estimated tokens for embedding.
-    ///
-    /// When non-zero, this takes precedence over `max_chunk_bytes`.
-    #[serde(default = "default_max_chunk_tokens")]
-    pub max_chunk_tokens: usize,
-    /// Number of overlapping lines between token-split sub-chunks.
-    #[serde(default = "default_chunk_overlap_lines")]
-    pub chunk_overlap_lines: u32,
+    /// Overlap (in bytes) to keep between adjacent oversized split chunks.
+    /// Uses line boundaries and best-effort byte approximation.
+    /// Default: 0 (no overlap).
+    #[serde(default)]
+    pub max_chunk_overlap_bytes: usize,
 }
 
 fn default_max_chunk_bytes() -> usize {
@@ -55,34 +50,6 @@ fn default_max_chunk_bytes() -> usize {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(24_576)
-}
-
-fn default_max_chunk_tokens() -> usize {
-    std::env::var("VERA_MAX_CHUNK_TOKENS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0)
-}
-
-fn default_chunk_overlap_lines() -> u32 {
-    std::env::var("VERA_CHUNK_OVERLAP_LINES")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(2)
-}
-
-impl IndexingConfig {
-    /// Effective max chunk token budget.
-    ///
-    /// Uses `max_chunk_tokens` when set, otherwise derives a conservative
-    /// token budget from `max_chunk_bytes`.
-    pub fn effective_max_chunk_tokens(&self) -> usize {
-        if self.max_chunk_tokens > 0 {
-            self.max_chunk_tokens
-        } else {
-            crate::token_budget::token_budget_from_bytes(self.max_chunk_bytes)
-        }
-    }
 }
 
 impl Default for IndexingConfig {
@@ -104,8 +71,7 @@ impl Default for IndexingConfig {
             no_ignore: false,
             no_default_excludes: false,
             max_chunk_bytes: default_max_chunk_bytes(),
-            max_chunk_tokens: default_max_chunk_tokens(),
-            chunk_overlap_lines: default_chunk_overlap_lines(),
+            max_chunk_overlap_bytes: 0,
         }
     }
 }
@@ -119,37 +85,150 @@ pub struct RetrievalConfig {
     pub rrf_k: f64,
     /// Number of candidates to pass to the reranker.
     pub rerank_candidates: usize,
+    /// Hard cap for BM25 candidates fetched before RRF fusion.
+    /// 0 means no cap (adaptive strategy only).
+    #[serde(default = "default_max_bm25_candidates")]
+    pub max_bm25_candidates: usize,
+    /// Hard cap for vector candidates fetched before RRF fusion.
+    /// 0 means no cap (adaptive strategy only).
+    #[serde(default = "default_max_vector_candidates")]
+    pub max_vector_candidates: usize,
     /// Whether to enable reranking (requires API credentials).
     pub reranking_enabled: bool,
     /// Maximum documents per reranker API call. Larger candidate sets are
     /// partitioned into batches and scores merged. 0 means no batching.
     #[serde(default = "default_max_rerank_batch")]
     pub max_rerank_batch: usize,
+    /// Maximum characters per candidate document sent to the reranker.
+    /// Truncates at a newline boundary. 0 means no truncation.
+    #[serde(default = "default_max_rerank_doc_chars")]
+    pub max_rerank_doc_chars: usize,
+    /// Controls how much metadata is prepended to each reranker document.
+    ///
+    /// - `full`: rich metadata (symbol, path tokens, role, lines)
+    /// - `none`: raw chunk content only
+    /// - `non_docs`: full metadata except for explicit docs-scope queries
+    /// - `light`: only source path + breadcrumb
+    #[serde(default = "default_rerank_metadata_mode")]
+    pub rerank_metadata_mode: RerankMetadataMode,
     /// Total character budget for search output. Results are progressively
     /// truncated so the combined output stays within this limit.
     /// 0 means unlimited.
     #[serde(default = "default_max_output_chars")]
     pub max_output_chars: usize,
-    /// Maximum documents per reranker API call. When non-zero, overrides
-    /// `RERANKER_MAX_DOCS_PER_REQUEST`. 0 = use env var or default.
-    #[serde(default)]
-    pub reranker_max_docs_per_request: usize,
-    /// Maximum estimated tokens per formatted reranker document. When non-zero,
-    /// overrides `RERANKER_MAX_DOCUMENT_TOKENS` / `RERANKER_MAX_DOCUMENT_CHARS`.
-    /// 0 = use env var or default.
-    #[serde(default)]
-    pub reranker_max_document_tokens: usize,
+    /// When enabled, identifier-like short queries (up to 4 terms) use a
+    /// reduced retrieval budget: BM25/vector/rerank candidate pools and RRF k
+    /// are each scaled down by 50%.
+    #[serde(default = "default_adaptive_exact_query_tuning")]
+    pub adaptive_exact_query_tuning: bool,
+    /// When true, any retrieval-stage failure aborts the search instead of
+    /// degrading to partial fallbacks.
+    #[serde(default = "default_fail_on_stage_error")]
+    pub fail_on_stage_error: bool,
 }
 
 fn default_max_output_chars() -> usize {
     12_000
 }
 
+/// How much metadata to include in each reranker candidate document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RerankMetadataMode {
+    /// Include all available metadata fields.
+    Full,
+    /// Send only chunk content (no metadata wrapper).
+    None,
+    /// Include full metadata unless query scope is explicitly `docs`.
+    NonDocs,
+    /// Include only light metadata (`source` and breadcrumb-like path).
+    Light,
+}
+
+impl fmt::Display for RerankMetadataMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Full => "full",
+            Self::None => "none",
+            Self::NonDocs => "non_docs",
+            Self::Light => "light",
+        };
+        write!(f, "{value}")
+    }
+}
+
+impl FromStr for RerankMetadataMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "full" => Ok(Self::Full),
+            "none" | "off" | "no" => Ok(Self::None),
+            "non_docs" | "non-docs" | "non_docs_only" | "non-docs-only" => Ok(Self::NonDocs),
+            "light" => Ok(Self::Light),
+            other => Err(format!(
+                "invalid rerank metadata mode '{other}' (expected one of: full, none, non_docs, light)"
+            )),
+        }
+    }
+}
+
+fn default_rerank_metadata_mode() -> RerankMetadataMode {
+    std::env::var("VERA_RERANK_METADATA_MODE")
+        .ok()
+        .and_then(|value| RerankMetadataMode::from_str(&value).ok())
+        .unwrap_or(RerankMetadataMode::Full)
+}
+
+fn default_adaptive_exact_query_tuning() -> bool {
+    std::env::var("VERA_ADAPTIVE_EXACT_QUERY_TUNING")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
+fn default_fail_on_stage_error() -> bool {
+    std::env::var("VERA_FAIL_ON_STAGE_ERROR")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
 fn default_max_rerank_batch() -> usize {
     std::env::var("VERA_MAX_RERANK_BATCH")
         .ok()
+        .or_else(|| std::env::var("RERANKER_MAX_DOCS_PER_REQUEST").ok())
         .and_then(|v| v.parse().ok())
         .unwrap_or(20)
+}
+
+fn default_max_rerank_doc_chars() -> usize {
+    std::env::var("VERA_MAX_RERANK_DOC_CHARS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4_800)
+}
+
+fn default_max_bm25_candidates() -> usize {
+    std::env::var("VERA_MAX_BM25_CANDIDATES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+
+fn default_max_vector_candidates() -> usize {
+    std::env::var("VERA_MAX_VECTOR_CANDIDATES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
 }
 
 impl Default for RetrievalConfig {
@@ -158,11 +237,15 @@ impl Default for RetrievalConfig {
             default_limit: 5,
             rrf_k: 60.0,
             rerank_candidates: 50,
+            max_bm25_candidates: default_max_bm25_candidates(),
+            max_vector_candidates: default_max_vector_candidates(),
             reranking_enabled: true,
             max_rerank_batch: default_max_rerank_batch(),
+            max_rerank_doc_chars: default_max_rerank_doc_chars(),
+            rerank_metadata_mode: default_rerank_metadata_mode(),
             max_output_chars: 12_000,
-            reranker_max_docs_per_request: 8,
-            reranker_max_document_tokens: 300,
+            adaptive_exact_query_tuning: default_adaptive_exact_query_tuning(),
+            fail_on_stage_error: default_fail_on_stage_error(),
         }
     }
 }
@@ -551,11 +634,75 @@ mod tests {
 
     #[test]
     fn default_config_is_valid() {
+        let _guard = env_lock().lock().unwrap();
+        remove_env("VERA_ADAPTIVE_EXACT_QUERY_TUNING");
+        remove_env("VERA_FAIL_ON_STAGE_ERROR");
         let config = VeraConfig::default();
         assert!(config.indexing.max_chunk_lines > 0);
         assert!(config.retrieval.default_limit > 0);
         assert!(config.retrieval.rrf_k > 0.0);
+        assert!(config.retrieval.max_rerank_batch > 0);
+        assert!(config.retrieval.max_rerank_doc_chars > 0);
+        assert_eq!(
+            config.retrieval.rerank_metadata_mode,
+            RerankMetadataMode::Full
+        );
+        assert_eq!(config.retrieval.max_bm25_candidates, 0);
+        assert_eq!(config.retrieval.max_vector_candidates, 0);
+        assert!(!config.retrieval.adaptive_exact_query_tuning);
+        assert!(!config.retrieval.fail_on_stage_error);
         assert!(config.embedding.batch_size > 0);
+    }
+
+    #[test]
+    fn rerank_metadata_mode_reads_env_toggle() {
+        let _guard = env_lock().lock().unwrap();
+        set_env("VERA_RERANK_METADATA_MODE", "light");
+        let config = VeraConfig::default();
+        assert_eq!(
+            config.retrieval.rerank_metadata_mode,
+            RerankMetadataMode::Light
+        );
+        remove_env("VERA_RERANK_METADATA_MODE");
+    }
+
+    #[test]
+    fn rerank_metadata_mode_parses_aliases() {
+        assert_eq!(
+            RerankMetadataMode::from_str("non-docs").unwrap(),
+            RerankMetadataMode::NonDocs
+        );
+        assert_eq!(
+            RerankMetadataMode::from_str("none").unwrap(),
+            RerankMetadataMode::None
+        );
+        assert_eq!(
+            RerankMetadataMode::from_str("full").unwrap(),
+            RerankMetadataMode::Full
+        );
+    }
+
+    #[test]
+    fn rerank_metadata_mode_rejects_invalid_values() {
+        assert!(RerankMetadataMode::from_str("verbose").is_err());
+    }
+
+    #[test]
+    fn adaptive_exact_query_tuning_reads_env_toggle() {
+        let _guard = env_lock().lock().unwrap();
+        set_env("VERA_ADAPTIVE_EXACT_QUERY_TUNING", "true");
+        let config = VeraConfig::default();
+        assert!(config.retrieval.adaptive_exact_query_tuning);
+        remove_env("VERA_ADAPTIVE_EXACT_QUERY_TUNING");
+    }
+
+    #[test]
+    fn fail_on_stage_error_reads_env_toggle() {
+        let _guard = env_lock().lock().unwrap();
+        set_env("VERA_FAIL_ON_STAGE_ERROR", "true");
+        let config = VeraConfig::default();
+        assert!(config.retrieval.fail_on_stage_error);
+        remove_env("VERA_FAIL_ON_STAGE_ERROR");
     }
 
     #[test]

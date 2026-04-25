@@ -13,34 +13,25 @@ const MAX_METADATA_TOKEN_CHARS: usize = 80;
 
 /// Build the structured text used for semantic embeddings.
 ///
-/// When a budget is supplied the code content is truncated at a line boundary
-/// so the total output (metadata + code) stays within budget.
+/// When `max_bytes` is non-zero the code content is truncated at a line
+/// boundary so the total output (metadata + code) stays within budget.
 /// This prevents oversized chunks from exceeding the embedding model's
 /// context window.
 pub fn build_embedding_text(chunk: &Chunk) -> String {
-    build_structured_text(chunk, 0, 0)
+    build_structured_text(chunk, 0)
 }
 
 /// Like [`build_embedding_text`] but caps the total output at `max_bytes`.
 pub fn build_embedding_text_bounded(chunk: &Chunk, max_bytes: usize) -> String {
-    build_structured_text(
-        chunk,
-        max_bytes,
-        crate::token_budget::token_budget_from_bytes(max_bytes),
-    )
-}
-
-/// Like [`build_embedding_text`] but caps the total output at `max_tokens`.
-pub fn build_embedding_text_bounded_tokens(chunk: &Chunk, max_tokens: usize) -> String {
-    build_structured_text(chunk, 0, max_tokens)
+    build_structured_text(chunk, max_bytes)
 }
 
 /// Build the structured text indexed by BM25.
 pub fn build_bm25_text(chunk: &Chunk) -> String {
-    build_structured_text(chunk, 0, 0)
+    build_structured_text(chunk, 0)
 }
 
-fn build_structured_text(chunk: &Chunk, max_bytes: usize, max_tokens: usize) -> String {
+fn build_structured_text(chunk: &Chunk, max_bytes: usize) -> String {
     let mut parts = Vec::new();
     let filename = file_name(&chunk.file_path);
     let path_tokens = normalize_path_tokens(&chunk.file_path);
@@ -91,27 +82,31 @@ fn build_structured_text(chunk: &Chunk, max_bytes: usize, max_tokens: usize) -> 
         "Code"
     };
 
-    // When a budget is set, truncate the code content so the total
-    // (metadata header + code) fits. Metadata is kept intact since it is
+    // When a byte budget is set, truncate the code content so the total
+    // (metadata header + code) fits. Metadata is kept intact since it's
     // small and high-value for retrieval; only the code body is trimmed.
-    let content = if max_tokens > 0 {
-        let header = parts.join("\n");
-        let overhead = crate::token_budget::estimate_tokens(&format!("{header}\n{label}:\n"));
-        let content_budget = max_tokens.saturating_sub(overhead);
-        truncate_at_token_boundary(&chunk.content, content_budget)
-    } else if max_bytes > 0 {
+    let content = if max_bytes > 0 {
         let header = parts.join("\n");
         // header + "\n" + "Code:\n" = overhead before the actual content
         let overhead = header.len() + 1 + label.len() + 2;
         let content_budget = max_bytes.saturating_sub(overhead);
-        truncate_at_line_boundary(&chunk.content, content_budget)
+        if content_budget == 0 {
+            String::new()
+        } else {
+            truncate_at_line_boundary(&chunk.content, content_budget)
+        }
     } else {
         chunk.content.clone()
     };
 
     parts.push(format!("{label}:\n{content}"));
 
-    parts.join("\n")
+    let structured = parts.join("\n");
+    if max_bytes > 0 && structured.len() > max_bytes {
+        truncate_at_line_boundary(&structured, max_bytes)
+    } else {
+        structured
+    }
 }
 
 /// Truncate `text` to at most `max_bytes`, cutting at the last newline
@@ -120,46 +115,11 @@ fn truncate_at_line_boundary(text: &str, max_bytes: usize) -> String {
     if max_bytes == 0 || text.len() <= max_bytes {
         return text.to_string();
     }
-
-    let mut boundary = max_bytes.min(text.len());
-    while boundary > 0 && !text.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-
-    if boundary == 0 {
-        return String::new();
-    }
-
     // Find the last newline at or before the byte budget.
-    let cut = &text[..boundary];
-    let end = cut.rfind('\n').unwrap_or(boundary);
+    let floor = floor_char_boundary(text, max_bytes);
+    let cut = &text[..floor];
+    let end = cut.rfind('\n').unwrap_or(floor);
     text[..end].to_string()
-}
-
-/// Truncate `text` to at most `max_tokens`, cutting at line boundaries.
-fn truncate_at_token_boundary(text: &str, max_tokens: usize) -> String {
-    if max_tokens == 0 || crate::token_budget::estimate_tokens(text) <= max_tokens {
-        return text.to_string();
-    }
-
-    let lines: Vec<&str> = text.lines().collect();
-    let mut used = 0usize;
-    let mut end = 0usize;
-
-    while end < lines.len() {
-        let line_tokens = crate::token_budget::estimate_tokens(lines[end]).saturating_add(1);
-        if used.saturating_add(line_tokens) > max_tokens {
-            break;
-        }
-        used = used.saturating_add(line_tokens);
-        end += 1;
-    }
-
-    if end > 0 {
-        lines[..end].join("\n")
-    } else {
-        crate::token_budget::truncate_to_token_budget(text, max_tokens)
-    }
 }
 
 fn symbol_line(chunk: &Chunk) -> Option<String> {
@@ -491,6 +451,16 @@ fn abbreviate_middle(value: &str, max_chars: usize) -> String {
     format!("{head}...{tail}")
 }
 
+fn floor_char_boundary(s: &str, mut i: usize) -> usize {
+    if i >= s.len() {
+        return s.len();
+    }
+    while !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 fn extract_flow_hints(chunk: &Chunk) -> Vec<&'static str> {
     let content = chunk.content.to_ascii_lowercase();
     let mut hints = Vec::new();
@@ -717,19 +687,34 @@ pub fn authenticate(user: &str, password: &str) -> Result<Token> {\n\
     }
 
     #[test]
-    fn bounded_embedding_text_handles_unicode_boundaries() {
+    fn truncate_at_line_boundary_handles_multibyte_utf8() {
+        let text = "first line\n漢字漢字";
+        let max_bytes = "first line\n".len() + 1;
+
+        assert_eq!(truncate_at_line_boundary(text, max_bytes), "first line");
+    }
+
+    #[test]
+    fn embedding_text_bounded_never_exceeds_byte_budget() {
+        let content = (0..120)
+            .map(|i| format!("use crate::very::long::module::path{i};"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let chunk = Chunk {
-            id: "docs/post.md:0".to_string(),
-            file_path: "docs/post.md".to_string(),
+            id: "src/lib.rs:0".to_string(),
+            file_path: "src/lib.rs".to_string(),
             line_start: 1,
-            line_end: 3,
-            content: "intro\n⚙️ configuration section\nend".to_string(),
-            language: Language::Markdown,
+            line_end: 120,
+            content,
+            language: Language::Rust,
             symbol_type: Some(SymbolType::Block),
-            symbol_name: Some("post.md".to_string()),
+            symbol_name: None,
         };
 
-        let text = build_embedding_text_bounded(&chunk, 60);
-        assert!(!text.is_empty());
+        let text = build_embedding_text_bounded(&chunk, 220);
+        assert!(
+            text.len() <= 220,
+            "bounded embedding text should not exceed max bytes"
+        );
     }
 }

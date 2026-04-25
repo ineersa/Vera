@@ -13,11 +13,13 @@ Every query runs two retrieval paths in parallel:
 
 Results from both paths merge through Reciprocal Rank Fusion (RRF), so a result that scores well in both lists rises to the top. Full details: [how-it-works.md](how-it-works.md).
 
+You can hard-cap pre-fusion candidate pools with `retrieval.max_bm25_candidates` and `retrieval.max_vector_candidates` (both default to `0`, meaning adaptive behavior with no hard cap).
+
 ### Cross-Encoder Reranking
 
 After fusion, the top candidates go through a cross-encoder that reads query and candidate together as a single pair. This is the most impactful stage: it lifts MRR@10 from 0.39 to 0.60 (54% improvement). Most code search tools skip this step entirely.
 
-Large candidate sets are automatically batched (default 20 per request, configurable via `VERA_MAX_RERANK_BATCH`). Individual documents exceeding the reranker's context window are truncated at the last newline boundary before the character limit (default 4800, configurable via `VERA_MAX_RERANK_DOC_CHARS`). Both settings work automatically with no required configuration.
+Large candidate sets are automatically batched (default 20 per request, configurable via `retrieval.max_rerank_batch` or `VERA_MAX_RERANK_BATCH`). Individual documents exceeding the reranker's context window are truncated at the last newline boundary before the character limit (default 4800, configurable via `retrieval.max_rerank_doc_chars` or `VERA_MAX_RERANK_DOC_CHARS`). Both settings work automatically with no required configuration.
 
 ### Multi-Query Search
 
@@ -27,9 +29,11 @@ A single search call can accept multiple queries at once. Run 2-3 varied queries
 
 An optional `intent` parameter lets you describe your higher-level goal separately from the search query. The reranker uses this to score candidates against what you actually need, not just what you typed. Useful when the query is ambiguous or too short to convey full context.
 
-### Deep Search (RAG Fusion)
+### Deep Search
 
-`vera search "query" --deep` expands the query into multiple related rewrites using an OpenAI-compatible completion model, runs search for each rewrite, and fuses all ranked lists with reciprocal rank fusion (RRF). This improves recall for broad conceptual queries without requiring manual multi-query prompting.
+`vera search "query" --deep` runs a BM25 pre-filter to collect real symbol names and file paths from the index, feeds those as context hints to an LLM completion endpoint, and decomposes the query into targeted sub-queries that each search for a different code location or concept. Sub-queries run in parallel, and results merge via weighted Reciprocal Rank Fusion (the original query counts double). This finds code across multiple relevant locations rather than just rephrasing the same intent.
+
+Requires a completion endpoint: set `VERA_COMPLETION_BASE_URL` and `VERA_COMPLETION_MODEL_ID` (any OpenAI-compatible chat endpoint works, including local llama.cpp). When no completion endpoint is configured, `--deep` falls back to iterative symbol-following: it extracts symbol names from top results and searches for those symbols automatically.
 
 ### Compact Mode
 
@@ -60,7 +64,7 @@ Narrow results by language (`--lang rust`), file path glob (`--path "src/**/*.rs
 
 ### Tree-Sitter Structural Parsing
 
-64 languages supported, 60 with tree-sitter grammars compiled into the binary. Functions, classes, structs, traits, interfaces, methods, and `impl` blocks are extracted as discrete chunks. Results map to actual symbol boundaries, not arbitrary line ranges. The remaining 4 formats (TOML, YAML, JSON, and Markdown) use text-based chunking.
+65 languages supported, 61 with tree-sitter grammars compiled into the binary. Functions, classes, structs, traits, interfaces, methods, and `impl` blocks are extracted as discrete chunks. Results map to actual symbol boundaries, not arbitrary line ranges. The remaining 4 formats (TOML, YAML, JSON, and Markdown) use text-based chunking.
 
 Symbol-aware chunking scores 2.3x higher MRR on symbol lookup than sliding-window chunking (0.55 vs 0.24), while using 14% fewer tokens. Full list: [supported-languages.md](supported-languages.md).
 
@@ -68,7 +72,7 @@ Symbol-aware chunking scores 2.3x higher MRR on symbol lookup than sliding-windo
 
 Large symbols (>150 lines) are split at logical boundaries: closing braces, semicolons, blank lines. This preserves readability instead of cutting at arbitrary line counts. Languages without a tree-sitter grammar fall back to sliding-window chunking. Module-level gaps between symbols are kept as chunks when they carry useful retrieval context.
 
-Chunks that exceed the embedding model's input limit are automatically split in a post-processing pass. API mode uses a 24KB byte budget (roughly 6K-7K tokens, safe for any modern embedding model). Local mode uses the model's own tokenizer and max_length. Override with `VERA_MAX_CHUNK_BYTES` if needed.
+Chunks that exceed the embedding model's input limit are automatically split in a post-processing pass. API mode uses a 24KB byte budget (roughly 6K-7K tokens, safe for any modern embedding model). Local mode uses the model's own tokenizer and max_length. Tune with `indexing.max_chunk_bytes` / `VERA_MAX_CHUNK_BYTES`; optional overlap between split chunks is controlled by `indexing.max_chunk_overlap_bytes`.
 
 ### Incremental Updates
 
@@ -76,7 +80,7 @@ Chunks that exceed the embedding model's input limit are automatically split in 
 
 ### File Watching
 
-`vera watch .` monitors the project for file changes and triggers incremental index updates automatically (debounced at 2s). Keeps the index fresh during long coding sessions without manual intervention.
+`vera watch .` monitors the project for file changes and triggers incremental index updates automatically (debounced at 2s). Keeps the index fresh during long coding sessions without manual intervention. Progress logs print to stderr so you can see when updates start, complete, or skip.
 
 ### Flexible Exclusions
 
@@ -115,7 +119,7 @@ Indexing shows a live progress bar with file discovery, parsing, and embedding g
 Indexing, storage, and search always stay on your machine. The backend choice only affects where embeddings and reranking run:
 
 - **Local mode**: `vera setup` downloads curated ONNX models. The full pipeline (BM25 + vector + rerank) runs without external calls.
-- **API mode**: Point at any OpenAI-compatible endpoint (remote APIs or local servers like llama.cpp). Only model calls leave your machine. Query prefixes for asymmetric embedding models (Qwen3, CodeRankEmbed, E5, BGE) are auto-detected from the model ID. Override with `EMBEDDING_QUERY_PREFIX` for unsupported models.
+- **API mode**: Point at any OpenAI-compatible endpoint (remote APIs or local servers like llama.cpp). Only model calls leave your machine. Query prefixes for asymmetric embedding models (Qwen3, CodeRankEmbed, E5, BGE) are auto-detected from the model ID. Override with `EMBEDDING_QUERY_PREFIX` for unsupported models. See [llama-cpp-setup.md](llama-cpp-setup.md) for a step-by-step guide.
 
 ### Curated Local Models
 
@@ -176,6 +180,7 @@ Large chunks are automatically truncated at 8K characters with a `[...truncated]
 | Tool | What it does |
 |------|-------------|
 | `search_code` | Hybrid search with multi-query, intent, and all filters. Auto-indexes and starts watcher on first use. |
+| `get_stats` | File count, chunk count, index size, language breakdown |
 | `get_overview` | Architecture overview with conventions detection |
 | `regex_search` | Regex search with context lines |
 

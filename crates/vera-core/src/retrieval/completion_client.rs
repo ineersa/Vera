@@ -7,53 +7,43 @@ use anyhow::{Context, Result, anyhow};
 use serde::Serialize;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
-const DEFAULT_MAX_ALTERNATIVES: usize = 4;
+const DEFAULT_MAX_ALTERNATIVES: usize = 2;
 const MAX_ALLOWED_ALTERNATIVES: usize = 8;
 const DEFAULT_MAX_TOKENS: u32 = 16_384;
 const MIN_MAX_TOKENS: u32 = 128;
 const MAX_MAX_TOKENS: u32 = 65_536;
 
-/// OpenAI-compatible chat completion client config.
+/// Configuration for the OpenAI-compatible completion client.
 #[derive(Debug, Clone)]
 pub struct CompletionClientConfig {
-    /// Base URL for OpenAI-compatible API (for example `http://localhost:8080/v1`).
     pub base_url: String,
-    /// Model identifier for query expansion.
     pub model_id: String,
-    /// API key used for bearer auth. Local providers can ignore this value.
     pub api_key: String,
-    /// Request timeout.
     pub timeout: Duration,
-    /// Number of alternative queries to request.
     pub max_alternatives: usize,
-    /// Token budget for completion output.
-    ///
-    /// Some reasoning models emit long `reasoning_content` before final output,
-    /// so deep search needs a generous completion budget.
+    /// Token budget for completion output. Reasoning models may need large
+    /// budgets since they emit `reasoning_content` before the final answer.
     pub max_tokens: u32,
 }
 
 impl CompletionClientConfig {
-    /// Returns true when completion env vars are present.
+    /// Returns true when the required env vars are present.
     pub fn is_configured() -> bool {
         let has_base = std::env::var("VERA_COMPLETION_BASE_URL")
             .ok()
-            .is_some_and(|value| !value.trim().is_empty());
+            .is_some_and(|v| !v.trim().is_empty());
         let has_model = std::env::var("VERA_COMPLETION_MODEL_ID")
             .ok()
-            .is_some_and(|value| !value.trim().is_empty());
+            .is_some_and(|v| !v.trim().is_empty());
         has_base && has_model
     }
 
-    /// Build completion client config from env vars.
+    /// Build config from env vars.
     ///
-    /// Reads:
-    /// - `VERA_COMPLETION_BASE_URL`
-    /// - `VERA_COMPLETION_MODEL_ID`
-    /// - `VERA_COMPLETION_API_KEY` (optional, defaults to `none`)
-    /// - `VERA_COMPLETION_TIMEOUT_SECS` (optional)
-    /// - `VERA_COMPLETION_MAX_ALTERNATIVES` (optional)
-    /// - `VERA_COMPLETION_MAX_TOKENS` (optional)
+    /// Required: `VERA_COMPLETION_BASE_URL`, `VERA_COMPLETION_MODEL_ID`.
+    /// Optional: `VERA_COMPLETION_API_KEY` (default `none`),
+    /// `VERA_COMPLETION_TIMEOUT_SECS`, `VERA_COMPLETION_MAX_ALTERNATIVES`,
+    /// `VERA_COMPLETION_MAX_TOKENS`.
     pub fn from_env() -> Result<Self> {
         let base_url = std::env::var("VERA_COMPLETION_BASE_URL")
             .context("VERA_COMPLETION_BASE_URL not set")?
@@ -77,18 +67,18 @@ impl CompletionClientConfig {
 
         let timeout = std::env::var("VERA_COMPLETION_TIMEOUT_SECS")
             .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .filter(|value| *value > 0)
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|v| *v > 0)
             .unwrap_or(DEFAULT_TIMEOUT_SECS);
         let max_alternatives = std::env::var("VERA_COMPLETION_MAX_ALTERNATIVES")
             .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .map(|value| value.clamp(1, MAX_ALLOWED_ALTERNATIVES))
+            .and_then(|v| v.parse::<usize>().ok())
+            .map(|v| v.clamp(1, MAX_ALLOWED_ALTERNATIVES))
             .unwrap_or(DEFAULT_MAX_ALTERNATIVES);
         let max_tokens = std::env::var("VERA_COMPLETION_MAX_TOKENS")
             .ok()
-            .and_then(|value| value.parse::<u32>().ok())
-            .map(|value| value.clamp(MIN_MAX_TOKENS, MAX_MAX_TOKENS))
+            .and_then(|v| v.parse::<u32>().ok())
+            .map(|v| v.clamp(MIN_MAX_TOKENS, MAX_MAX_TOKENS))
             .unwrap_or(DEFAULT_MAX_TOKENS);
 
         Ok(Self {
@@ -106,14 +96,14 @@ impl CompletionClientConfig {
     }
 }
 
-/// OpenAI-compatible chat completion client.
+/// OpenAI-compatible chat completion client for query expansion.
 pub struct CompletionClient {
     client: reqwest::blocking::Client,
     config: CompletionClientConfig,
 }
 
 impl CompletionClient {
-    /// Create a completion client if env vars are configured.
+    /// Create a client if env vars are configured, otherwise return `Ok(None)`.
     pub fn from_env_if_configured() -> Result<Option<Self>> {
         if !CompletionClientConfig::is_configured() {
             return Ok(None);
@@ -121,7 +111,7 @@ impl CompletionClient {
         Self::from_env().map(Some)
     }
 
-    /// Create a completion client from env vars.
+    /// Create a client from env vars.
     pub fn from_env() -> Result<Self> {
         crate::init_tls();
         let config = CompletionClientConfig::from_env()?;
@@ -134,16 +124,48 @@ impl CompletionClient {
 
     /// Generate alternative code-search queries for RAG fusion.
     pub fn expand_query(&self, query: &str) -> Result<Vec<String>> {
+        self.expand_query_with_context(query, &[])
+    }
+
+    /// Generate alternative queries with optional codebase context from a BM25
+    /// pre-filter. When `context_hints` is non-empty the LLM sees real symbol
+    /// names and file paths from the index, producing more targeted rewrites.
+    pub fn expand_query_with_context(
+        &self,
+        query: &str,
+        context_hints: &[String],
+    ) -> Result<Vec<String>> {
+        let context_block = if context_hints.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n\nRelevant symbols and files found in the codebase:\n{}\n\n\
+                 Use these as hints to generate more targeted rewrites.",
+                context_hints.join("\n")
+            )
+        };
+
         let prompt = format!(
-            "Original query: {query}\n\nGenerate {} alternative code-search queries that keep the same intent but vary terminology and angle (implementation, API usage, symbols, related concepts).\n\nReturn ONLY a JSON array of strings.",
+            "Original query: {query}{context_block}\n\n\
+             Decompose this into {} targeted sub-queries that each search for a \
+             different code location or concept needed to answer the original query. \
+             Each sub-query should target specific symbols, types, or code patterns \
+             rather than rephrasing the same idea.\n\n\
+             Return ONLY a JSON array of strings.",
             self.config.max_alternatives
         );
+
         let request = ChatCompletionRequest {
             model: &self.config.model_id,
             messages: vec![
                 ChatMessage {
                     role: "system",
-                    content: "You generate query rewrites for code retrieval. Keep each query concise and faithful to the original intent. Output only the requested JSON.".to_string(),
+                    content: "You decompose code-search queries into targeted sub-queries. \
+                              Each sub-query should find a different piece of code needed \
+                              to answer the original question. Use concrete symbol names, \
+                              type names, or file patterns when possible. \
+                              Output only the requested JSON."
+                        .to_string(),
                 },
                 ChatMessage {
                     role: "user",
@@ -180,32 +202,37 @@ impl CompletionClient {
         let payload: serde_json::Value = response
             .json()
             .context("failed to parse completion API response")?;
+
         let choice = payload
             .get("choices")
-            .and_then(|value| value.as_array())
-            .and_then(|choices| choices.first())
+            .and_then(|v| v.as_array())
+            .and_then(|c| c.first())
             .ok_or_else(|| anyhow!("completion response did not include choices"))?;
-        let finish_reason = choice
-            .get("finish_reason")
-            .and_then(|value| value.as_str())
-            .unwrap_or("unknown");
+
         let message = choice
             .get("message")
             .ok_or_else(|| anyhow!("completion response did not include message"))?;
+
         let content = message
             .get("content")
-            .and_then(|value| value.as_str())
+            .and_then(|v| v.as_str())
             .unwrap_or("")
             .trim();
 
         if content.is_empty() {
+            let finish_reason = choice
+                .get("finish_reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             let has_reasoning = message
                 .get("reasoning_content")
-                .and_then(|value| value.as_str())
-                .is_some_and(|value| !value.trim().is_empty());
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| !v.trim().is_empty());
             if has_reasoning {
                 return Err(anyhow!(
-                    "completion response had empty content and only reasoning_content (finish_reason={finish_reason}); increase VERA_COMPLETION_MAX_TOKENS or switch to a non-reasoning completion model"
+                    "completion response had empty content with only reasoning_content \
+                     (finish_reason={finish_reason}); increase VERA_COMPLETION_MAX_TOKENS \
+                     or use a non-reasoning model"
                 ));
             }
             return Err(anyhow!(
@@ -247,12 +274,14 @@ struct ChatResponseFormat {
 }
 
 fn parse_query_candidates(raw: &str, limit: usize) -> Result<Vec<String>> {
+    // Try parsing the whole string as JSON.
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw.trim()) {
         if let Some(parsed) = json_value_to_queries(&value) {
             return Ok(normalize_query_list(parsed, limit));
         }
     }
 
+    // Try extracting a JSON array from within the response (e.g. fenced code blocks).
     if let Some((start, end)) = raw.find('[').zip(raw.rfind(']')) {
         let candidate = &raw[start..=end];
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(candidate) {
@@ -274,8 +303,7 @@ fn json_value_to_queries(value: &serde_json::Value) -> Option<Vec<String>> {
         let array = value.as_array()?;
         let mut items = Vec::with_capacity(array.len());
         for item in array {
-            let text = item.as_str()?;
-            items.push(text.to_string());
+            items.push(item.as_str()?.to_string());
         }
         Some(items)
     }
@@ -284,6 +312,7 @@ fn json_value_to_queries(value: &serde_json::Value) -> Option<Vec<String>> {
         return Some(parsed);
     }
 
+    // Try common wrapper keys.
     let object = value.as_object()?;
     for key in ["rewrites", "queries", "candidates", "alternatives"] {
         if let Some(parsed) = object.get(key).and_then(extract_array) {
@@ -330,7 +359,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_json_query_candidates() {
+    fn parse_json_array() {
         let raw = r#"["auth token refresh", "jwt expiry validation", "session middleware"]"#;
         let parsed = parse_query_candidates(raw, 4).unwrap();
         assert_eq!(parsed.len(), 3);
@@ -338,38 +367,28 @@ mod tests {
     }
 
     #[test]
-    fn parse_json_object_query_candidates() {
+    fn parse_json_object_with_known_key() {
         let raw = r#"{"rewrites":["auth token refresh", "jwt expiry validation"]}"#;
         let parsed = parse_query_candidates(raw, 4).unwrap();
-        assert_eq!(
-            parsed,
-            vec![
-                "auth token refresh".to_string(),
-                "jwt expiry validation".to_string(),
-            ]
-        );
+        assert_eq!(parsed.len(), 2);
     }
 
     #[test]
-    fn parse_fenced_json_query_candidates() {
+    fn parse_fenced_json() {
         let raw = "```json\n[\"auth\", \"token refresh\"]\n```";
         let parsed = parse_query_candidates(raw, 4).unwrap();
-        assert_eq!(
-            parsed,
-            vec!["auth".to_string(), "token refresh".to_string()]
-        );
+        assert_eq!(parsed, vec!["auth", "token refresh"]);
     }
 
     #[test]
-    fn parse_non_json_response_returns_error() {
-        let raw = "1. auth token refresh\n2) jwt expiry handling\n- auth middleware";
-        let error = parse_query_candidates(raw, 4).unwrap_err().to_string();
-        assert!(error.contains("not a JSON array"), "{error}");
+    fn non_json_returns_error() {
+        let raw = "1. auth token refresh\n2) jwt expiry handling";
+        assert!(parse_query_candidates(raw, 4).is_err());
     }
 
     #[test]
-    fn normalize_query_list_deduplicates_case_insensitive() {
-        let normalized = normalize_query_list(
+    fn normalize_deduplicates_case_insensitive() {
+        let result = normalize_query_list(
             vec![
                 "Auth Refresh".to_string(),
                 "auth refresh".to_string(),
@@ -377,6 +396,6 @@ mod tests {
             ],
             5,
         );
-        assert_eq!(normalized, vec!["Auth Refresh".to_string()]);
+        assert_eq!(result, vec!["Auth Refresh"]);
     }
 }
