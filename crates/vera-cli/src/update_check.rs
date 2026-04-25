@@ -82,11 +82,26 @@ pub fn current_version() -> &'static str {
 /// Run all update checks and print hints to stderr. Never fails — errors are
 /// silently swallowed so the user's actual command output is never disrupted.
 pub fn print_nudges() {
-    if std::env::var("VERA_NO_UPDATE_CHECK").is_ok() {
+    if should_skip_update_check() {
         return;
     }
     check_skill_staleness();
     check_binary_staleness();
+}
+
+fn should_skip_update_check() -> bool {
+    should_skip_update_check_from_env_var(std::env::var("VERA_NO_UPDATE_CHECK").ok().as_deref())
+}
+
+fn should_skip_update_check_from_env_var(value: Option<&str>) -> bool {
+    match value {
+        // Keep checks disabled by default. Set VERA_NO_UPDATE_CHECK=0 to opt in.
+        None => true,
+        Some(raw) => !matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "off" | "no"
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -686,5 +701,25 @@ mod tests {
         if !cfg!(windows) {
             assert_eq!(shell_command("npm"), "npm");
         }
+    }
+
+    #[test]
+    fn should_skip_update_check_defaults_to_true() {
+        assert!(should_skip_update_check_from_env_var(None));
+    }
+
+    #[test]
+    fn should_skip_update_check_can_be_opted_in() {
+        assert!(!should_skip_update_check_from_env_var(Some("0")));
+        assert!(!should_skip_update_check_from_env_var(Some("false")));
+        assert!(!should_skip_update_check_from_env_var(Some("off")));
+        assert!(!should_skip_update_check_from_env_var(Some("no")));
+    }
+
+    #[test]
+    fn should_skip_update_check_with_any_other_value() {
+        assert!(should_skip_update_check_from_env_var(Some("1")));
+        assert!(should_skip_update_check_from_env_var(Some("true")));
+        assert!(should_skip_update_check_from_env_var(Some("enabled")));
     }
 }
