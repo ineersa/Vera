@@ -6,7 +6,7 @@ This is the exact setup we are using now: Vera in `api` backend mode, with local
 
 - Embedding server running at `http://localhost:8059/v1` with model `coderankembed-q8_0.gguf`
 - Reranker server running at `http://localhost:8060/v1` with model `bge-reranker-base-q8_0.gguf`
-- Optional (for `vera search --deep`): completion server running at `http://localhost:8061/v1`
+- Optional (for `vera search --deep`): completion server running at `http://localhost:8052/v1`
 - `coderankembed` query prefix requirement: `Represent this query for searching relevant code:`
 
 Optional quick checks:
@@ -76,8 +76,8 @@ export RERANKER_MODEL_ID="bge-reranker-base-q8_0.gguf"
 export RERANKER_MODEL_API_KEY="not-needed"
 export RERANKER_MAX_DOCS_PER_REQUEST="8"
 export RERANKER_MAX_DOCUMENT_CHARS="1200"
-export VERA_COMPLETION_BASE_URL="http://localhost:8061/v1"
-export VERA_COMPLETION_MODEL_ID="<your-completion-model>"
+export VERA_COMPLETION_BASE_URL="http://localhost:8052/v1"
+export VERA_COMPLETION_MODEL_ID="flash"
 export VERA_COMPLETION_API_KEY="not-needed"
 export VERA_COMPLETION_MAX_TOKENS="16384"
 export VERA_COMPLETION_TIMEOUT_SECS="120"
@@ -106,9 +106,19 @@ These are our current tuned values:
 ```bash
 vera config set indexing.max_chunk_lines 80
 vera config set indexing.default_excludes '[".git",".vera","node_modules","target","build","dist","__pycache__",".venv",".github","deptrac.yaml","UPGRADE.md","reference.php","vendor"]'
-vera config set indexing.max_chunk_bytes 2000
+vera config set indexing.max_chunk_bytes 1000
+vera config set indexing.max_chunk_overlap_bytes 250
 vera config set embedding.batch_size 4
 vera config set embedding.max_concurrent_requests 1
+vera config set retrieval.rrf_k 40.0
+vera config set retrieval.rerank_candidates 40
+vera config set retrieval.max_bm25_candidates 100
+vera config set retrieval.max_vector_candidates 60
+vera config set retrieval.max_rerank_batch 8
+vera config set retrieval.max_rerank_doc_chars 1000
+vera config set retrieval.rerank_metadata_mode none
+vera config set retrieval.adaptive_exact_query_tuning true
+vera config set retrieval.fail_on_stage_error true
 ```
 
 ## 5) Current `~/.vera/config.json` reference
@@ -128,12 +138,10 @@ If you want to mirror exactly, this is the current file:
     "model_id": "bge-reranker-base-q8_0.gguf"
   },
   "completion_api": {
-    "base_url": "http://localhost:8061/v1",
-    "model_id": "flash",
-    "timeout_secs": 120,
-    "max_tokens": 16384,
-    "max_alternatives": 4
+    "base_url": "http://localhost:8052/v1",
+    "model_id": "flash"
   },
+  "embedding_query_prefix": "Represent this query for searching relevant code:",
   "core_config": {
     "indexing": {
       "max_chunk_lines": 80,
@@ -156,19 +164,22 @@ If you want to mirror exactly, this is the current file:
       "extra_excludes": [],
       "no_ignore": false,
       "no_default_excludes": false,
-      "max_chunk_bytes": 2000,
-      "max_chunk_tokens": 0,
-      "chunk_overlap_lines": 2
+      "max_chunk_bytes": 1000,
+      "max_chunk_overlap_bytes": 250
     },
     "retrieval": {
       "default_limit": 10,
-      "rrf_k": 60.0,
-      "rerank_candidates": 50,
+      "rrf_k": 40.0,
+      "rerank_candidates": 40,
+      "max_bm25_candidates": 100,
+      "max_vector_candidates": 60,
       "reranking_enabled": true,
-      "max_rerank_batch": 20,
+      "max_rerank_batch": 8,
+      "max_rerank_doc_chars": 1000,
+      "rerank_metadata_mode": "none",
       "max_output_chars": 12000,
-      "reranker_max_docs_per_request": 8,
-      "reranker_max_document_tokens": 300
+      "adaptive_exact_query_tuning": true,
+      "fail_on_stage_error": true
     },
     "embedding": {
       "batch_size": 4,
@@ -328,9 +339,10 @@ Notes:
 - Docker container can't reach llama.cpp servers:
   - verify services are bound to `0.0.0.0` (not just `127.0.0.1`) so Docker can reach them via `host.docker.internal`
 - `input (...) larger than max context size` during index:
-  - lower `indexing.max_chunk_bytes` (or set `indexing.max_chunk_tokens`) and/or increase excludes
+  - lower `indexing.max_chunk_bytes` and/or increase excludes
 - Reranker context errors:
-  - set `reranker.max_docs_per_request` and `reranker.max_document_chars` (or `reranker.max_document_tokens`) via `vera config set`
+  - lower `retrieval.max_rerank_doc_chars` and/or `retrieval.max_rerank_batch` via `vera config set`
+  - the reranker now has built-in overflow fallback (splits documents automatically), but if models are very small context you may still need to reduce these
 - `vera search --deep` behaves like normal search:
   - ensure `completion_api.base_url` and `completion_api.model_id` are set (`vera config set ...`)
 - `vera search --deep` fails with `failed to generate deep-search query candidates`:
